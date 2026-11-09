@@ -71,19 +71,20 @@ pub enum Driver {
 ///
 /// `Send`, so a backend can be made on one thread and used on another.
 pub trait Backend: Send {
-    /// The devices the driver finds now: a snapshot, looked for until `deadline` has passed, and
-    /// then [`ScanError::TimedOut`].
+    /// The devices the driver finds now, a snapshot: those found within `deadline`, or
+    /// [`ScanError::TimedOut`] where the listing isn't done by then.
     fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError>;
 
     /// Opens `device`, the `DeviceInfo` a listing gave and the app stored, under `deadline`.
     ///
-    /// An id this backend's driver doesn't form is refused as [`ScanError::BadId`], before
-    /// anything else; past the deadline, the answer is [`ScanError::TimedOut`]. The backend
-    /// checks the stored device against what the driver finds now: where it knowingly opens
-    /// another device in its place (the same scanner under a new name, found by its maker and
-    /// model), it says so in [`Opened::renamed_from`]. The deadline bounds what the backend can
-    /// bound; a driver's call that never returns is for whoever runs the backend to end, with its
-    /// process.
+    /// An id this backend's driver doesn't form is refused as [`ScanError::BadId`] before the
+    /// backend lists or opens anything (a backend whose driver API isn't installed may say so
+    /// first, as [`ScanError::NotInstalled`]); past the deadline, the answer is
+    /// [`ScanError::TimedOut`]. The backend checks the stored device against what the driver
+    /// finds now: where it knowingly opens another device in its place (the same scanner under a
+    /// new name, found by its maker and model), it says so in [`Opened::renamed_from`]. The
+    /// deadline bounds what the backend can bound; a driver's call that never returns is for
+    /// whoever runs the backend to end, with its process.
     fn open(&mut self, device: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError>;
 }
 
@@ -122,13 +123,18 @@ pub trait Device: Send {
     /// The settings are clamped to what the device can do, and said in [`Event::Applied`] before
     /// the first sheet. Then each sheet is [`Event::Sheet`] as it begins and each of its pages an
     /// [`Event::Page`], whole, once it's complete; [`Event::Status`] says what the user should know
-    /// meanwhile. Each `send` on `events` waits while the channel is full, so no next sheet starts
-    /// before the pages are taken; a `send` that fails, the receiver gone, ends the batch at once
-    /// as [`Done::Cancelled`].
+    /// meanwhile. Each `send` on `events` waits while the channel holds as many events as its
+    /// bound, so once that many wait untaken the backend holds at its next `send`, its driver with
+    /// it, until one is taken; on a rendezvous channel (`sync_channel(0)`) each `send` waits until
+    /// its event is taken. A `send` that fails, the receiver gone, ends the batch at once as
+    /// [`Done::Cancelled`].
     ///
     /// `progress` is checked between sheets and never within one: once its check fails, the
     /// sheet in flight is finished, front and back, no other sheet is fed, and the batch ends as
-    /// [`Done::Cancelled`]. Each page's bytes are counted on it as they come.
+    /// [`Done::Cancelled`]. Each page's bytes are counted on it as they come. The sheet in flight's
+    /// events still come after a cancel, and a backend held at a full channel never reaches its
+    /// check, so a caller that cancels keeps taking events until `scan` returns, or drops the
+    /// receiver to end the batch at its next `send`.
     ///
     /// It returns how the batch ended, or a [`ScanError`]. [`ScanError::FeederEmpty`] comes only
     /// before any page: after pages, an empty feeder ends it as [`Done::FeederEmpty`]. The pages

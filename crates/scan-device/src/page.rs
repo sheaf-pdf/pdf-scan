@@ -6,7 +6,8 @@ use crate::{Applied, RawImage};
 
 /// A scanned page: its pixels, its resolution, and the sheet and side it's from.
 ///
-/// `dpi` finite and above 0: the worker's client refuses others as it decodes.
+/// `dpi` finite and above 0: a backend keeps it so, and code that decodes a page from outside the
+/// process (from a pipe, say) refuses others.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct RawPage {
@@ -163,8 +164,9 @@ pub enum Done {
     FeederEmpty,
     /// A flatbed's page was scanned: a flatbed gives one a batch.
     OnePage,
-    /// Cancelled, through the batch's progress or a receiver gone: the sheet in flight finished,
-    /// and no sheet started after it.
+    /// Cancelled. Through the batch's progress: the sheet in flight finished, front and back, and
+    /// no sheet fed after it. With the receiver gone: the batch ended at the `send` that failed,
+    /// so the sheet in flight may have been fed and not delivered, and no sheet was fed after it.
     Cancelled,
 }
 

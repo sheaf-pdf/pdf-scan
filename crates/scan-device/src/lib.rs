@@ -39,9 +39,9 @@
 //! pages, an empty feeder is [`Done::FeederEmpty`]. The pages sent before an error are kept.
 //!
 //! A `send` waits while the channel is full, so a backend whose events nobody takes holds there,
-//! starting no next sheet, and its driver waits with it: pages never pile up past the bound. A
-//! `send` that fails, the receiver gone, ends the batch at once as [`Done::Cancelled`], with no
-//! sheet started after it.
+//! starting no next sheet, and its driver waits with it: pages never pile up past the bound, `n`
+//! events waiting untaken at most. A `send` that fails, the receiver gone, ends the batch at once
+//! as [`Done::Cancelled`], with no sheet started after it.
 //!
 //! # Cancel and progress
 //!
@@ -49,9 +49,11 @@
 //! [`in_progress`], so an app names the version the trait does. The caller passes a
 //! [`Tracker`](in_progress::Tracker) and cancels the batch through a clone of it, from any thread.
 //! A backend checks it between sheets and never within one, so a cancel finishes the sheet in
-//! flight, front and back, feeds no more, and the batch ends as [`Done::Cancelled`]. A cancelled
-//! tracker stays cancelled, so each batch takes a tracker of its own. Progress is counted in each
-//! page's bytes.
+//! flight, front and back, feeds no more, and the batch ends as [`Done::Cancelled`]. The sheet in
+//! flight's events still come after the cancel, and a backend held at a full channel never reaches
+//! its check, so the caller keeps taking events until the batch returns, or drops the receiver to
+//! end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes a tracker of
+//! its own. Progress is counted in each page's bytes.
 //!
 //! A backend whose driver delivers pages on a thread of its own gives that thread
 //! `progress.child(..)` (owned, `Send`, and cancelled whenever its parent is) and a clone of the

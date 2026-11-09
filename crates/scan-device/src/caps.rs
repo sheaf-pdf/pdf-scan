@@ -6,10 +6,15 @@ use crate::{Encoding, Format};
 
 /// What a device can do: each of its sources, and whether its driver has a settings window of
 /// its own.
+///
+/// A backend keeps the rules its fields' docs give (at least one source, each with at least one
+/// format, and its resolutions as [`Resolutions`] says). The constructors don't check them, the
+/// fields being public, so code that decodes caps from outside the process (from a pipe, say)
+/// checks them as it decodes and refuses caps that break them.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Caps {
-    /// The device's sources, each with what it can do.
+    /// The device's sources, each with what it can do: never empty.
     pub sources: Vec<SourceCaps>,
     /// Whether the driver has a settings window of its own ([`Device::settings_window`]).
     ///
@@ -156,6 +161,7 @@ impl Settings {
 
 /// The paper's size, as a scan asks for it.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Paper {
     /// Found by the driver, where the source can ([`SourceCaps::paper_auto`]).
     Auto,

@@ -35,11 +35,11 @@
 //!
 //! As the backends for real driver APIs do, where a name can change under a device:
 //!
-//! - [`Backend::list`] gives each listed device's [`DeviceInfo`] (its id `fake:<name>`, its name
-//!   its maker and model, [`Driver::Fake`]) once the backend's listing has taken its time
-//!   ([`FakeBackend::listing_takes`], none by default). A listing that takes as long as the
-//!   deadline or longer waits the deadline out and answers [`ScanError::TimedOut`], so a deadline
-//!   of zero always does.
+//! - [`Backend::list`] gives each listed device's [`DeviceInfo`] (its id `fake:<name>`; its name,
+//!   its maker and model joined by a space; its maker; its model; [`Driver::Fake`]) once the
+//!   backend's listing has taken its time ([`FakeBackend::listing_takes`], none by default). A
+//!   listing that takes as long as the deadline or longer waits the deadline out and answers
+//!   [`ScanError::TimedOut`], so a deadline of zero always does.
 //! - [`Backend::open`] answers, in order: [`ScanError::NotInstalled`] where the backend is
 //!   scripted so; [`ScanError::BadId`] for an id that isn't `fake:` and a name of at least one
 //!   character; then it lists, under the deadline. The stored id listed with the stored maker and
@@ -197,6 +197,7 @@ impl FakeBackend {
     /// # Panics
     ///
     /// Where the backend has a device of the same id already: a script's mistake.
+    #[must_use = "it returns the backend so scripted, the one it was called on moved into it"]
     pub fn with(mut self, device: FakeDevice) -> FakeBackend {
         assert!(
             self.devices
@@ -212,6 +213,7 @@ impl FakeBackend {
     /// The backend whose listing takes `delay`, in [`Backend::list`] and in [`Backend::open`]
     /// alike. A deadline longer than it gets the listing after it; any other is waited out, and
     /// answered [`ScanError::TimedOut`].
+    #[must_use = "it returns the backend so scripted, the one it was called on moved into it"]
     pub fn listing_takes(mut self, delay: Duration) -> FakeBackend {
         self.listing_takes = delay;
         self
@@ -219,6 +221,7 @@ impl FakeBackend {
 
     /// The backend as it is where its driver API isn't installed: [`Backend::list`] and
     /// [`Backend::open`] answer [`ScanError::NotInstalled`].
+    #[must_use = "it returns the backend so scripted, the one it was called on moved into it"]
     pub fn not_installed(mut self) -> FakeBackend {
         self.not_installed = true;
         self
@@ -412,6 +415,7 @@ impl FakeDevice {
     /// On caps the model forbids, a script's mistake: no source; a source with no format; a list
     /// of resolutions that's empty, or holds 0; a range whose `min` is 0 or past its `max`; a
     /// largest paper whose width or height isn't finite and above 0.
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn caps(mut self, caps: Caps) -> FakeDevice {
         check_caps(&caps);
         self.caps = caps;
@@ -420,6 +424,7 @@ impl FakeDevice {
 
     /// The device left out of listings: it opens by its stored id alone, with the stored info,
     /// unchecked, as a name a driver opens but lists another way would.
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn unlisted(mut self) -> FakeDevice {
         self.listed = false;
         self
@@ -427,6 +432,7 @@ impl FakeDevice {
 
     /// The device refusing to open with `error` once it's found, such as [`ScanError::Busy`] or
     /// [`ScanError::AccessDenied`].
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn refuses_open(mut self, error: ScanError) -> FakeDevice {
         self.refuses_open = Some(error);
         self
@@ -434,6 +440,7 @@ impl FakeDevice {
 
     /// The device saying each page's side ([`SideKnown::Reported`]), where by default the side is
     /// worked out from the order ([`SideKnown::Inferred`]).
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn reports_sides(mut self) -> FakeDevice {
         self.side_known = SideKnown::Reported;
         self
@@ -441,6 +448,7 @@ impl FakeDevice {
 
     /// The device warming up at each batch: `Event::Status(Status::WarmingUp)` after the
     /// settings are applied.
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn warms_up(mut self) -> FakeDevice {
         self.warms_up = true;
         self
@@ -448,6 +456,7 @@ impl FakeDevice {
 
     /// The device with a settings window of its own, which closes as `closes` says each time it's
     /// opened.
+    #[must_use = "it returns the device so scripted; a clone made before keeps the script it had"]
     pub fn settings_window(mut self, closes: WindowClosed) -> FakeDevice {
         self.window = Some(closes);
         self
@@ -573,6 +582,7 @@ struct Scripted {
 
 /// When a fault scripted on a side fires, as that side is read ([`Sheet::fault`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum When {
     /// As the side starts: after its sheet's `Event::Sheet`, and, for a back, after its front's
     /// page; before any of the side's progress.
@@ -630,6 +640,7 @@ impl Sheet {
     /// Where the width or the height isn't finite and above 0: a script's mistake.
     ///
     /// [`Paper::Auto`]: crate::Paper::Auto
+    #[must_use = "it returns the sheet so scripted, the one it was called on moved into it"]
     pub fn size(mut self, size: SizeMm) -> Sheet {
         assert!(is_paper(size), "a sheet of {size:?}");
         self.size = size;
@@ -637,6 +648,7 @@ impl Sheet {
     }
 
     /// The sheet with `pixels` as `side`'s page, delivered as given, whatever the settings.
+    #[must_use = "it returns the sheet so scripted, the one it was called on moved into it"]
     pub fn side(mut self, side: Side, pixels: Pixels) -> Sheet {
         match side {
             Side::Front => self.front = Some(pixels),
@@ -657,6 +669,7 @@ impl Sheet {
     ///
     /// On [`Fault::Error`] of [`ScanError::FeederEmpty`]: an empty feeder is scripted by
     /// loading no more sheets, and a script's mistake otherwise.
+    #[must_use = "it returns the sheet so scripted, the one it was called on moved into it"]
     pub fn fault(mut self, side: Side, when: When, fault: Fault) -> Sheet {
         assert!(
             !matches!(fault, Fault::Error(ScanError::FeederEmpty)),

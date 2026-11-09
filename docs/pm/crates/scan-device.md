@@ -7,7 +7,7 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
 `fake` backend; no backend for a driver API yet (`sane` is slice 5's). MSRV 1.89 (`decisions.md`). No `unsafe`
 (`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`).
 
-- **What:** the device model of M5 proposal 9, as `crates/scan-device-seam.md`'s "The model, for slice 3"
+- **What:** the device model of [M5 proposal 9](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p09-device-model.md), as `crates/scan-device-seam.md`'s "The model, for slice 3"
   writes its types and traits down (S0 slice 2, for review), built so in S0 slice 3, every name the note's; and
   the backends behind it.
   - `DeviceInfo` (an id such as `sane:fujitsu:fi-7160:12345`, `twain64:PaperStream IP fi-7160`, `wia:{…}`,
@@ -38,9 +38,10 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
       `Paper::Auto`, raw only) as the note names them; `Caps::new(sources)` (no settings window),
       `SourceCaps::new(source, resolutions, formats)` (no duplex, no encodings, `max_area` `None`, `paper_auto`
       false), `Applied::new(settings, clamped)` and `RawPage::new(pixels, dpi, sheet, side, side_known)`. The
-      invariants the note puts on a decoder (a `dpi` finite and above 0, a `Resolutions::List` never empty, a
-      `Range`'s `min` not past its `max`) stay the decoder's to check (slice 4), and the fake keeps them in
-      what it makes.
+      rules the docs put on these values (a `dpi` finite and above 0; at least one source, each with at least
+      one format; a `Resolutions::List` never empty, a `Range`'s `min` not past its `max`) are each a
+      backend's to keep, the fake's among them, and a decoder's to check (slice 4's client); the
+      constructors don't check them (the code review's wording, `Caps`' and `RawPage`'s docs).
     - `RawImage::new(format, width, height, data)` refuses, in order: a width or height of 0 (`Empty`); a row's
       bytes or the image's past `u64`, in checked arithmetic, or past what one buffer can hold on the platform,
       `isize::MAX`, the most any allocation can be (`TooLarge`; `usize::MAX` until the code review); a
@@ -52,8 +53,11 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
     - `Debug` by hand for `RawImage` and `Encoded` (the format or kind, the size, `len`; never a byte), and for
       `Opened` (its `info` and `renamed_from`, the device left out as `..`).
     - `pub use in_progress`, so an app names the very version `Device::scan`'s `Progress` is.
+    - From the code review: `Paper` `#[non_exhaustive]`, a departure from the note's block written into it
+      (paper may grow: section 2's "To settle"), and the fake's `When` too; the fake's twelve builder methods
+      `#[must_use]`, so a script made on a clone and dropped is warned of.
 - **Backends, each a feature:**
-  - `fake`, **built in S0 slice 3**: scripted (proposal 22): pages and sides, a jam at sheet 4 then Continue, a
+  - `fake`, **built in S0 slice 3**: scripted ([proposal 22](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p22-testing-without-scanner.md)): pages and sides, a jam at sheet 4 then Continue, a
     double feed, an open cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in
     flight finished, none fed after), a cancel after a duplex front (its back still delivered), a stored device
     opened as a renamed one found by its maker and model. On every system, in CI. Nothing scripted at this

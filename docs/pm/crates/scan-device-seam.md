@@ -267,7 +267,7 @@ with section 4's `side_known`), with `pixels` one of two:
 
 **A page is delivered whole**, once complete; a 600 dpi color Letter page is about 100 MB raw, and one at a time is
 fine, which the bounded channel holds a backend to (section 8): its `send` waits while the channel is full, so a
-pull backend starts no next sheet before its pages are taken. Progress goes through `in-progress` (section 7): each
+pull backend holds at its next `send`, starting nothing more, once the bound's events wait untaken. Progress goes through `in-progress` (section 7): each
 page's bytes as it's read, against its size where known, as proposal 10's progress bar wants. A page cut short (a
 jam mid-page) is never delivered.
 
@@ -540,7 +540,10 @@ no caller (S0 slice 2's code review).
 
 **Built as written by S0 slice 3** (2026-11-09, `slices/s0-3-scan-device.md`), every name kept: what
 `scan-device` adds to the block (a constructor for each `#[non_exhaustive]` struct, `RawImage::data_len`,
-`Debug` by hand for `Opened`, the `fake` backend) is said in `crates/scan-device.md`.
+`Debug` by hand for `Opened`, the `fake` backend) is said in `crates/scan-device.md`. Its code review changed
+the block in two places, written into it below: `Paper` `#[non_exhaustive]`, since paper may yet grow (section
+2's "To settle"), and `RawPage`'s doc saying who keeps its `dpi` (a backend) and who checks it (whoever decodes
+a page from outside the process).
 
 **Written by S0 slice 2, for review** (its decisions in `slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
 builds, proposal 9's model with this note's changes ("Changes from proposal 9's model"). Names are the
@@ -602,6 +605,7 @@ pub struct Settings {
     pub encodings: Vec<Encoding>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Paper { Auto, Size(SizeMm) }
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -634,7 +638,8 @@ pub enum LayoutError {
 }
 
 // Pages (sections 3 and 4).
-/// `dpi` finite and above 0: the worker's client refuses others as it decodes.
+/// `dpi` finite and above 0: a backend keeps it so, and code that decodes a page from outside the
+/// process (from a pipe, say) refuses others.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct RawPage {
@@ -741,8 +746,9 @@ pub trait Device: Send {
   and never the bytes (decision 39): a page is up to about 100 MB, and `{:?}` of an event, a log line or an
   `assert_eq!` that fails would print it all.
 - **A batch** (`Device::scan`, sections 4 to 8): events on a bounded channel (a `SyncSender<Event>`, the caller
-  choosing the bound with `sync_channel(n)`; decision 30): a `send` waits while it's full, so a pull backend
-  starts no next sheet before its pages are taken, and a push backend's thread waits the same, holding its
+  choosing the bound with `sync_channel(n)`; decision 30): a `send` waits while it's full, so once `n` events
+  wait untaken a pull backend holds at its next `send`, starting nothing more (on a rendezvous channel,
+  `sync_channel(0)`, until each event is taken), and a push backend's thread waits the same, holding its
   driver back, where an unbounded `Sender` would grow by a page for each the consumer fell behind; a `send`
   that fails (the receiver gone) ends the batch, no sheet started after it, as `Done::Cancelled`.
   `Event::Applied` once the settings are set, before the first sheet; `Event::Sheet(n)` as sheet `n` begins,
@@ -790,8 +796,10 @@ this):
   of every enum, since an enum's `#[non_exhaustive]` lets the client's conversions compile without a variant
   added here (slice 4's choice, said); either way a `RawImage` decoded on the client is made by
   `RawImage::new` (a `try_from`, never a derive that fills its private fields), so its checks hold there too,
-  and the client refuses a `RawPage`'s `dpi` that isn't finite and above 0, an empty `Resolutions::List`, and a
-  `Range` whose `min` is past its `max`, as it refuses a wrong length;
+  and the client refuses a `RawPage`'s `dpi` that isn't finite and above 0, an empty `Caps::sources`, a
+  `SourceCaps` with no format, an empty `Resolutions::List`, and a `Range` whose `min` is past its `max`, as it
+  refuses a wrong length (each a rule a backend keeps, which `scan-device`'s docs give and its constructors
+  don't check; S0 slice 3's code review);
 - a page's format, width and height before its bytes, so the client caps them before it reads them
   (`plan.md`'s hostile-input rule), and `RawImage::new` refusing a length that doesn't match: a crashed
   worker's half page is never a page;
@@ -814,7 +822,12 @@ this):
   the backend `backend_of` gives, or none where it gives none: section 1), passed at the spawn, in a directory
   it trusts: `BeforeSystem` has SANE read the process's current directory after the `ConfigDir` and before the
   system's, so a `dll.aliases` or a backend's `.conf` there would be read (`sane-dl`'s `Search`; S0 slice 1's
-  security item 4).
+  security item 4);
+- its tests taking `scan-device` with `features = ["fake"]` in `scan-worker`'s own dev-dependencies, and run
+  with `-p scan-worker` as well as in the workspace: `scan-device`'s tests turn `fake` on through a
+  dev-dependency on the crate itself, and `cargo test --workspace` unifies that feature across the members it
+  builds, so a member that forgot to ask for it still builds there and fails alone (S0 slice 3's code review,
+  shown on a two-crate workspace).
 
 **What slice 9's `twain` backend meets** (slice 7's rows, as they are): its tiles and DIB assembled into a
 `RawImage` (section 3's table: a DIB's rows flipped where it's bottom up, padding dropped, tiles placed, the
