@@ -221,13 +221,13 @@ is raw only, and whether the app asks is open (section 3).
 (section 4), and `scan-cleanup` finds blank pages anyway, so backends turn it off where the API lets them.
 
 **To settle:** paper sizes against a feeder's own size detection (`Auto`, proposal 9) in each API. Whether
-resolutions are listed or a range: both (`Resolutions`, S0 slice 2). SANE's, from S0 slice 1's step 3, come
-as a range or a word list, `FIXED` or `INT`, and may offer an automatic value: the `sane` backend gives whole
-dpi either way, and the app asks for a dpi, never the automatic value. A range's `step` is never 0
-(`NonZeroU32`, decision 38): SANE's quant 0 ("none", `sane.h`) or one under 1 dpi is 1, a larger fractional one
-is rounded up to whole dpi, and the device's `INEXACT` says what it took; a `FIXED` range's ends are rounded
-inward and a word list's values to the nearest whole dpi, a range left with no whole dpi dropped. A list is
-never empty and a range's `min` never past its `max`, which `scan-worker`'s client checks as it decodes.
+resolutions are listed or a range: both (`Resolutions`, S0 slice 2). SANE's, from S0 slice 1's step 3, come as a
+range or a word list, `FIXED` or `INT`, and may offer an automatic value: the `sane` backend gives whole dpi
+either way, and the app asks for a dpi, never the automatic value. A range's `step` is never 0 (`NonZeroU32`, S0
+slice 2's decision 38): SANE's quant 0 ("none", `sane.h`) or one under 1 dpi is 1, a larger fractional one is
+rounded up to whole dpi, and the device's `INEXACT` says what it took; a `FIXED` range's ends are rounded inward
+and a word list's values to the nearest whole dpi, a range left with no whole dpi dropped. A list is never empty
+and a range's `min` never past its `max`, which `scan-worker`'s client checks as it decodes.
 
 ## 3. How a page arrives
 
@@ -359,7 +359,7 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 | `Driver { message, shown }` | other statuses: `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers; every other `sane-dl` error ("The model, for slice 3", its mapping) | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
 | `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`, neither the system's nor the one the app names (its bundled copy: `crates/twain-dsm.md`, slice 8); which the app names, slice 9's | to confirm | to confirm |
 | `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | slice 9's to say | to confirm | to confirm |
-| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`backend/escl/escl.c`, `lexmark.c`, `pixma/pixma.c`, `hp5590.c`, `sane_start`, studied) | slice 9's to say | to confirm | to confirm |
+| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`sane_start` in `backend/escl/escl.c`, `backend/lexmark.c`, `backend/pixma/pixma.c` and `backend/hp5590.c`, studied) | slice 9's to say | to confirm | to confirm |
 | `AccessDenied` (S0 slice 2's code review) | `ACCESS_DENIED`: the device's permissions (`epson2`, `epsonds` and `kodakaio` log "check that you have permissions on the device" as `sanei_usb_open` answers it; `pixma` maps its `EACCES` to it: studied), or an authorization the app doesn't give (no callback, FEAT-11) | slice 9's to say | to confirm | to confirm |
 | `TimedOut` (S0 slice 2's code review) | a listing past its deadline (`sane-dl`'s `DeadlineExceeded`, and `ListingPending` after it), in `list` or in `open`'s listing | the DSM walk past `open`'s deadline (slice 9) | to confirm | the browse past `open`'s deadline (to confirm) |
 | `Unsupported` (S0 slice 2's code review) | a settings window asked of a SANE device, which has none (section 9) | slice 9's to say | to confirm | to confirm |
@@ -369,23 +369,23 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 status but `LoadError::NotFound`, with the names tried: the model's `NotInstalled`, apart from `Gone`. The
 other `LoadError`s (a symbol missing, `sane_init` failing, a version not 1, a second load) are `Driver`.
 
-**The model** ("The model, for slice 3"): proposal 9's `ScanError`, with these changes: `Driver` carries
-whether the driver has already shown its own message (`shown`), so the app doesn't say it twice; warming up is
-waited on inside the backends (wait and retry: WIA's `WIA_ERROR_WARMING_UP`; SANE's warming-up status is
-reserved and never returned, and an empty read is made again, section 8) and said to the user as
-`Event::Status(Status::WarmingUp)` where the backend knows it, never an error; `NotInstalled { what }` says
-the system's driver API isn't there (no libsane, no `TWAINDSM.dll`: proposal 6's "Scanning on Linux needs
-SANE"), apart from `Gone`; and `BadId` says a stored id isn't one the driver forms, refused before the driver
-sees it (SANE's refusals, section 1), apart from `Gone` too: a device gone may come back, such an id never
-opens. From the slice's code review (decisions 31 to 34, for review): `SettingsRefused` says the scanner
-wouldn't start with these settings, which the app can change, apart from `Gone`, since such a scanner is there
-(SANE's `INVAL` from a start, the settings set again and refused again, which the backends studied answer for
-an area or a size they can't scan, not for a device gone); `AccessDenied` says access was refused, which the
-app can explain (on Linux the device's permissions, the commonest fault in setting SANE up); `TimedOut` says a
-deadline of `list` or `open` passed; and `Unsupported` that the device can't do what was asked (a settings
-window it hasn't). `Stopped`, the watchdog's (proposal 4), leaves the model for `scan-worker`'s client, whose
-own error wraps `ScanError` beside its other failures (a crash, a protocol mismatch, a page cut short), so no
-backend can return it. Pages before an error are kept; the page being read when it comes is not.
+**The model** ("The model, for slice 3"): proposal 9's `ScanError`, with these changes: `Driver` carries whether
+the driver has already shown its own message (`shown`), so the app doesn't say it twice; warming up is waited on
+inside the backends (wait and retry: WIA's `WIA_ERROR_WARMING_UP`; SANE's warming-up status is reserved and never
+returned, and an empty read is made again, section 8) and said to the user as `Event::Status(Status::WarmingUp)`
+where the backend knows it, never an error; `NotInstalled { what }` says the system's driver API isn't there (no
+libsane, no `TWAINDSM.dll`: proposal 6's "Scanning on Linux needs SANE"), apart from `Gone`; and `BadId` says a
+stored id isn't one the driver forms, refused before the driver sees it (SANE's refusals, section 1), apart from
+`Gone` too: a device gone may come back, such an id never opens. From S0 slice 2's code review (its decisions 31
+to 34, for review): `SettingsRefused` says the scanner wouldn't start with these settings, which the app can
+change, apart from `Gone`, since such a scanner is there (SANE's `INVAL` from a start, the settings set again and
+refused again, which the backends studied answer for an area or a size they can't scan, not for a device gone);
+`AccessDenied` says access was refused, which the app can explain (on Linux the device's permissions, the
+commonest fault in setting SANE up); `TimedOut` says a deadline of `list` or `open` passed; and `Unsupported`
+that the device can't do what was asked (a settings window it hasn't). `Stopped`, the watchdog's (proposal 4),
+leaves the model for `scan-worker`'s client, whose own error wraps `ScanError` beside its other failures (a
+crash, a protocol mismatch, a page cut short), so no backend can return it. Pages before an error are kept; the
+page being read when it comes is not.
 
 **To settle:** what "Continue" after a jam is in each API (SANE: `sane_cancel`, then `sane_start` again,
 which `sane-dl`'s batch allows, calling `sane_cancel` after every error and starting again if asked, S0 slice
@@ -703,8 +703,9 @@ pub trait Device: Send {
   another device in the stored one's place (SANE's fallback) says so in `Opened::renamed_from`; `Opened::info`
   is the device as the backend found it, or the stored one where it couldn't check (section 1). The deadline
   bounds what a backend can bound (SANE's listing, TWAIN's DSM walk, ICA's browse); a driver's call that never
-  returns is the watchdog's. A worker keeps one `Box<dyn Device>` open while its dialog is, and lists in no
-  worker that holds an open device (a listing and a scan in one process wait on each other, section 1).
+  returns is the watchdog's. A worker keeps one `Box<dyn Device>` open while its dialog is; no listing runs in a
+  worker while a device is open there (a listing and a scan in one process wait on each other, section 1),
+  `open`'s own listing coming before its device opens.
 - **What may grow** (decision 36): `DeviceInfo`, `Caps`, `SourceCaps`, `Settings`, `Applied` and `RawPage` are
   `#[non_exhaustive]`, as the enums that may grow are, so a field added later (section 10's) breaks no caller.
   Code outside the crate makes them by a constructor (`Settings::new(source, dpi, format)`,
