@@ -66,7 +66,10 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
   read as Latin-1 and given back byte for byte; `Image` converted by the `sane` backend into the raw layout
   (1-bit gray inverted, 1-bit RGB expanded, 16-bit made little-endian), `sane-dl` passing SANE's samples on
   unchanged; "feed no more" as the backend starting no next page and dropping the batch, the token kept for a
-  stop at once; `backend_of` and `ConfigDir` (`Search::BeforeSystem`) for the worker that opens a stored id.
+  stop at once; `backend_of` and `ConfigDir` (`Search::BeforeSystem`) for the worker that opens a stored id,
+  which lists its backend before it opens; `DeadlineExceeded` and `ListingPending` as the model's `TimedOut`,
+  `INVAL` from a start twice as `SettingsRefused`, `ACCESS_DENIED` as `AccessDenied`, and every other error as
+  the model's `Driver` (S0 slice 2's code review).
 - **Prior art:** `sane-scan` 0.1.2 (2023), the one published binding, links at build time (bindgen, libclang,
   `-lsane`), passes a one-byte `bool` where backends read a four-byte word, sizes `lines = -1` buffers wrong,
   turns a mid-page `JAMMED` into a truncated `Ok`, and hasn't answered a PR since 2023. Three permissive

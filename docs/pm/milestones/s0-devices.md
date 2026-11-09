@@ -51,35 +51,48 @@ S1 back: S1 can start once the Linux slices are done.
    for review" (26) and "For review (security)" (6).
 3. **scan-device, provisional:** the model as the seam note's "The model, for slice 3" has it (its types, the
    `Backend` and `Device` traits, `RawImage`'s checked constructor, cancel and progress through `in-progress`,
-   taken here: vetted in slice 2's plan, the devices layer's gate holding it, and `plan.md`'s graph updated),
-   settings clamped and said, the `fake` backend and its scripts; 0.0.x, unpublished. Checked: the scripts
-   (proposal 22) on every runner, among them a cancel after a duplex front (its back still delivered) and a
-   stored id opened as a renamed device; `RawImage::new`'s checks unit-tested (the length, a 1-bit row's
-   padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped).
-4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What
-   slice 4 needs of it" has it: an `open` request answered with `renamed_from`, before `caps` and `scan`; an
-   `applied` event; progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker, and
-   the kill after it allowing for the sheet in flight; a `settings_window` request; a page's format and size
-   before its bytes, and a `RawImage` decoded through `RawImage::new`; and a SANE worker that opens a stored id
-   spawned with that id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no
-   backend), in a directory it trusts. Checked: the
-   `fake` backend through a real worker process: a hang killed with the pages kept, a crash with the pages
-   kept and the exit said, a cancel mid-page (the sheet finished, none fed after), a version mismatch, a page
-   cut short; the raw layout across the pipe byte for byte; throughput of 300 dpi pages in color and black
-   and white at 2.3 a second (M5 slice 6's gate, its pipe's share), measured on every run.
-5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its
-   table in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty;
-   gray, color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error:
-   a jam ends the scan), 16-bit and 1-bit RGB in the model's raw layout (the 16-bit conversion a function of
-   the source's byte order, so its swap is unit-tested on CI's little-endian hosts); pages through the `pnm`
-   backend, its PBM compared after the inversion (PBM is 1 black, the model 0), PGM and PPM byte for byte; ids
-   from Latin-1, back to `sane_open` byte for byte; the fallback on `INVAL` at open in a worker given the id's
-   one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no backend), the fake listing a
-   device under a new name; `dll`'s testing prefixes, a leading `:`, the empty name and an id not Latin-1
-   refused before `sane_open` (`BadId`); `INVAL` from a start (the fake's `at PAGE start INVAL`) met by
-   setting the settings again and starting once more, and `Gone` when it repeats; the feeder keeping its
-   sheets after a cancel; the fake libsane's feeder and duplex names for
-   each backend. Whatever the backend finds the model lacking goes into the seam note and the model, said.
+   taken here: vetted in slice 2's plan, and `plan.md`'s graph updated), the constructors of the structs marked
+   `#[non_exhaustive]`, `Debug` by hand for `RawImage` and `Encoded`, settings clamped and said, the `fake`
+   backend and its scripts; 0.0.x, unpublished. `scan-device` joins the gates' devices-layer loop (`justfile`,
+   `for crate in sane-dl`), its graph read with `in-progress` in it and the gate's output naming it. Checked: the
+   scripts (proposal 22) on every runner, among them a cancel after a duplex front (its back still delivered), a
+   stored device opened as a renamed one found by its maker and model, a stored name now listed as another model
+   taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
+   row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
+   copy (an image codec added to `scan-device`).
+4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What slice
+   4 needs of it" has it: an `open` request carrying the stored `DeviceInfo` and a deadline, answered with
+   `renamed_from` and the device found, before `caps` and `scan`, the worker chosen by the device's driver; an
+   `applied` event; progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker, and the
+   kill after it allowing for the sheet in flight; a `settings_window` request carrying the owner; the bounded
+   channel drained as the pipe is written; a page's format and size before its bytes, and a `RawImage` decoded
+   through `RawImage::new`; the model's types encoded by a `serde` feature of `scan-device` (leaning) or by wire
+   types with every variant round-tripped in a test; the client's own error type (the watchdog's stop, a crash
+   and its exit, a protocol mismatch, a page cut short) wrapping `ScanError`; and a SANE worker that opens a
+   stored id spawned with that id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with
+   no backend), in a directory it trusts. Checked: the `fake` backend through a real worker process: a hang
+   killed with the pages kept, a crash with the pages kept and the exit said, a cancel mid-page (the sheet
+   finished, none fed after), a version mismatch, a page cut short; the raw layout across the pipe byte for byte;
+   throughput of 300 dpi pages in color and black and white at 2.3 a second (M5 slice 6's gate, its pipe's
+   share), measured on every run.
+5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its table
+   in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty; gray,
+   color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error: a jam
+   ends the scan), 16-bit and 1-bit RGB in the model's raw layout (the 16-bit conversion a function of the
+   source's byte order, so its swap is unit-tested on CI's little-endian hosts); pages through the `pnm` backend,
+   a source without `source`, `mode` or area options (S0 slice 2's decision 41), its PBM compared after the
+   inversion with the padding bits cleared on both sides (PBM is 1 black, the model 0; at a width not a multiple
+   of 8, with set padding bits, as probe L1's 13-pixel PBM has), PGM and PPM byte for byte; ids from Latin-1,
+   back to `sane_open` byte for byte; the open in a worker given the id's one-backend `ConfigDir`
+   (`Search::BeforeSystem`, naming none for an id with no backend), listing before it opens: a stored name listed
+   as another model taken as gone, the fallback on `INVAL` at open from a USB connection's name only (the fake
+   listing a device under a new name; none from a serial or a network name, nor to one of two), and TEST-10's
+   cases, an alias's target gone opened then listed in one process among them; `dll`'s testing prefixes, a
+   leading `:`, the empty name and an id not Latin-1 refused before `sane_open` (`BadId`); `INVAL` from a start
+   (the fake's `at PAGE start INVAL`) met by setting the settings again and starting once more, and
+   `SettingsRefused` when it repeats; `ACCESS_DENIED` as `AccessDenied`, a listing past its deadline as
+   `TimedOut`; the feeder keeping its sheets after a cancel; the fake libsane's feeder and duplex names for each
+   backend. Whatever the backend finds the model lacking goes into the seam note and the model, said.
 6. **By hand on Linux:** an fi-6130 through SANE's fujitsu backend on a Linux laptop at the office (M5 ask
    12; SANE rates it complete): 50 mixed sheets duplex, a forced jam, an open cover, unplugged mid-scan, a
    cancel. A row per scanner and driver in the notes. Waits on the scanner; doesn't hold the rest back.

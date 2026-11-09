@@ -174,19 +174,21 @@ One layout for every backend, which `RawImage` carries (decisions 2 to 6):
 WIA's and ICA's columns stay "to confirm" (slices 10 and later). The layout is slice 7's comparable form
 (`twain-spike`'s `image` module, its module doc: rows top down, packed, RGB, gray and 1-bit with 0 black, the
 first pixel in the high bit, the padding bits zero), with 16-bit little-endian added: so the TWAIN side's
-conversion already exists, and SANE's 1-bit gray is the one format a backend inverts. The note names the
-module by crate and module, not by path: slice 8's branch moves it into `twain-dsm`'s tests' support and moves
-slice 7's plan into `archive/slices/`, and a path would break at that merge. A probe (L2) checks the claim
-beside a third party: the model's conversion of `sane-dl`'s pages equals the raster of `scanimage
---format=png` for the same scan, pixel for pixel (PNG's 1-bit gray is 0 black, the high bit first; its 16-bit
-big-endian, compared after a swap). Pixels, not bytes: `scanimage` inverts a 1-bit row's whole bytes for PNG,
-padding included (`frontend/scanimage.c`, its PNG write, studied), so a 157-pixel `Solid white` row ends `0xFF`
-in its PNG and `0x00` in its PBM (seen while reviewing the plan, `scratch/work/s0-2/review/`). Its 16-bit PNG
-is big-endian as PNG requires: a gray-16 `Color pattern` page's PNG and PGM were byte-equal, values such as
-`0x0001` and `0x0100` both present (the same review probe). Both conventions show
-in one tool: a 1-bit `Solid black` page from `test:0`, scanned here while planning
-(`scratch/work/s0-2/plan-probe/`), is all `0xFF` in `scanimage`'s PBM and in its TIFF (big-endian, photometric
-0, white is zero: SANE's bits kept) and all `0x00` in its PNG (gray, depth 1: inverted).
+conversion already exists, and SANE's 1-bit gray is the one format a backend inverts. The note names it "the
+spike's `image` module", without its crate or a path (since the code review; it named the crate before): slice
+8's branch moves it into `twain-dsm`'s tests' support, deleting `twain-spike`, and moves slice 7's plan into
+`archive/slices/`, so a crate's name or a path would go stale at that merge, which raises no conflict there; "the
+spike's `image` module" is slice 8's own wording, true on both sides. A probe (L2) checks the claim beside a
+third party: the model's conversion of `sane-dl`'s pages equals the raster of `scanimage --format=png` for the
+same scan, pixel for pixel (PNG's 1-bit gray is 0 black, the high bit first; its 16-bit big-endian, compared
+after a swap). Pixels, not bytes: `scanimage` inverts a 1-bit row's whole bytes for PNG, padding included
+(`frontend/scanimage.c`, its PNG write, studied), so a 157-pixel `Solid white` row ends `0xFF` in its PNG and
+`0x00` in its PBM (seen while reviewing the plan, `scratch/work/s0-2/review/`). Its 16-bit PNG is big-endian as
+PNG requires: a gray-16 `Color pattern` page's PNG and PGM were byte-equal, values such as `0x0001` and `0x0100`
+both present (the same review probe). Both conventions show in one tool: a 1-bit `Solid black` page from
+`test:0`, scanned here while planning (`scratch/work/s0-2/plan-probe/`), is all `0xFF` in `scanimage`'s PBM and
+in its TIFF (big-endian, photometric 0, white is zero: SANE's bits kept) and all `0x00` in its PNG (gray, depth
+1: inverted).
 
 `RawImage`'s fields are private: `RawImage::new(format, width, height, data)` checks that `width` and `height`
 are at least 1, that `data` is `height` × the row's bytes exactly, and that a `Bw1` row's padding bits are 0
@@ -198,10 +200,11 @@ wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize`, and at `u32::
 
 ### The model, as slice 3 builds it
 
-Written into the note as a new section ("The model, for slice 3"), from proposal 9 with the note's seven changes
-and this slice's. Plain data, public fields but `RawImage`'s; enums that may grow `#[non_exhaustive]`; pixel
-sizes, resolutions and counts `u32`, the same in a 32-bit worker as in a 64-bit app (slice 9); paper sizes `f32`
-millimetres (decision 17). Names are the design's; slice 3 may rename and says so.
+As planned; the code review changed it before slice 3 (decisions 27 to 41, "Code review"), and the note's section
+is the model. Written into the note as a new section ("The model, for slice 3"), from proposal 9 with the note's
+seven changes and this slice's. Plain data, public fields but `RawImage`'s; enums that may grow
+`#[non_exhaustive]`; pixel sizes, resolutions and counts `u32`, the same in a 32-bit worker as in a 64-bit app
+(slice 9); paper sizes `f32` millimetres (decision 17). Names are the design's; slice 3 may rename and says so.
 
 - **Devices:** `DeviceId` (a string, `<driver>:<native id>`: `sane:<name as Latin-1>`, `twain32:<product name>`,
   `twain64:<product name>`, `wia:<device id>`, `ica:<persistent id>`, `fake:<name>`; opaque, compared whole);
@@ -210,7 +213,8 @@ millimetres (decision 17). Names are the design's; slice 3 may rename and says s
   `SourceCaps { source: Source, duplex: bool, resolutions: Resolutions, formats: Vec<Format>, max_area: SizeMm,
   paper_auto: bool }`; `Source { Flatbed, Feeder }`; `Resolutions { List(Vec<u32>), Range { min, max, step } }`
   (SANE and TWAIN give either: the note's "To settle" answered by keeping both); `SizeMm { width: f32, height:
-  f32 }`, millimetres, as SANE gives its area (Letter's 215.9 isn't a whole millimetre).
+  f32 }`, millimetres (Letter's 215.9 isn't a whole millimetre; SANE gives its area in millimetres or pixels,
+  corrected by the code review).
 - **Settings:** `Settings { source, duplex, dpi, format: Format, paper: Paper }`; `Paper { Auto, Size(SizeMm) }`
   (Letter, Legal and A4 as `SizeMm` constants). The raw layout's `Format` is also what's asked for, in place of
   proposal 9's `Mode`, so 16-bit can be asked for and clamped like the rest (decision 7). Clamping is said by
@@ -271,17 +275,17 @@ millimetres (decision 17). Names are the design's; slice 3 may rename and says s
 - **The milestone's slices 3 to 5** (`milestones/s0-devices.md`): slice 3, the model as the note's new section
   has it, `in-progress` taken (vetted below; the devices layer's gate holding, and `plan.md`'s graph updated
   then), `RawImage::new`'s checks unit-tested, and the `fake` backend's scripts gaining a cancel after a duplex
-  front (its back still delivered) and a renamed device; slice 4, the protocol as the note's "What slice 4
-  needs" has it (`open` and `renamed_from`, `applied`, progress lines, a SANE worker spawned with its id's
-  one-backend `ConfigDir`), "a cancel mid-page" read as the sheet finished and none fed after, and the raw
-  layout across the pipe byte for byte; slice 5, `pnm`'s PBM compared after the inversion (PBM is 1 black, the
-  model 0), PGM and PPM byte for byte, 16-bit and 1-bit RGB through the `test` backend in the model's layout
-  (the 16-bit conversion a function of the source's byte order, so its swap is unit-tested on CI's
-  little-endian hosts), ids from Latin-1, the fallback on `INVAL` at open in a worker given the id's
-  one-backend `ConfigDir` (`BeforeSystem`, naming none for an id with no backend: decisions 18 and 19; the fake
-  listing a device under a new name), decision 20's refusals before `sane_open` (`BadId`), `INVAL` from a start
-  retried once and then `Gone` (both added by step 2's repair), and the feeder keeping its sheets after a
-  cancel. Slice 2's own entry says it's done on its branch (step 3).
+  front (its back still delivered) and a renamed device; slice 4, the protocol as the note's "What slice 4 needs"
+  has it (`open` and `renamed_from`, `applied`, progress lines, a SANE worker spawned with its id's one-backend
+  `ConfigDir`), "a cancel mid-page" read as the sheet finished and none fed after, and the raw layout across the
+  pipe byte for byte; slice 5, `pnm`'s PBM compared after the inversion, padding bits cleared on both sides (PBM
+  is 1 black, the model 0; corrected by the code review), PGM and PPM byte for byte, 16-bit and 1-bit RGB through
+  the `test` backend in the model's layout (the 16-bit conversion a function of the source's byte order, so its
+  swap is unit-tested on CI's little-endian hosts), ids from Latin-1, the fallback on `INVAL` at open in a worker
+  given the id's one-backend `ConfigDir` (`BeforeSystem`, naming none for an id with no backend: decisions 18 and
+  19; the fake listing a device under a new name), decision 20's refusals before `sane_open` (`BadId`), `INVAL`
+  from a start retried once and then `Gone` (both added by step 2's repair), and the feeder keeping its sheets
+  after a cancel. Slice 2's own entry says it's done on its branch (step 3).
 - **The backlog** (step 3): TEST-9 (slice 6's SANE questions: the fi-6130's name and what replugging does; a
   sheet pulled in before the page in flight ends; the back after a cancel after a front; its vendor and model
   strings); Q-4 (SANE's strings are Latin-1 by the standard: whether `sane-dl` gives vendor, model and kind as
@@ -380,9 +384,8 @@ tests); no `unsafe` in its one source file; `Tracker` is `Clone` and `Send + Syn
 trait with `check()`, `set_total`, `set`, `inc` and `child`, its cancel cooperative ("nothing is interrupted"),
 which is the model's "finish the sheet in flight"; published from github.com/sheaf-pdf/in-progress, the
 org's own, taken by every sheaf crate that reports progress, and planned for `scan-cleanup` here
-(`crates/scan-cleanup.md`). Young (0.1.0) and the
-org's: its trait in `scan-device`'s public API ties a breaking change there to one here (Risk 6). The probes take
-`sane-dl` by path and `png` (above), in `scratch/` only.
+(`crates/scan-cleanup.md`). Young (0.1.0) and the org's: its trait in `scan-device`'s public API ties a breaking
+change there to one here (Risk 6). The probes take `sane-dl` by path and `png` (above), in `scratch/` only.
 
 ## Steps
 
@@ -522,7 +525,7 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     whatever the backend sent, UTF-8 included; the name shown to people is the bytes as UTF-8 where they are,
     else as Latin-1.
 12. **A renamed device is found by backend, vendor and model, only when exactly one matches,** after `INVAL` from
-    `sane_open`, and said (`renamed_from`); otherwise `Gone`.
+    `sane_open`, and said (`renamed_from`); otherwise `Gone`. Narrowed by the code review: decisions 28 and 29.
 13. **Two traits, `Backend` and `Device`,** as SANE's library and handle are, and as a worker keeps one device
     open for a dialog; `scan` blocks its thread and takes the sheet to count from.
 14. **`ScanError::NotInstalled`** for a system without its driver API (no libsane, no DSM), apart from `Gone`.
@@ -545,7 +548,9 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     The client (slice 4) passes it at the spawn; the `sane` backend (slice 5) says what it needs. The alternative,
     listing through the system's configuration in that worker, waits on every backend's probe (about 9 s here) and
     lets a listing cross backends, which security item 1 forbids; an `Isolated` directory leaves a backend on its
-    built-in defaults and resolves no alias.
+    built-in defaults and resolves no alias. *The code review:* the directory confines a listing made before any
+    open, not one after: `dll` adds a backend as it opens a name, an alias's target's too, and lists it (its
+    probe); decision 28 lists first, and decision 29 compares each listed name's `backend_of`.
 19. **An alias needs nothing of its own: its worker's directory is decision 18's, naming the backend `backend_of`
     gives, or none where it gives none, and the alias resolves there** (step 1, revised by its repair). An alias in
     the system's `dll.aliases` is listed in place of the device's name and may be named anything: `Desk scanner`
@@ -561,7 +566,10 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     id with no backend before a `:` the system's configuration and left the directory's search unsaid: it missed
     the alias with a colon (an `Isolated` directory naming `office` answers `INVAL`: `Gone` though there), and sent
     `:0` to the system's last-listed backend (decision 20). The alternative, reading `dll.aliases` ourselves to
-    find the alias's backend, reads SANE's configuration files, which `sane-dl` leaves to SANE.
+    find the alias's backend, reads SANE's configuration files, which `sane-dl` leaves to SANE. *Corrected by the
+    code review:* those listings of 0 were each a process of its own; after the failed open of an alias, the
+    same process lists its target's backend (decision 18's note), so an alias has no fallback because decision
+    29 takes none but from a USB connection's name, not because its listing is empty.
 20. **The `sane` backend refuses, before `sane_open`, an id whose name starts with one of `dll`'s testing
     prefixes** (`fakeusb:`, `fakeusbdev:`, `fakeusbout:`) **or with `:`, or is empty** (step 1; the last two
     added by its repair): no listing gives the first, and through them a name makes SANE replay USB traffic from
@@ -597,7 +605,8 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     so slice 5 had two answers). A re-read that failed (`reload`) is mapped as its own error is. The
     alternative is `Driver` with `sane-dl`'s message, but a second `INVAL`, the settings set again from the
     descriptors as read again, leaves the app nothing to change, and NAPS2 reads the status as offline (the
-    spec's `sane` bullet), so `Gone`, the spec's answer, for review.
+    spec's `sane` bullet), so `Gone`, the spec's answer, for review. *Revised by the code review:* decision 32,
+    `SettingsRefused`.
 25. **`ScanError::BadId` for a stored id the backend refuses before its driver sees it** (step 2's repair):
     decision 20's names, an id that isn't `sane:` and Latin-1 (a character past U+00FF), and a `NUL`
     (`sane-dl`'s `NulInName`, where one reaches it) for SANE; for TWAIN, WIA and ICA what their backends
@@ -617,13 +626,98 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     The milestone's slice 4 says each in a clause. The alternative, a backlog item for slice 4, would leave
     the note that slice 4 writes its protocol from short of them.
 
+27. **`Backend::open(&mut self, device: &DeviceInfo, deadline: Duration)`** (the code review; its blocker): open
+    takes what the app stored of the device, `DeviceInfo`, which a listing gives and the app persists, so the
+    SANE fallback has a vendor and a model to match; and a deadline, since SANE's open lists (decision 28),
+    TWAIN's walks the DSM and ICA's browses. `scan-worker`'s client picks the worker by `DeviceInfo::driver`
+    (TWAIN's `bits`), and the id stays compared whole, the app reading nothing from it ("opaque" dropped). Slice
+    4's `open` request carries both. The alternative, an id holding vendor and model too, would make the id a
+    record and change what equality means.
+28. **SANE's open lists the id's backend first, in the stored-id worker, then opens** (the code review): the
+    stored name listed with the stored vendor and model opens, `Opened::info` the listing's; listed with another,
+    it's taken as gone (a name given since to another model); not listed, it's opened by name all the same (an
+    alias, a name the backend lists another way), its info the stored one, unchecked, since `sane_open` gives no
+    vendor or model. The listing precedes any open because `dll` adds a backend at open and lists every one it
+    has (the review's probe, and the fix's: a listing first through a directory naming none found 0 devices,
+    after `Desk scanner`'s `INVAL` the same process found `test:0`). A listing costs one backend's probe, 0.001 s
+    for `test` through a one-backend directory; a USB backend that answers a stale name already lists inside
+    `sane_open` (`fujitsu`, `canon_dr`, `kodak`: probe N1). The alternative, opening first and taking the stored
+    info unchecked, is faster and opens a reused name's other device unremarked; correctness first.
+29. **The fallback runs only from a USB connection's name, to one of the same form** (the code review): a stored
+    `<backend>:libusb:<bus>:<device>` gone or answering `INVAL` opens the one device listed under a name of that
+    form whose `backend_of` is the id's and whose vendor and model are the stored ones, if exactly one is; any
+    other id is `Gone`: an index, a serial (which survives replugging), an alias, and a network name, since
+    `net`'s names hold a host and one of the same model on another host is another machine's scanner (security
+    item 1). Replugging renumbers USB connections' names alone among the forms read (section 1's table).
+30. **Events on a bounded channel, `&SyncSender<Event>`** (the code review): an unbounded `Sender` let pages pile
+    up in memory a page at a time (about 100 MB each at 600 dpi color) whenever the consumer fell behind; with
+    `SyncSender` a `send` waits while the channel is full, so a pull backend starts no next sheet and a push
+    backend's thread holds its driver back. The caller chooses the bound. A `send` that fails (nobody listening)
+    ends the batch as `Done::Cancelled`, no sheet started after it. The alternative, a sink trait of the model's
+    own, needs a boxed clone for a push thread, where `SyncSender` is `Clone` and std's.
+31. **`ScanError::TimedOut`** (the code review): a deadline of `list` or `open` passed; `sane-dl`'s
+    `DeadlineExceeded`, and `ListingPending` after it, map to it, and a backend that answered it is dropped with
+    its worker, since the listing may still hold the library. The alternative, `list` returning the devices with
+    whether it completed, has nothing to give: `sane-dl` gives no partial listing.
+32. **A second `StartInvalid` is `ScanError::SettingsRefused`, not `Gone`** (the code review, revising decision
+    24): the backends studied answer `INVAL` from `sane_start` for an area or a size they can't scan (`escl`'s
+    empty region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters, at `a113b257`), which the app can
+    change, while `Gone` would tell the user a present scanner is unplugged. `fujitsu` and `canon_dr` answer it
+    too for a transfer left unfinished; the message covers the start refused.
+33. **`ScanError::AccessDenied`** (the code review): SANE's `ACCESS_DENIED` is a device's permissions as well as
+    an authorization (`epson2`, `epsonds`, `kodakaio` say so as `sanei_usb_open` answers it; `pixma`'s
+    `EACCES`), the commonest SANE setup fault on Linux, which the app can explain only from a variant of its own.
+    The alternative, `Driver` with a message naming permissions, leaves the app nothing to match.
+34. **`Stopped` leaves `ScanError` for `scan-worker`'s client's own error** (the code review): the watchdog's stop
+    was a value `Device::scan` could return but never would, while the client's other failures (a crash and its
+    exit, a protocol mismatch, a page cut short) had no type at all; the client's error wraps `ScanError` beside
+    them. The alternative, `Crashed` and `Protocol` in `ScanError`, puts the worker's failures in the device
+    model.
+35. **Encoded forms asked for: `Settings::encodings` and `SourceCaps::encodings`, an `Encoding` enum** (the code
+    review): `Pixels::Encoded` had no setting to reach it. Empty, `Settings::new`'s default, is raw only; whether
+    the app asks stays slice 4's throughput gate's and slice 9's question. `EncodedKind` stays the page's (CCITT's
+    size and polarity with it).
+36. **The structs that may grow are `#[non_exhaustive]`** (`DeviceInfo`, `Caps`, `SourceCaps`, `Settings`,
+    `Applied`, `RawPage`; the code review), with `Settings::new` and `DeviceInfo::new` for code outside the crate,
+    so section 10's later field and a later setting break no caller; slice 4 leans to a `serde` feature of
+    `scan-device`, which decodes them whole, or writes wire types and round-trips every variant of every enum in
+    a test, so no variant added here is left unencoded. The alternative, plain structs until the freeze, makes
+    every addition before slice 11 a break for slices 4 to 10.
+37. **Every other `sane-dl` error is `Driver { message, shown: false }`** (the code review): the page's
+    (`ShortFrame`, `LongFrame`, `PartialRow`, `BadReadLength`, `BadParameters`, `LimitExceeded`), the
+    library's (`BadDeviceList`, `BadHandle`, `Thread`), an option's refusals and `ReloadAfterSet`, with
+    `sane-dl`'s message, `LimitExceeded`'s saying a lower resolution asks for less; `Error::Cancelled` (the
+    token's) is `Done::Cancelled`.
+38. **A page's `dpi` stays `f32`, and `Resolutions::Range::step` is `NonZeroU32`** (the code review): TWAIN's
+    resolution is a fraction (`TW_FIX32`) and SANE's may be (`FIXED`), so `dpi` is the exception to `u32`, said;
+    the client refuses a `dpi` not finite and above 0, an empty list and a range whose `min` is past its `max`.
+    SANE's quant 0 or under 1 dpi is step 1, a larger fractional one rounded up, `INEXACT` saying what was taken.
+39. **`Debug` by hand for `RawImage` and `Encoded`** (the code review): the format, the size and the length,
+    never the bytes; `sane-dl`'s `Image` the same in its next alpha (BUG-7), not here, since the seam can do
+    without it.
+40. **`Device::settings_window(owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError>`** (the code
+    review): the owner taken now (a native handle as a `u64`, an `HWND`'s value), as section 9's "likely answer",
+    so slice 9 adds no parameter; `WindowClosed::Accepted` or `Dismissed`, since the app keeps the driver's
+    settings only when accepted; `ScanError::Unsupported` from a device without one.
+41. **A SANE source without area, `mode` or `source` options** (the code review; `pnm` has none of them): no
+    largest area (`max_area: Option<SizeMm>`), a size clamped to `Auto`; the one format `sane_get_parameters`
+    gives before the start, others clamped to it; one flatbed. SANE's area may be in pixels, converted at the
+    resolution set ("as SANE gives its area" in millimetres corrected).
+
 ## For review (security)
 
-1. **The fallback to a renamed device opens a device the user didn't name:** only one of the same backend, vendor
-   and model, and only when it's the only one listed, never across backends (so a stored `sane:fujitsu:…` id can
-   never become `pnm:0`, which reads any file its option names), and the app is told. Slice 1's item 7 holds:
-   the names a worker opens come from a listing or the user's stored id. Decision 18 makes "never across
-   backends" hold by construction: the worker's SANE lists only the stored id's backend.
+1. **The fallback to a renamed device opens a device the user didn't name:** only from a USB connection's name, to
+   the one device listed under a USB connection's name of the same backend (each listed name's `backend_of`
+   compared with the stored id's), vendor and model, and only when it's the only one, never across backends (so
+   a stored `sane:fujitsu:…` id can never become `pnm:0`, which reads any file its option names) nor to a network
+   scanner (a `net` name holds a host, and one of the same model on another host is another machine's), and the
+   app is told (decisions 28 and 29). Slice 1's item 7 holds: the names a worker opens come from a listing or the
+   user's stored id. *Corrected by the code review:* this said decision 18 made "never across backends" hold by
+   construction, the worker's SANE listing only the stored id's backend; but `dll` adds a backend as it opens a
+   name, an alias's target's too, and a listing after that lists it (the review's probe: `test:0` listed after
+   `Desk scanner` answered `INVAL`, with the vendor and model the alias was listed with). So the backend lists
+   before it opens, and compares each name's backend; the directory alone doesn't confine it. A stored name now
+   listed as another model is taken as gone, never opened as the stored device.
 2. **A stored id is untrusted input:** a character past U+00FF can't be Latin-1 and is refused, never cut; a `NUL`
    is refused before SANE sees it (`sane-dl`'s `NulInName`); each is `ScanError::BadId`, which doesn't echo
    the id (decision 25).
@@ -649,11 +743,13 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
 6. **The stored-id worker's current directory** (step 3, from step 2's check): `Search::BeforeSystem` has SANE
    read the process's current directory after the `ConfigDir` and before `/etc/sane.d` (`sane-dl`'s `Search`;
    sane-dll(5)), and decision 19 leaves `dll.aliases` and the backend's own `.conf` to the first directory that
-   holds one, so either file planted in the worker's current directory would be read: an alias there could
-   turn a stored id into a device of another backend, which `dll` loads by its prefix (slice 1's security item
-   7), past item 1's "never across backends" (from `dll.c`'s order, not tried). The worker is started in a
-   directory it trusts, as slice 1's item 4 says of any process loading SANE so: the note's "What slice 4
-   needs" and the milestone's slice 4 say it, slice 4 chooses the directory.
+   holds one, so either file planted in the worker's current directory would be read: an alias there could turn a
+   stored id into a device of another backend, which `dll` loads by its prefix (slice 1's security item 7), past
+   item 1's "never across backends" (tried by step 3's check: a planted `dll.aliases` holding `alias test:9
+   pnm:0` made a stale `test:9` open `pnm:0` through a directory naming `test`, and hid the system's aliases,
+   `office:scan` answering `INVAL`; `scratch/work/s0-2/step-3/check/sec6/`). The worker is started in a directory
+   it trusts, as slice 1's item 4 says of any process loading SANE so: the note's "What slice 4 needs" and the
+   milestone's slice 4 say it, slice 4 chooses the directory.
 
 ## Risks
 
@@ -668,7 +764,9 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
    1's branch already holds, so the IDs are renumbered at whichever merge lands second, this slice's TEST-9
    included, said at the merge. That branch also deletes `twain-spike` (its `image` module moved into
    `twain-dsm`'s tests' support) and moves slice 7's plan into `archive/slices/`: the note's new text names the
-   module without a path, and this plan's own citations of those paths are a record as of `4624760`.
+   module as slice 8 does, "the spike's `image` module", with neither a crate nor a path (the code review: the
+   crate's name would have merged cleanly and gone stale), and this plan's own citations of those paths are a
+   record as of `4624760`.
 4. **A fix to slice 1 merged in mid-slice** (pull request #2's Windows reruns): the step after it runs `just ci`
    and the test list, and the account says so; `master` merged in with slice 8 would drop `twain-spike`'s tests
    from the list, expected and said.
@@ -756,11 +854,11 @@ before it was acted on; the plan as drawn is kept at `scratch/work/s0-2/plan.bef
     project of its own (its header names its own author and licence file). Cited by `sane-airscan(5)` instead,
     or with the commit its copy was read at.
 16. *Behaviour, minor (proportion).* Step 1 ran `just ci` as "the slice's baseline", but that baseline exists:
-    the run on `4624760`'s clean tree right after the merge was committed, every recipe green, `sane-dl-msrv`
-    on 1.89 included, no test skipped (`scratch/work/s0-1/merge/just-ci-2.log`). Nothing the slice changes is
-    read by a build, test or gate, so step 1 cites it rather than running it again (the 2026-10-29 ruling);
-    `just ci` stays for any step whose diff leaves `docs/pm/`, and `sane-dl-package` is "not run", never
-    passed, if the network is down.
+    the run on `4624760`'s clean tree right after the merge was committed, every recipe green, `sane-dl-msrv` on
+    1.89 included, no test skipped (`scratch/work/s0-1/merge/just-ci-2.log`). Nothing the slice changes is read
+    by a build, test or gate, so step 1 cites it rather than running it again (checks in proportion: each check
+    once, where it can catch something); `just ci` stays for any step whose diff leaves `docs/pm/`, and
+    `sane-dl-package` is "not run", never passed, if the network is down.
 17. *Behaviour, minor.* S1's token cancels were placed loosely ("mid-page"; "between pages") while its
     expected counts presume a place (the next batch giving 8 means the second page): the scenario names the
     second page, and the cancel between pages is made on the same thread after `next_page` returns, so it

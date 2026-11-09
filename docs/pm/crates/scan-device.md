@@ -5,28 +5,31 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 - **What:** the device model of M5 proposal 9, as `crates/scan-device-seam.md`'s "The model, for slice 3"
   writes its types and traits down (S0 slice 2, for review), and the backends behind it.
   - `DeviceInfo` (an id such as `sane:fujitsu:fi-7160:12345`, `twain64:PaperStream IP fi-7160`, `wia:{…}`,
-    opaque and compared whole, a SANE name's bytes read as Latin-1; name, maker, model, driver), `Caps` (a
-    list of sources, flatbed or feeder, each with its duplex, its resolutions as a list or a range, its
-    formats, its largest area in millimetres and whether the driver finds the paper's size; and whether the
-    driver has a settings window of its own), `Settings` (source, duplex, dpi, format, paper: the driver's own
-    size detection or a size), each clamped to what the device can do, and what was clamped said (`Applied`).
+    compared whole and read by nobody, a SANE name's bytes read as Latin-1; name, maker, model, driver: what the
+    app stores and gives back to open), `Caps` (a list of sources, flatbed or feeder, each with its duplex, its
+    resolutions as a list or a range, its formats, its largest area in millimetres and whether the driver finds
+    the paper's size; and whether the driver has a settings window of its own), `Settings` (source, duplex, dpi,
+    format, paper: the driver's own size detection or a size; and the encoded forms the app takes, none by
+    default), each clamped to what the device can do, and what was clamped said (`Applied`). The structs that
+    may grow are `#[non_exhaustive]`, made outside the crate by a constructor or by decoding.
   - `RawPage` (the image as the driver gave it: a `RawImage` in the note's raw layout, which its checked
     constructor holds, or encoded bytes with their kind; its resolution, sheet and side, the side reported or
-    inferred), `ScanError` (feeder empty, jammed, double feed, cover open, busy, gone, stopped by the
-    watchdog, the driver's API not installed, an id the driver doesn't form, the driver's own words and
-    whether it showed them), `Done`
-    (feeder empty, one flatbed page, cancelled), `Event` (the settings applied, a sheet begun, a page, a
-    status such as warming up).
-  - Two traits: `Backend` (list under a deadline; open by id, saying when it opened a renamed device in its
-    place) and `Device` (caps, scan a batch, the settings window), both `Send`. Synchronous, a batch on a
-    thread of its own until it ends, events on a channel (proposal 9, as sheaf's OCR job's are), cancel and
+    inferred), `ScanError` (feeder empty, jammed, double feed, cover open, busy, gone, an id the driver doesn't
+    form, the settings refused, access refused, a deadline passed, something the device can't do, the driver's
+    API not installed, the driver's own words and whether it showed them; the watchdog's stop is
+    `scan-worker`'s), `Done` (feeder empty, one flatbed page, cancelled), `Event` (the settings applied, a sheet
+    begun, a page, a status such as warming up).
+  - Two traits: `Backend` (list under a deadline; open the device the app stored, under a deadline, saying when
+    it opened a renamed device in its place) and `Device` (caps, scan a batch, the settings window, owned by the
+    app's), both `Send`. Synchronous, a batch on a thread of its own until it ends, events on a bounded channel,
+    which holds a backend back while it's full (proposal 9's channel, as sheaf's OCR job's is), cancel and
     progress through `in-progress`'s `Progress`, checked between sheets, so a cancel finishes the sheet in
     flight.
 - **Backends, each a feature:**
-  - `fake`: scripted (proposal 22): pages and sides, a jam at sheet 4 then Continue, a double feed, an
-    open cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in flight
-    finished, none fed after), a cancel after a duplex front (its back still delivered), a stored id opened as
-    a renamed device. On every system, in CI. Nothing scripted at this level exists elsewhere.
+  - `fake`: scripted (proposal 22): pages and sides, a jam at sheet 4 then Continue, a double feed, an open
+    cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in flight finished, none
+    fed after), a cancel after a duplex front (its back still delivered), a stored device opened as a renamed
+    one found by its maker and model. On every system, in CI. Nothing scripted at this level exists elsewhere.
   - `sane` (Linux), on `sane-dl`: the batch loop and the backend quirks that are about scanning rather
     than the API (proposal 6): `sane_start` per page until `NO_DOCS`, which on the first page means the
     feeder is empty; one flatbed page per press; `page-height` set after `source`; parameters that make no
@@ -37,14 +40,19 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
       Document Feeder(centrally aligned,Duplex)`; option values translated into the user's language.
     - An `INVAL` from `sane_start` is ambiguous (NAPS2 reads it as offline; proposal 6 reads the
       descriptors again): read them again (`sane-dl` does), set the settings again and start once more, and
-      say "offline" (`Gone`) if it repeats.
+      say the settings were refused (`SettingsRefused`) if it repeats: the backends studied answer it for an
+      area or a size they can't scan (`escl`, `lexmark`, `pixma`, `hp5590`), not for a device gone (S0 slice
+      2's code review, which revised the first answer, `Gone`).
     - **Ids and the fallback** (the seam note's section 1): an id is `sane:` and the name's bytes as Latin-1,
-      given back to `sane_open` byte for byte; one that answers `INVAL` at open falls back to the one device
-      of the same backend, vendor and model, if exactly one is listed, and says so (`renamed_from`), else
-      `Gone`. The worker that opens a stored id is started with a `ConfigDir` naming that id's backend, or
-      none, written `Search::BeforeSystem`, so the listing stays within the backend; an id with one of `dll`'s
-      testing prefixes, a leading `:`, or no name at all, or one not Latin-1 or holding a `NUL`, is refused
-      before `sane_open` (`BadId`).
+      given back to `sane_open` byte for byte. The worker that opens a stored id is started with a `ConfigDir`
+      naming that id's backend, or none, written `Search::BeforeSystem`, and lists that backend before it
+      opens anything: the stored name listed with the stored vendor and model opens, listed with another is
+      taken as gone, not listed is opened by name all the same. One gone, or answering `INVAL` at open, falls
+      back only from a USB connection's name (`libusb:`), to the one listed device under such a name whose
+      backend is the id's, with the same vendor and model, if exactly one is, and says so (`renamed_from`),
+      else `Gone`; never across backends nor to a network scanner. An id with one of `dll`'s testing prefixes,
+      a leading `:`, or no name at all, or one not Latin-1 or holding a `NUL`, is refused before `sane_open`
+      (`BadId`).
     - **Pages into the raw layout** (the note's section 3): 1-bit gray inverted (SANE's 1 is black, the
       model's 0) and its padding bits cleared, 1-bit RGB expanded to 8 bits, 16-bit made little-endian.
     - **A cancel** finishes the sheet in flight: once the progress's check fails, no next sheet is started and
@@ -83,7 +91,8 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   deliver it, what the model makes of it, and what's still to settle, with the known unknowns. First version
   2026-11-08, before any driver layer; revised by the TWAIN spike (S0 slice 7) and by S0 slice 2 (its SANE
   rows from `sane-dl`, the raw layout, and the model written down for slice 3), and whenever a backend finds
-  the model lacking. It changes proposal 9's model in eleven places (its "Changes from proposal 9's model").
+  the model lacking. It changes proposal 9's model in sixteen places (its "Changes from proposal 9's model"),
+the last five from S0 slice 2's code review.
 - **Not here:** network scanning. The office's fi-6130, fi-7160 and fi-8170 scan over USB only, as far as
   any source shows, and of sane-airscan's 205 tested devices one desktop document scanner speaks eSCL.
   Network copiers reach sheaf through WIA and sane-airscan already. If it's ever wanted: FEAT-10.
