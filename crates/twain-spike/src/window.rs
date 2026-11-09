@@ -17,8 +17,8 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    KillTimer, MSG, PostMessageW, RegisterClassExW, SetTimer, TranslateMessage, UnregisterClassW,
-    WM_APP, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    KillTimer, MSG, PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SetTimer,
+    TranslateMessage, UnregisterClassW, WM_APP, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::dsm::wide;
@@ -27,6 +27,8 @@ use crate::dsm::wide;
 pub const WM_SOURCE: u32 = WM_APP + 1;
 /// Posted by the main thread: a request, in `wParam`.
 pub const WM_REQUEST: u32 = WM_APP + 2;
+/// The request a paused TWAIN thread is sent: stop after the page in flight.
+pub const REQUEST_CANCEL: usize = 1;
 /// The spike's own messages, never forwarded to the DSM.
 pub const SPIKE_MESSAGES: core::ops::RangeInclusive<u32> = WM_SOURCE..=WM_REQUEST;
 
@@ -167,6 +169,15 @@ pub fn next_message() -> Option<MSG> {
     // messages.
     let got = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
     (got > 0).then_some(msg)
+}
+
+/// The next of the spike's own requests already queued, without waiting, and
+/// leaving every other message where it is.
+pub fn take_request() -> Option<MSG> {
+    let mut msg = empty_message();
+    // SAFETY: `msg` is writable; the filter takes only WM_REQUEST, removed.
+    let got = unsafe { PeekMessageW(&mut msg, null_mut(), WM_REQUEST, WM_REQUEST, PM_REMOVE) };
+    (got != 0).then_some(msg)
 }
 
 /// A message translated and sent to its window's procedure.

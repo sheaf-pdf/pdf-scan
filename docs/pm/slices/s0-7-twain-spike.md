@@ -1,6 +1,6 @@
 # S0 slice 7: the TWAIN spike, end to end
 
-Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; steps 1 and 2 done. Milestone:
+Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; steps 1 to 3 done. Milestone:
 `milestones/s0-devices.md`, slice 7. Run on the Windows machine, while slice 1 runs on Linux.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -532,3 +532,30 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
     every scenario now ends with the same walk the session's drop does.
   - *`as_chunks::<3>()`*, which clippy 1.99 asks for over `chunks_exact(3)` (stable since 1.88).
   - *The posted-request reader waits for step 3*, its first user.
+
+### Step 3: cancel from another thread (2026-11-08)
+
+- **What it does:** the main thread answers a paused TWAIN thread by posting `WM_REQUEST` with
+  `REQUEST_CANCEL` to its window; a memory transfer can pause after a page's first buffer, telling the main
+  thread and taking only `WM_REQUEST` (`PeekMessageW`, the filter leaving every other message queued) for up
+  to 10 seconds, then going on with the page; `MSG_STOPFEEDER`; a wait that may hear nothing (`quiet_for`).
+  `scan` split, so `cancel` reuses its start (`prepare`). The `cancel` scenario; `all` runs the seven; the CI
+  job already runs `all`.
+- **Checked here:** the core on all three targets without a warning; `all` passing in both bitnesses with
+  `CAP_XFERCOUNT=3` and unset (`scratch/work/s0-7/step-3/all-*.txt`); a callback made to sleep 60 seconds
+  inside `MSG_ENABLEDS` ending the process at 30 seconds with exit code 1, no process left behind
+  (`make-fail-hang.txt`), the file restored; the test list unchanged at 17; `~/.cargo` unchanged; the name
+  gate.
+- **Found** (on the sample source, both bitnesses alike): the cancel posted from the main thread is taken 5
+  ms after the pause; the page in flight finishes (184 strips); `MSG_ENDXFER` leaves "unknown (-1)" pending
+  (7 to 6); `MSG_STOPFEEDER` fails with `TWCC_BADPROTOCOL`, as the sample's code says; `MSG_RESET` ends the
+  batch (6 to 5, count 0); the source says nothing in the second after; disable and close are clean. So
+  "finish the page in flight, then no further transfer" is `MSG_ENDXFER` then `MSG_RESET`; whether the feeder
+  stops is the driver's (the sample fed the next sheet inside `MSG_ENDXFER`, which the application can't
+  see), for slice 12.
+- **Departures from the plan, and why:** *the pause polls* (`PeekMessageW` every 5 ms) where the plan said it
+  pumps: `PeekMessageW` doesn't wait, and a bounded wait on one message range is simplest that way.
+- **Asked meanwhile** (Greg, 2026-11-08: "sheaf uses in-progress for cancellation. is that useful in this
+  context?"): not in the spike, whose question is how a cancel reaches the TWAIN thread (a flag can't wake
+  `GetMessageW`; a posted message can); in the device model, likely: step 4 writes it into the seam note as a
+  proposal for slice 3, Greg's to rule.

@@ -16,6 +16,8 @@ pub enum Event {
     Line(String),
     /// Something that wasn't as expected.
     Fail(String),
+    /// Paused within page `page`, waiting for a request posted to the window.
+    Paused { page: usize },
     /// The scenario is over, in this TWAIN state (1 if it walked all the way
     /// down).
     Finished { state: u8 },
@@ -32,6 +34,10 @@ impl Out {
 
     pub fn fail(&self, text: impl Into<String>) {
         self.send(Event::Fail(text.into()));
+    }
+
+    pub fn paused(&self, page: usize) {
+        self.send(Event::Paused { page });
     }
 
     fn send(&self, event: Event) {

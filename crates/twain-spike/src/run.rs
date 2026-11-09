@@ -9,6 +9,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess}
 
 use crate::scenarios::{SCENARIOS, Scenario};
 use crate::twain_thread::{self, Event};
+use crate::window::{self, REQUEST_CANCEL, WM_REQUEST};
 
 /// How long a scenario may go without an event before its thread is taken
 /// for hung.
@@ -56,11 +57,24 @@ fn run_one(scenario: &'static Scenario) -> u32 {
         }
     };
     let mut failures = 0;
+    let mut twain_window = None;
     let state = loop {
         match events.recv_timeout(WATCHDOG) {
             Ok(Event::Ready { window, thread }) => {
-                println!("  TWAIN thread {thread}, window {window:#x}")
+                println!("  TWAIN thread {thread}, window {window:#x}");
+                twain_window = Some(window);
             }
+            Ok(Event::Paused { page }) => match twain_window {
+                Some(w) if window::post(w, WM_REQUEST, REQUEST_CANCEL, 0) => {
+                    println!(
+                        "  (main thread) paused in page {page}: a cancel posted to the TWAIN thread's window"
+                    );
+                }
+                _ => {
+                    println!("  FAIL paused in page {page}, and the cancel couldn't be posted");
+                    failures += 1;
+                }
+            },
             Ok(Event::Line(text)) => println!("  {text}"),
             Ok(Event::Fail(text)) => {
                 println!("  FAIL {text}");

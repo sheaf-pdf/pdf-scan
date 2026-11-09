@@ -4,6 +4,7 @@ use crate::container::Value;
 use crate::ffi::*;
 use crate::image::{self, DibFacts, Format, Image, Polarity, Tile};
 use crate::session::{Mode, Session, describe};
+use crate::window::REQUEST_CANCEL;
 
 pub struct Scenario {
     pub name: &'static str,
@@ -42,6 +43,11 @@ pub const SCENARIOS: &[Scenario] = &[
         name: "compare",
         about: "one page native and one through memory, for RGB, gray and black and white, pixel for pixel",
         run: compare,
+    },
+    Scenario {
+        name: "cancel",
+        about: "a cancel posted from the main thread during page 1: the page finished, nothing more transferred",
+        run: cancel,
     },
 ];
 
@@ -121,10 +127,10 @@ struct Run {
     pixel_type: Option<u16>,
 }
 
-/// One batch, from state 3 to 3: the source opened, its capabilities set and
-/// read, enabled, every page transferred while the count isn't 0, disabled,
-/// closed. The pages, or `None` if the batch failed (the session walks down).
-fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
+/// A batch begun, from state 3 to 6: the source opened, its capabilities set
+/// and read, enabled, and its `MSG_XFERREADY` received. The polarity its
+/// memory transfers use, or `None` if that failed (the session walks down).
+fn prepare(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Polarity> {
     if !s.open_source(sample) {
         return None;
     }
@@ -221,9 +227,17 @@ fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
         }
         None => return None,
     }
+    Some(polarity)
+}
+
+/// One batch, from state 3 to 3: begun, every page transferred while the count
+/// isn't 0, disabled, closed. The pages, or `None` if the batch failed (the
+/// session walks down).
+fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
+    let polarity = prepare(s, sample, run)?;
     let mut pages = Vec::new();
     loop {
-        let page = transfer_one(s, run.mechanism, polarity, pages.len() + 1)?;
+        let (page, _) = transfer_one(s, run.mechanism, polarity, pages.len() + 1, false)?;
         pages.push(page);
         s.ext_image_info();
         match s.end_transfer() {
@@ -244,8 +258,16 @@ fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
 }
 
 /// One page (state 6 to 7): its image info, the transfer, the image decoded and
-/// checked against the info.
-fn transfer_one(s: &mut Session, mechanism: u16, polarity: Polarity, n: usize) -> Option<Page> {
+/// checked against the info. With `pause`, a memory transfer pauses after its
+/// first buffer for the main thread's request, which comes back with the page.
+fn transfer_one(
+    s: &mut Session,
+    mechanism: u16,
+    polarity: Polarity,
+    n: usize,
+    pause: bool,
+) -> Option<(Page, Option<usize>)> {
+    let mut request = None;
     let info = s.image_info()?;
     let (width, height) = (info.ImageWidth, info.ImageLength);
     let (samples, bits, per_pixel) = (info.SamplesPerPixel, info.BitsPerSample, info.BitsPerPixel);
@@ -302,7 +324,8 @@ fn transfer_one(s: &mut Session, mechanism: u16, polarity: Polarity, n: usize) -
             }
         }
     } else {
-        let tiles = s.memory()?;
+        let (tiles, asked) = s.memory_pausing(pause.then_some(n))?;
+        request = asked;
         s.out()
             .line(format!("page {n} memory: {}", describe_tiles(&tiles, w)));
         match image::assemble(w, h, format, polarity, &tiles) {
@@ -324,7 +347,7 @@ fn transfer_one(s: &mut Session, mechanism: u16, polarity: Polarity, n: usize) -
             format.name()
         ),
     );
-    Some(page)
+    Some((page, request))
 }
 
 /// The shape of a memory transfer's buffers, in a line.
@@ -436,6 +459,57 @@ fn compare(s: &mut Session) {
                 .out()
                 .fail(format!("{}: native and memory differ: {e}", format.name())),
         }
+    }
+    s.walk_down();
+}
+
+/// A cancel posted from the main thread while page 1 is in flight, at a fixed
+/// point: the TWAIN thread pauses after the page's first buffer until the
+/// cancel comes, finishes the page, ends the transfer, tries `MSG_STOPFEEDER`,
+/// then `MSG_RESET`s the batch and disables the source. Memory transfers,
+/// event mode; the feeder must hold two pages or more.
+fn cancel(s: &mut Session) {
+    let expected = expected_pages();
+    if expected == Some(1) {
+        s.out()
+            .fail("a cancel needs two pages or more in the feeder, and CAP_XFERCOUNT is 1");
+        return;
+    }
+    let pages = open_to_sample(s).and_then(|sample| {
+        let run = Run {
+            mechanism: TWSX_MEMORY,
+            mode: Mode::Event,
+            count: -1,
+            pixel_type: None,
+        };
+        let polarity = prepare(s, &sample, &run)?;
+        let (_, request) = transfer_one(s, TWSX_MEMORY, polarity, 1, true)?;
+        s.check(
+            request == Some(REQUEST_CANCEL),
+            format!("page 1's request: {request:?}, not the cancel"),
+        );
+        s.ext_image_info();
+        let pending = s.end_transfer()?;
+        if !s.check(
+            pending != 0,
+            "nothing pending after page 1, so the cancel shows nothing",
+        ) {
+            return None;
+        }
+        s.stop_feeder();
+        if !s.reset() {
+            return None;
+        }
+        s.quiet_for(Mode::Event, 1000);
+        (s.disable() && s.close_source()).then_some(1usize)
+    });
+    if let Some(n) = pages {
+        s.check(
+            n == 1,
+            format!("{n} pages transferred around the cancel, not 1"),
+        );
+        s.out()
+            .line("1 page transferred; the cancel ended the batch after it");
     }
     s.walk_down();
 }

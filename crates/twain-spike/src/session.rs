@@ -662,10 +662,25 @@ impl Session {
     }
 
     /// Waits for the source's next message, through the callback or through
-    /// `MSG_PROCESSEVENT` as `mode` says, dispatching what else comes. `None`
-    /// if none comes in 20 seconds.
+    /// `MSG_PROCESSEVENT` as `mode` says, dispatching what else comes. `None`,
+    /// a failure, if none comes in 20 seconds.
     pub fn wait_for_source(&mut self, mode: Mode) -> Option<u16> {
-        window::set_timer(self.hwnd, SOURCE_TIMER, SOURCE_WAIT_MS);
+        self.source_message(mode, SOURCE_WAIT_MS, true)
+    }
+
+    /// Whether the source says anything in the next `ms` milliseconds, which
+    /// it needn't: its message if it does.
+    pub fn quiet_for(&mut self, mode: Mode, ms: u32) -> Option<u16> {
+        let got = self.source_message(mode, ms, false);
+        if got.is_none() {
+            self.out
+                .line(format!("no message from the source in the {ms} ms after"));
+        }
+        got
+    }
+
+    fn source_message(&mut self, mode: Mode, ms: u32, required: bool) -> Option<u16> {
+        window::set_timer(self.hwnd, SOURCE_TIMER, ms);
         let got = loop {
             let Some(mut msg) = window::next_message() else {
                 self.out
@@ -673,10 +688,12 @@ impl Session {
                 break None;
             };
             if msg.message == WM_TIMER && msg.wParam == SOURCE_TIMER {
-                self.out.fail(format!(
-                    "no message from the source in {} seconds",
-                    SOURCE_WAIT_MS / 1000
-                ));
+                if required {
+                    self.out.fail(format!(
+                        "no message from the source in {} seconds",
+                        ms / 1000
+                    ));
+                }
                 break None;
             }
             if msg.message == WM_SOURCE {
@@ -822,8 +839,15 @@ impl Session {
         bytes
     }
 
-    /// A memory transfer (state 6 to 7): every buffer's tile, in order.
-    pub fn memory(&mut self) -> Option<Vec<Tile>> {
+    /// A memory transfer (state 6 to 7): every buffer's tile, in order. Given a
+    /// page number, it pauses after the first buffer: it tells the main thread, then takes only the spike's own
+    /// requests for up to 10 seconds, and goes on with the transfer whatever
+    /// comes. The tiles, and the request that came, if one did.
+    pub fn memory_pausing(
+        &mut self,
+        pause_in_page: Option<usize>,
+    ) -> Option<(Vec<Tile>, Option<usize>)> {
+        let mut request = None;
         let mut setup = TW_SETUPMEMXFER::default();
         // SAFETY: DAT_SETUPMEMXFER writes a TW_SETUPMEMXFER into `setup`, which
         // lives on this frame for the call.
@@ -900,7 +924,12 @@ impl Session {
             }
             let shape = (mx.XOffset, mx.YOffset, mx.Columns, mx.Rows, mx.BytesPerRow);
             match Tile::from_buffer(shape, mx.BytesWritten, &buffer) {
-                Ok(tile) => tiles.push(tile),
+                Ok(tile) => {
+                    tiles.push(tile);
+                    if let (1, Some(page)) = (tiles.len(), pause_in_page) {
+                        request = self.pause(page);
+                    }
+                }
                 Err(e) => {
                     self.out.fail(format!("buffer {}: {e}", tiles.len()));
                     return None;
@@ -920,7 +949,7 @@ impl Session {
                 return None;
             }
         }
-        Some(tiles)
+        Some((tiles, request))
     }
 
     /// The extended image info asked for (state 7); the sample refuses.
@@ -978,6 +1007,53 @@ impl Session {
         self.out.line(format!("pending: {}", pending_text(count)));
         self.moved(if count == 0 { 5 } else { 6 });
         Some(count)
+    }
+
+    /// Paused within page `page`: the main thread told, then the spike's own
+    /// requests taken, without dispatching anything else, for up to 10
+    /// seconds. The request's `wParam`, if one came.
+    fn pause(&mut self, page: usize) -> Option<usize> {
+        self.out.line(format!(
+            "page {page}: paused after its first buffer, waiting for a request"
+        ));
+        self.out.paused(page);
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(10) {
+            if let Some(msg) = window::take_request() {
+                let waited = started.elapsed().as_millis();
+                self.out.line(format!(
+                    "page {page}: request {} taken after {waited} ms; the page goes on",
+                    msg.wParam
+                ));
+                return Some(msg.wParam);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        self.out
+            .fail(format!("page {page}: no request in 10 seconds"));
+        None
+    }
+
+    /// `MSG_STOPFEEDER` (state 6), which the sample refuses.
+    pub fn stop_feeder(&mut self) -> bool {
+        let mut pending = TW_PENDINGXFERS::default();
+        // SAFETY: MSG_STOPFEEDER takes a TW_PENDINGXFERS, `pending`, which
+        // lives on this frame for the call.
+        let rc = unsafe {
+            self.triplet(
+                Party::Source,
+                DG_CONTROL,
+                DAT_PENDINGXFERS,
+                MSG_STOPFEEDER,
+                (&raw mut pending).cast(),
+            )
+        };
+        self.expect_failure(
+            "DAT_PENDINGXFERS/MSG_STOPFEEDER",
+            rc,
+            TWCC_BADPROTOCOL,
+            Party::Source,
+        )
     }
 
     /// `MSG_RESET` (state 6 to 5): nothing more transferred.
