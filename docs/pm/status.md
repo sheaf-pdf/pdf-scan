@@ -1,13 +1,15 @@
 # Status
 
-As of 2026-11-08.
+As of 2026-11-09.
 
-**S0 slice 1 is done on its branch, `s0-1-sane-dl`, pushed, in pull request #2,** waiting on review. The
-workspace, then `sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`,
+**S0 slice 1 is done on its branch, `s0-1-sane-dl`, pushed, in pull request #2,** waiting on review, CI green on
+it. The workspace, then `sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`,
 devices under a deadline, typed options, frames assembled into pages, batches, a cancel token any thread can
 use), ready to publish and not published, with `fake-libsane` for its tests; its code review's 22 findings all
 fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged (pull request #1). It's a git
-repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
+repository at github.com/sheaf-pdf/pdf-scan (public; `master`). **S0 slice 2, the seam note revised, is done on
+`s0-2-seam-note`,** stacked on slice 1's branch, waiting on review, the push and its pull request; S0 slice 3
+next, once that's open.
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -49,10 +51,14 @@ repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
 - **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
   `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
   (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
-- **Waiting on review:** the slice (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10), and CI's run on Ubuntu, Windows and macOS, which closes TEST-2 and TEST-8. Also:
-  `asks.md`, ask 5; UP-7 to UP-11, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
+- **Done on its branch: S0 slice 2, the seam note revised** (`slices/s0-2-seam-note.md`; `s0-2-seam-note`,
+  from slice 1's tip, docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns answered, the
+  raw layout fixed, and the model written down for slice 3, then revised by its code review (25 findings
+  fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
+  1's; CI's run on the three systems then shows nothing of its own (docs only).
+- **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
+  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6). Also:
+  `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
   PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 2, the seam note's SANE rows revised from what slice 1 learned of SANE (its plan's "So
-  far", steps 2 and 4, and "Code review"), on top of slice 7's TWAIN rows; then slices 3 and 4 on Linux.
-  Slice 8 (`twain-dsm`) can follow slice 7 on Windows.
+- **Next:** S0 slice 3, `scan-device` provisional, once slice 2's pull request is open; then slice 4 on
+  Linux. Slice 8 (`twain-dsm`) can follow slice 7 on Windows.

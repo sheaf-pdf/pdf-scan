@@ -61,8 +61,15 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
   re-read, whatever its cause, counted by `Handle::options_generation`; `NO_DOCS` and which call returned it,
   with the pages so far; every status with its call, unknown ones kept as integers; the token, and "feed no
   more" left to the caller, who starts no next page. All exposed, so the `sane` backend decides what they mean
-  and `sane-dl` stays SANE alone. What the slice learned of the seam's SANE unknowns is in its plan's "So
-  far", steps 2 and 4, and "Code review", for S0 slice 2.
+  and `sane-dl` stays SANE alone. What the seam takes of it, as S0 slice 2 revised the note (its SANE rows,
+  and the table of what the `sane` backend maps in "The model, for slice 3"): `DeviceName`'s bytes for the id,
+  read as Latin-1 and given back byte for byte; `Image` converted by the `sane` backend into the raw layout
+  (1-bit gray inverted, 1-bit RGB expanded, 16-bit made little-endian), `sane-dl` passing SANE's samples on
+  unchanged; "feed no more" as the backend starting no next page and dropping the batch, the token kept for a
+  stop at once; `backend_of` and `ConfigDir` (`Search::BeforeSystem`) for the worker that opens a stored id,
+  which lists its backend before it opens; `DeadlineExceeded` and `ListingPending` as the model's `TimedOut`,
+  `INVAL` from a start twice as `SettingsRefused`, `ACCESS_DENIED` as `AccessDenied`, and every other error as
+  the model's `Driver` (S0 slice 2's code review).
 - **Prior art:** `sane-scan` 0.1.2 (2023), the one published binding, links at build time (bindgen, libclang,
   `-lsane`), passes a one-byte `bool` where backends read a four-byte word, sizes `lines = -1` buffers wrong,
   turns a mid-page `JAMMED` into a truncated `Ok`, and hasn't answered a PR since 2023. Three permissive
@@ -97,9 +104,8 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
   - Here and in CI on Ubuntu with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, so nothing
     skips; on Windows and macOS the tests that need libsane or the header say they skipped.
 - **Open:**
-  - CI's run of this code, which waits on the push: Windows and macOS (the fake as a DLL and a dylib, the
-    build script and `links`; TEST-8), and the tests and the header contract against Ubuntu's `libsane1` and
-    `sane.h`, 1.4.0 as here (TEST-2).
+  - `Image` (and `Page`, which holds one) derives `Debug` over its bytes, so `{:?}` of a page prints every
+    byte (BUG-7, from S0 slice 2's code review): written by hand for the next alpha, with a changelog entry.
   - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it.
   - No authorization callback (FEAT-11), until a networked backend needs one.
   - Defects found in SANE 1.4.0's `test` backend, `scanimage` and several backends' `sane_set_io_mode`,

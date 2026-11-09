@@ -1,11 +1,15 @@
 # Bugs: known wrong behaviour not yet fixed
 
-IDs BUG-1 to BUG-6; the next new one is **BUG-7**. Format and rules: `README.md`.
+IDs BUG-1 to BUG-7; the next new one is **BUG-8**. Format and rules: `README.md`.
 
-All six are in sheaf's code as it is cut, so each is fixed in the slice that moves its file, and the
+BUG-1 to BUG-6 are in sheaf's code as it is cut, so each is fixed in the slice that moves its file, and the
 harness's byte-for-byte check parts from sheaf there only, said in the slice (plan.md, "Standing rules").
 Revised 2026-11-08 from the prior-art survey (`research/prior-art/README.md`, "To crates.md
 and bugs.md").
+
+## For S0 (scan devices)
+
+- **BUG-7** · sane-dl · S0 · open — **`Image`'s derived `Debug` prints a page's every byte.** `Image` derives `Debug` over `data: Vec<u8>` (`sane-dl`'s `src/scan.rs`), and `Page`, which holds one, derives it too, so `{:?}` of a page (a log line, `dbg!`, an `assert_eq!` that fails) writes each byte as decimal text: hundreds of MB for a 600 dpi color page of about 100 MB. Write `Image`'s `Debug` by hand (its format, depth, size, stride, frames and the data's length, not the bytes) for the next alpha, said in the changelog; the model's `RawImage` and `Encoded` do the same (S0 slice 3). Not a defect the seam can't do without, so no code change in S0 slice 2; whichever slice next releases `sane-dl` (S0 slice 5, if it needs a change there) takes it. *(S0 slice 2, code review)*
 
 ## For S1 (pages)
 
