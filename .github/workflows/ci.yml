@@ -200,9 +200,11 @@ jobs:
 
   # sane-dl's public API read from rustdoc's JSON, hidden items included: no
   # unsafe function, method or trait, no unsafe function pointer, no raw
-  # pointer in a public signature, no re-export of another crate's item; each
-  # unsafe impl listed. On a pinned nightly, so the JSON's format moves only
-  # when the pin does, never under an unrelated pull request.
+  # pointer in a public signature, no static mut or target_feature function,
+  # no re-export of another crate's item (scripts/public-api.jq says it all);
+  # each unsafe impl and union listed. On a pinned nightly, so the JSON's
+  # format moves only when the pin does, never under an unrelated pull
+  # request.
   public-api:
     name: sane-dl's public API holds no unsafe
     runs-on: ubuntu-latest

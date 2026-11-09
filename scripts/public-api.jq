@@ -2,7 +2,8 @@
 #
 # Input: the JSON `cargo rustdoc --lib -- -Z unstable-options --output-format
 # json --document-hidden-items` writes for one crate, so `#[doc(hidden)]`
-# items are in it, and every re-export is a `use` item rather than inlined.
+# items are in it, and every re-export is a `use` or `extern crate` item
+# rather than inlined.
 # Arguments: `$format`, the `format_version` this was written against, and
 # `$floor`, the least number of the crate's own items a whole read finds.
 #
@@ -10,20 +11,32 @@
 # it's not empty, nothing else is read, since a field renamed or moved would
 # otherwise read as an API with nothing unsafe in it. Otherwise `failures`
 # names each item that breaks the rule (no `unsafe` in what a caller uses),
-# `unsafe_impls` each `unsafe impl` of the crate's (its own promise, never
-# its caller's: listed, not failed), `list` every public item by path and
-# kind, and `counts`.
+# `unsafe_impls` each `unsafe impl` the crate writes (its own promise, never
+# its caller's: listed, not failed; those the compiler derives are counted),
+# `unions` each union, whose fields are read only in `unsafe` (plain data:
+# listed, not failed), `list` every public item by path and kind, and
+# `counts`.
 #
 # What fails, over every item of the crate's own (`crate_id` 0):
 # - a function or method whose header is `unsafe`;
 # - a trait declared `unsafe`;
 # - an item holding an `unsafe` function pointer anywhere in it (a type
 #   alias, a field, a constant, a signature);
-# - a function or method with a raw pointer in its signature, the crate's own
-#   type aliases followed (rustdoc keeps a public alias as a path);
-# - a public re-export of another crate's item, which this can't read.
-# Raw pointers in public fields are allowed: plain data, read through only
-# by the reader's own `unsafe`.
+# - a function or method with a raw pointer or a `NonNull` in its signature,
+#   following the crate's own type aliases (rustdoc keeps a public alias as a
+#   path) and the public fields of the crate's own structs, unions and enums
+#   it names, transitively; the functions of an impl the compiler derives
+#   (`#[derive(PartialEq)]` names its type) are left out;
+# - a function with `#[target_feature]`, which a caller without the feature
+#   calls only in `unsafe`;
+# - a `static mut`, or a static otherwise `unsafe` to use (an extern one);
+# - a public re-export of another crate's item, which this can't read: a
+#   `use` of it, a `pub extern crate`, or a type alias of the crate's own
+#   whose type is another crate's (not core's, alloc's or std's) item, which
+#   a caller reaches that item's associated functions through.
+# Raw pointers in public fields, and unions, are allowed: plain data, read
+# through or read only by the reader's own `unsafe`, as long as no public
+# function takes or gives one.
 
 def kind: .inner | keys[0];
 
@@ -77,19 +90,56 @@ def word:
     elif .dyn_trait then "dyn " + (.dyn_trait.traits | map(.trait.path) | join(" + "))
     else "_" end;
 
-  # The type an alias of the crate's own stands for.
-  def own_alias($id):
-    item($id) | select(. != null and own and .inner.type_alias != null) | .inner.type_alias.type;
+  # The ids of a struct's, union's or variant's public fields (rustdoc
+  # leaves the others out, and a tuple struct's as null).
+  def field_ids:
+    (.inner.struct.kind // .inner.variant.kind // null) as $shape_of
+    | (if .inner.union then .inner.union.fields
+       elif ($shape_of | type) != "object" then []
+       elif $shape_of.plain then $shape_of.plain.fields
+       elif $shape_of.struct then $shape_of.struct.fields
+       elif $shape_of.tuple then $shape_of.tuple
+       else [] end)[]
+    | select(. != null);
 
-  # Whether a type (or a signature) holds a raw pointer, through the crate's
-  # own aliases too. Rust has no cycle of aliases; past 64 the chain is
-  # taken as holding one, which fails rather than passes unread.
-  def holds_raw($depth):
-    if $depth > 64 then true
-    else any(.. | objects; has("raw_pointer"))
-      or any(.. | objects | select(has("resolved_path")) | .resolved_path.id // empty
-             | own_alias(.); holds_raw($depth + 1))
-    end;
+  # The types an item of the crate's own stands for or holds in public: an
+  # alias's type, the types of a struct's, union's or enum's public fields.
+  def own_parts($id):
+    item($id) | select(. != null and own)
+    | if .inner.type_alias then .inner.type_alias.type
+      elif .inner.struct or .inner.union then field_ids | item(.) | .inner.struct_field // empty
+      elif .inner.enum then .inner.enum.variants[] | item(.) | field_ids | item(.) | .inner.struct_field // empty
+      else empty end;
+
+  def is_non_null:
+    has("resolved_path")
+    and (($doc.paths[.resolved_path.id // "" | tostring].path // [] | join("::"))
+           == "core::ptr::non_null::NonNull"
+         or (.resolved_path.path | test("(^|::)NonNull$")));
+
+  # Whether a type (or a signature) holds a raw pointer or a `NonNull`,
+  # through the crate's own aliases and the public fields of its own
+  # structs, unions and enums, transitively: each item followed once, so a
+  # type that holds itself (through a `Vec` or a `Box`) ends.
+  def holds_raw:
+    {todo: [.], seen: [], found: false}
+    | until(.found or (.todo | length) == 0;
+        .todo[0] as $t | .todo |= .[1:]
+        | if ($t | any(.. | objects; has("raw_pointer") or is_non_null)) then .found = true
+          else reduce ($t | [.. | objects | select(has("resolved_path")) | .resolved_path.id // empty
+                             | tostring] | unique[]) as $i
+                 (.; if (.seen | index([$i])) != null then .
+                     else .seen += [$i] | .todo += [own_parts($i)] end)
+          end)
+    | .found;
+
+  # The crate an item named by id is from: "own", a crate's name, or
+  # "unknown".
+  def crate_of($id):
+    ($doc.paths[$id | tostring].crate_id // null) as $c
+    | if $c == 0 then "own" elif $c == null then "unknown"
+      else ($doc.external_crates[$c | tostring].name // "unknown") end;
+  def std_crate: IN("core", "alloc", "std");
 
   def holds_unsafe_fn:
     any(.. | objects | select(has("function_pointer")); .function_pointer.header.is_unsafe == true);
@@ -98,12 +148,14 @@ def word:
   # a written `unsafe impl` too, so an impl is taken as unsafe by its trait:
   # one of the crate's own declared `unsafe`, or one of std's stable unsafe
   # traits, by its path. The flag is read as well, should it come to be set.
-  def std_unsafe: ["core::marker::Send", "core::marker::Sync", "core::alloc::global::GlobalAlloc"];
+  # `TrivialClone` is core's, which `derive(Clone)` implements for a `Copy`
+  # type (marked `unsafe` here; derived, so never a promise written by hand).
+  def std_unsafe:
+    ["core::marker::Send", "core::marker::Sync", "core::alloc::global::GlobalAlloc",
+     "core::clone::TrivialClone"];
   def trait_path($id): $doc.paths[$id | tostring] // null | if . then .path | join("::") else null end;
-  def trait_crate($id):
-    ($doc.paths[$id | tostring].crate_id // null) as $c
-    | if $c == 0 then "own" elif $c == null then "unknown"
-      else ($doc.external_crates[$c | tostring].name // "unknown") end;
+  def trait_crate($id): crate_of($id);
+  def derived: any(.attrs[]?; . == "automatically_derived");
   def impl_is_unsafe:
     .inner.impl as $i
     | ($i.is_unsafe == true)
@@ -135,6 +187,13 @@ def word:
           ($own[] | select(.inner.use)
            | select((.inner.use | has("id") and has("is_glob") and has("name")) | not)
            | "use \(.id) lacks id, is_glob or name"),
+          ($own[] | select(.inner.extern_crate) | select((.inner.extern_crate.name | type) != "string")
+           | "extern crate \(.id) has no name"),
+          ($own[] | select(.inner.static)
+           | select((.inner.static.is_mutable | type) != "boolean"
+                    or (.inner.static.is_unsafe | type) != "boolean")
+           | "static \(.name) (\(.id)) has no boolean is_mutable or is_unsafe"),
+          ($own[] | select((.attrs | type) != "array") | "item \(.id) has no attrs array"),
           ($own[] | .inner | .. | objects | select(has("function_pointer"))
            | select((.function_pointer.header.is_unsafe | type) != "boolean")
            | "a function pointer has no boolean header.is_unsafe"),
@@ -168,6 +227,9 @@ def word:
               {id: $t.id, path: "\($prefix)::\($u.name)"},
               (if $t.inner.module then walk("\($prefix)::\($u.name)"; $t.id; $depth + 1) else empty end)
             end
+        elif $c.inner.extern_crate then
+          {path: "\($prefix)::\($c.name)",
+           foreign: "extern crate \($c.inner.extern_crate.rename // $c.inner.extern_crate.name)"}
         elif ($c | own | not) then {path: "\($prefix)::\($c.name)", foreign: $c.name}
         else
           {id: $c.id, path: "\($prefix)::\($c.name)"},
@@ -187,16 +249,7 @@ def word:
               impls: ($it.inner[$k].impls // [] | map(item(.)) | map(select(. != null))) } ] as $types
       # Each item's path, for naming it: methods, trait items and fields
       # under their owner's path.
-      | def field_ids:
-          (.inner.struct.kind // .inner.variant.kind // null) as $shape_of
-          | (if .inner.union then .inner.union.fields
-             elif ($shape_of | type) != "object" then []
-             elif $shape_of.plain then $shape_of.plain.fields
-             elif $shape_of.struct then $shape_of.struct.fields
-             elif $shape_of.tuple then $shape_of.tuple
-             else [] end)[]
-          | select(. != null);
-        ([$types[] | .path as $path
+      | ([$types[] | .path as $path
           | (.impls[] | select(.inner.impl.blanket_impl == null) | .inner.impl.items[]
              | {key: tostring, value: "\($path)::\(item(.).name)"}),
             (.item | field_ids | {key: tostring, value: "\($path)::\(item(.).name)"}),
@@ -216,7 +269,8 @@ def word:
             + (if $i.is_negative then "!" else "" end)
             + $i.trait.path + ($i.trait | {resolved_path: .} | render | ltrimstr($i.trait.path))
             + (if trait_crate($t) | IN("own", "core", "alloc", "std") then ""
-               else " (another crate's trait: its safety unread)" end);
+               else " (another crate's trait: its safety unread)" end)
+            + (if impl_is_unsafe and derived then " (derived)" else "" end);
         # The stable auto traits, on one line; the compiler's others left out.
         def auto_line:
           [.impls[] | .inner.impl | select(.is_synthetic)
@@ -225,7 +279,8 @@ def word:
           | if length > 0 then "  auto " + join(", ") else empty end;
         def lines:
           .item as $it | ($it | kind) as $k
-          | "\($it | unsafe_word)\($k | word) \(.path)",
+          | "\($it | unsafe_word)\($k | word)\(if $it.inner.static.is_mutable == true then " mut" else "" end) \(.path)"
+            + (if $k == "union" then " (its fields read only in unsafe)" else "" end),
             ($it | field_lines("  ")),
             (if $k == "enum" then
                $it.inner.enum.variants[] | item(.) | "  variant \(.name)", field_lines("    ")
@@ -243,6 +298,12 @@ def word:
                            and (.inner.impl.is_synthetic | not))
           | select((.id | tostring) as $i | $under | index([$i]) == null)] as $others
       | ([$index[] | select(own)]) as $own
+      # The functions of impls the compiler derives for a core, alloc or std
+      # trait, written for the type by name, which a raw pointer's check
+      # leaves out.
+      | ([$own[] | select(.inner.impl and derived and .inner.impl.trait != null)
+          | select(trait_crate(.inner.impl.trait.id) | std_crate)
+          | .inner.impl.items[] | tostring]) as $derived_fns
       | {
           failures: [
             ($own[] | select(.inner.function.header.is_unsafe == true)
@@ -252,17 +313,30 @@ def word:
             ($own[] | select(.inner | holds_unsafe_fn)
              | "an unsafe fn pointer in \(kind | word) \(name)\(where)"),
             ($own[] | select(.inner.function)
-             | select(.inner.function | {sig, generics} | holds_raw(0))
+             | select((.id | tostring) as $f | $derived_fns | index([$f]) == null)
+             | select(.inner.function | {sig, generics} | holds_raw)
              | "a raw pointer in the signature of \(name)\(where)"),
+            ($own[] | select(.inner.function and .inner.function.header.is_unsafe != true)
+             | select(any(.attrs[]; type == "object" and has("target_feature")))
+             | "a #[target_feature] fn, unsafe to call without the feature: \(name)\(where)"),
+            ($own[] | select(.inner.static.is_mutable == true)
+             | "a static mut: \(name)\(where)"),
+            ($own[] | select(.inner.static.is_unsafe == true)
+             | "an unsafe static: \(name)\(where)"),
+            ($own[] | select(.inner.type_alias.type.resolved_path)
+             | (.inner.type_alias.type.resolved_path.id | crate_of(.)) as $from
+             | select($from != "own" and ($from | std_crate | not))
+             | "an alias of another crate's item, a re-export by another name: \(name) = \(.inner.type_alias.type | render) (\($from))\(where)"),
             ($walked[] | select(.foreign) | "a re-export of another crate's item: \(.path) (\(.foreign))"),
             ($walked[] | select(.problem) | "unread: \(.path): \(.problem)")
           ],
           unsafe_impls: [
             $own[] | select(.inner.impl and (.inner.impl.is_synthetic | not)
                             and .inner.impl.blanket_impl == null)
-            | select(impl_is_unsafe)
+            | select(impl_is_unsafe and (derived | not))
             | "unsafe impl \(.inner.impl.trait.path) for \(.inner.impl.for | render)\(where)"
           ],
+          unions: [$public[] | item(.id) | select(.inner.union) | name],
           list: (
             [$types[] | lines]
             + [$others[] | "impl \(.inner.impl.trait.path // "") for \(.inner.impl.for | render)"
@@ -273,7 +347,10 @@ def word:
             public: ($public | length),
             functions: ([$own[] | select(.inner.function)] | length),
             unsafe_functions: ([$own[] | select(.inner.function.header.is_unsafe == true)] | length),
-            blanket_impls: ([$own[] | select(.inner.impl.blanket_impl != null)] | length)
+            blanket_impls: ([$own[] | select(.inner.impl.blanket_impl != null)] | length),
+            derived_unsafe_impls: ([$own[] | select(.inner.impl and (.inner.impl.is_synthetic | not)
+                                                    and .inner.impl.blanket_impl == null)
+                                    | select(impl_is_unsafe and derived)] | length)
           }
         }
     end

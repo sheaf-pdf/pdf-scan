@@ -23,8 +23,8 @@ default:
 
 # What they need: `msrv` each crate's oldest Rust installed (`rustup
 # toolchain install <version>`), `gates` jq and readelf, `sane-dl-package`
-# the network, `public-api` jq and the pinned nightly above (`rustup
-# toolchain install nightly-2026-10-16`).
+# the network, `public-api` jq and the nightly pinned above,
+# `public_api_nightly` (the recipe says how to install it).
 # Everything CI runs.
 ci: fmt clippy test doc gates sane-dl-package public-api msrv
 
@@ -86,17 +86,20 @@ sane-dl-package:
 # on the pinned nightly, hidden items included, so `#[doc(hidden)]` hides
 # nothing (scripts/public-api.jq says what it reads and why). It fails,
 # naming each, on an `unsafe` function, method or trait, an `unsafe`
-# function pointer anywhere, a raw pointer in a public signature (the
-# crate's own type aliases followed), and a re-export of another crate's
-# item, which it can't read; it lists each `unsafe impl`, the crate's own
-# promise and never its caller's, without failing. First it checks the JSON
-# is the shape the jq was written against, so a moved pin fails rather than
-# passes unread. Built under public-api/ in the target directory (under
-# CARGO_TARGET_DIR where that names another), apart from stable's builds,
-# where it writes every public item, by path and kind, to <crate>.txt. The
-# host's target only: an item behind another system's `cfg` isn't in its
-# JSON. A crate joins the list as it's made ready to publish, with the
-# least number of its own items a whole read finds.
+# function pointer anywhere, a raw pointer or `NonNull` in a public
+# signature (the crate's own type aliases, and the public fields of its own
+# types, followed), a `#[target_feature]` function, a `static mut` or an
+# extern static, and a re-export of another crate's item, which it can't
+# read (a `use`, a `pub extern crate`, or an alias of that item); it lists
+# each `unsafe impl`, the crate's own promise and never its caller's, and
+# each union, whose fields only `unsafe` reads, without failing. First it
+# checks the JSON is the shape the jq was written against, so a moved pin
+# fails rather than passes unread. Built under public-api/ in the target
+# directory (under CARGO_TARGET_DIR where that names another), apart from
+# stable's builds, where it writes every public item, by path and kind, to
+# <crate>.txt. The host's target only: an item behind another system's
+# `cfg` isn't in its JSON. A crate joins the list as it's made ready to
+# publish, with the least number of its own items a whole read finds.
 # No unsafe in a published crate's public API, from rustdoc's JSON.
 public-api:
     #!/usr/bin/env bash
@@ -115,8 +118,8 @@ public-api:
         crate=${entry%%:*}
         floor=${entry##*:}
         json=$dir/doc/${crate//-/_}.json
-        # Removed first, so what's read is this run's.
-        rm -f "$json"
+        # Removed first, so what's read and listed is this run's.
+        rm -f "$json" "$dir/$crate.txt"
         CARGO_TARGET_DIR="$dir" cargo +"$toolchain" rustdoc --locked -p "$crate" --lib \
             -- -Z unstable-options --output-format json --document-hidden-items
         if ! report=$(jq --argjson format "$format" --argjson floor "$floor" -f scripts/public-api.jq "$json"); then
@@ -135,13 +138,15 @@ public-api:
         } > "$dir/$crate.txt"
         jq -r --arg crate "$crate" \
             '.unsafe_impls[] | "public-api: \($crate): \(.) (listed, not failed: the crate keeps that promise, not its caller)"' <<< "$report"
+        jq -r --arg crate "$crate" \
+            '.unions[] | "public-api: \($crate): union \(.): its fields are read only in unsafe (listed, not failed: plain data, as raw pointers in fields are)"' <<< "$report"
         if jq -e '.failures | length > 0' <<< "$report" >/dev/null; then
             echo "public-api: $crate's public API holds unsafe:" >&2
             jq -r '.failures[] | "  " + .' <<< "$report" >&2
             failed=1
         fi
         jq -r --arg crate "$crate" --arg file "$dir/$crate.txt" \
-            '.counts as $c | "public-api: \($crate): \($c.own) items of its own read, \($c.public) public by path, \($c.functions) functions, \($c.unsafe_functions) unsafe; \(.failures | length) failures, \(.unsafe_impls | length) unsafe impls; every public item listed in \($file)"' <<< "$report"
+            '.counts as $c | "public-api: \($crate): \($c.own) items of its own read, \($c.public) public by path, \($c.functions) functions, \($c.unsafe_functions) unsafe; failures \(.failures | length); unsafe impls \(.unsafe_impls | length) written, \($c.derived_unsafe_impls) derived; unions \(.unions | length); blanket impls \($c.blanket_impls), left out of the list; every public item listed in \($file)"' <<< "$report"
     done
     if [[ $failed -ne 0 ]]; then exit 1; fi
     echo "public-api: no unsafe in the public API"
