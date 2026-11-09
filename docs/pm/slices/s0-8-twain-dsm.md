@@ -1,38 +1,40 @@
 # S0 slice 8: twain-dsm
 
-Status: planned, on branch `s0-8-twain-dsm`, from 2026-11-08. Milestone: `milestones/s0-devices.md`, slice 8.
-Run on the Windows machine, the same way as slice 7 (`archive/slices/s0-7-twain-spike.md`): this plan, an
-adversarial review, the steps (each committed and pushed), parallel code reviews, a fix stage.
+Status: planned and reviewed, on branch `s0-8-twain-dsm`, from 2026-11-08. Milestone:
+`milestones/s0-devices.md`, slice 8. Run on the Windows machine, the same way as slice 7
+(`archive/slices/s0-7-twain-spike.md`): this plan, an adversarial review (below), the steps (each committed and
+pushed), parallel code reviews, a fix stage.
 
 Paths: `docs/pm/` files from `docs/pm/`; the code's from the repository's root with a leading `/`; `scratch/`
 from the root, local and never tracked.
 
 ## What it builds
 
-`twain-dsm` (`crates/twain-dsm.md`): TWAIN through the Data Source Manager, as a library. Its bindings ported
-from `TWAINH.cs` and checked against `twain.h` 2.5, by a script and by a header contract compiled with MSVC
-in both bitnesses; the DSM loaded from the system folder, its signer checked by name, never unloaded; a
-TWAIN thread (an apartment, a hidden top-level window, a message loop); TWAIN's states as owned types, each
-stepping down on `Drop` and rolling back when the source is further along; capabilities in all four
-containers; native and memory transfers; extended image info; the callback; condition codes from both
-parties; a handle other threads use to post requests. **Safe by construction** (`decisions.md`, 2026-11-08):
-no `unsafe fn` in its public API. It says what TWAIN says (the seam's rule): it hands over a DIB's block and
-each memory buffer as TWAIN gives them; decoding and assembling them are the `twain` backend's (slice 9).
+`twain-dsm` (`crates/twain-dsm.md`): TWAIN through the Data Source Manager, as a library. Its bindings
+generated from `TWAINH.cs` and checked against `twain.h` 2.5 by a committed script and by a header contract
+compiled with MSVC in both bitnesses; the DSM loaded by its full path from the system folder after its signer
+is checked, never unloaded; a TWAIN thread scoped by the caller (an apartment, a hidden top-level window, a
+message loop that works in every state); TWAIN's states as owned types; the application's real record of what
+is open kept apart from them, so that teardown is sound whatever a caller forgets; capabilities in all four
+containers; native and memory transfers; extended image info; the driver's own window; a request channel
+other threads post to. **Safe by construction** (`decisions.md`, 2026-11-08): no `unsafe fn` in its public API.
+It says what TWAIN says (the seam's rule): it hands over a DIB's block and each memory buffer as TWAIN gives
+them; decoding and assembling them are the `twain` backend's (slice 9).
 
-Its tests take over the spike's: the sample source driven through the crate's API in both bitnesses, on this
-machine and in CI. `twain-spike` is deleted; its `image` module moves into the tests' support, for the
-native-against-memory comparison, until slice 9 takes it into the backend.
+Its tests take over the spike's: the sample source driven through the crate's API in both bitnesses, here and
+in CI. `twain-spike` is deleted; its `image` module moves into the tests' support, for the native-against-memory
+comparison, until slice 9 takes it into the backend.
 
-Not built here: the `twain` backend and the 32-bit worker (slice 9); file transfers, `ShowUI` with the
-application's own window as owner, and several sources open at once (later, if a slice needs them).
+Not built here: the `twain` backend and the 32-bit worker (slice 9); file transfers; the driver's window owned
+by the application's own window (slice 9 settles the owner, seam section 9); several sources open at once.
 
 ## Taken as it starts
 
-- **Safe APIs** (`decisions.md`, 2026-11-08): the API explored below before one is fixed; the review asked to
-  attack the choice, not only the code.
+- **Safe APIs** (`decisions.md`, 2026-11-08): the API explored below before one is fixed; the review attacked
+  the choice as well as the code.
 - **The same process as slice 7** (2026-11-08: "lets run the same workflow that we just did for slice 8").
-- **Slice 7's close-out** (the spike's plan archived, the milestone and status updated) is this branch's first
-  commit, pushed with step 1.
+- **Slice 7's close-out** (its plan archived, the milestone and status updated) is this branch's first commit,
+  pushed with step 1.
 
 ## The API, explored
 
@@ -40,158 +42,196 @@ Six questions, each with the shapes considered and the one taken. The names are 
 implementation that keeps the design and renames says so in "So far".
 
 **1. Who owns the TWAIN thread.** Every DSM call must come from one thread, which pumps its window's messages.
-- *(A) The crate's thread, behind a `Send` handle:* the user calls `twain.open_source(..)` from anywhere and the
-  call is sent to the thread and answered. Simple to call, but every TWAIN state lives hidden behind the
-  handle, checked at run time; and the crate must define a request for everything TWAIN can do.
-- *(B) The caller's thread, scoped:* `twain_dsm::run(|twain| { .. })` makes the calling thread the TWAIN
-  thread for the closure (the apartment entered, the window made, both undone after) and hands it a `Twain<'t>`.
-  Every state is a value on that thread, checked by the compiler; the caller (slice 9's backend) chooses the
-  thread and owns the loop.
-- *(C) Both,* (A) built on (B).
-- **Taken: (B).** It keeps `twain-dsm` to TWAIN's own shape (the seam's rule) and lets the types carry the
-  states; (A) is the backend's to build in slice 9 if it wants it, from (B).
+- *(A) The crate's thread, behind a `Send` handle:* simple to call from anywhere, but every TWAIN state hidden
+  and checked at run time, and the crate defining a request for everything TWAIN can do.
+- *(B) The caller's thread, scoped:* `twain_dsm::run(|twain| { .. })` makes the calling thread the TWAIN thread
+  for the closure (the apartment entered, the window made, both undone after) and hands it a `&Twain<T>`.
+  Every state is a value on that thread, checked by the compiler.
+- **Taken: (B)**, with what (A) needs to be built on it in slice 9: `Twain::wait(timeout) -> Wake<T>`, which
+  pumps messages in every state (`Wake::Request(T)`, `Wake::Timeout`), and a non-blocking
+  `Twain::take_request()`. `T` is the caller's own request type: `run::<T, R>` and `Remote<T>` carry it, so
+  the backend's commands (list, settings, scan, cancel) travel as they are.
 
 **2. How states are held.**
 - *(i) An owned chain:* each state owns the one beneath it; a step up consumes `self`; a step that fails hands
-  `self` back with the error (`Refused<S> { state, error }`), so nothing is lost; `Drop` steps down.
-- *(ii) Borrows:* `Source<'d>` borrowing `&'d mut Opened`, for several sources at once.
-- *(iii) One struct, its state checked at run time,* as the spike's `Session` was.
-- **Taken: (i)**, one source at a time, as the worker needs; (ii) if a later slice needs two. `From<Refused<S>>
-  for Error`, so `?` works and drops the state, which steps down. Each `Drop` rolls back as the spike learned:
-  a step the source refuses with `TWCC_SEQERROR` restarts from state 7's first step (`MSG_ENDXFER`,
-  `MSG_RESET`, then `MSG_DISABLEDS`); a state that can't step down keeps what's beneath it alive (the DSM
-  stays loaded, the identities kept) and says so through `Twain::stranded()`.
+  `self` back (`Refused<S> { state, error }`, `#[must_use]`, with `into_state()` and `into_error()`, the
+  latter dropping the state, which steps down; no blanket `From`, so `?` never walks a chain down unseen).
+- *(ii) Borrows* (`Source<'d>` of `&'d mut Opened`), for several sources at once. *(iii) One struct, its
+  state checked at run time*, as the spike's `Session` was.
+- **Taken: (i)**, one source at a time, as the worker needs. A state's `Drop` steps down and rolls back as the
+  spike learned (a step refused with `TWCC_SEQERROR` restarts from state 7's first step). **Soundness doesn't
+  rest on `Drop`:** `mem::forget` and `Rc` cycles are safe, so a state can vanish without stepping down.
+  `Twain` keeps the real record (connection open, source open or enabled), updated at each triplet that
+  succeeds, and `run`'s end acts on it: if the connection is open it sends `MSG_CLOSEDSM`, which the DSM
+  answers by closing every source still open itself (`MSG_ENDXFER`, `MSG_RESET`, `MSG_DISABLEDS`,
+  `MSG_CLOSEDS`; `apps.cpp` 497-519). If even that fails, `run` keeps the window and the apartment (leaks
+  them) and says so (`RunReport::stranded`). States that need an event (`Ready`, 6) are only made from one:
+  `Enabled::next_event(self) -> Result<Next>`, `Next::Ready(Ready) | Next::Event(Enabled, Event) |
+  Next::Request(Enabled, T) | Next::Timeout(Enabled)`; nothing else makes a `Ready`.
 
 **3. Foreign memory, without contracts.**
 - *The DSM is never unloaded* (as `sane-dl` never unloads libsane): loaded once per process, its entry point
-  and memory functions are then valid for the process, so nothing holding them can outlive them.
-- *Containers decoded into owned values at once:* `get` returns a `CapValue` (the container's kind, item type,
-  current and default values, the list or range); `set` takes a `Value`. The handles are allocated, locked,
-  read and freed inside the call; no container type reaches the user.
-- *A native transfer's DIB as an owner:* `Dib`, owning the `GlobalAlloc` block, its bytes as a slice of the
-  measured length while it lives, freed on `Drop`; `Send`, since a fixed global block is valid on any thread.
-- *Memory buffers borrowed from the caller* for one call: `next_buffer(&mut self, &mut [u8]) -> Option<Buffer>`,
-  the `Buffer` borrowing the slice it was written into.
-- *Extended image info* decoded into owned values; the source's handles (an item too big for `TW_UINTPTR`, or
-  several) freed inside.
+  and memory functions are valid for the process.
+- *Containers decoded into owned values at once:* `get` returns a `CapValue`; `set` takes a `Value` (one, an
+  enumeration or an array) and answers `SetOutcome::Exact` or `Adjusted` (`TWRC_CHECKSTATUS`, seam section 2).
+- *A native transfer's DIB as an owner:* `Dib`, owning the global block, locked once for its whole life (so its
+  slice is valid on any thread, the block fixed or moveable), unlocked and freed on `Drop`; `Send`.
+  `Ready::native() -> Native::Done(Dib, Transferred) | Native::Cancelled(Transferred)`.
+- *Memory buffers borrowed from the caller* for one call: `MemoryTransfer::preferred_size()` resolves
+  `TWON_DONTCARE32` and caps it; `next_buffer(&mut self, &mut [u8])` refuses a slice under `MinBufSize`.
+- *Extended image info* decoded into owned values; the handles the source allocated (an item too big for
+  `TW_UINTPTR`, or several) freed inside with the DSM's `MemFree`.
 
-**4. One thread, by type.** Every state, and `Twain<'t>` itself, is `!Send`. Each is also branded with `'t`,
-the lifetime `run` gives its closure (higher-ranked, as `std::thread::scope` does with its `'scope`), so none
-can escape the closure, into a thread-local or a static, and outlive the window and apartment. Other threads
-hold a `Remote` (`Send + Sync`, `Clone`) to post requests (`Remote::post(Request)`): it holds the window's handle
-behind a lock that the window's teardown clears, so a post never reaches a reused handle; a post after the
-`run` ends says `Gone`.
+**4. One thread, by borrow.** Every state holds `&'t Twain<T>`, and `Twain` is `!Send` and `!Sync`; `run`'s
+closure is higher-ranked over `'t`, so no state can be returned from it, stored in a thread-local or a
+static, or sent to another thread (the review's probe: E0521, "lifetime may not live long enough"). Other
+threads hold a `Remote<T>` (`Send + Sync`, `Clone`): `post(T)` sends on the `Twain`'s channel and wakes the
+loop with a posted message, under a lock that `run`'s teardown takes to clear the window's handle, so a post
+never reaches a reused handle; after the `run` ends it's `Err(Gone(T))`, the value handed back.
 
-**5. Loading and trust.** `twain.load(Load::System)` loads `TWAINDSM.dll` from the system folder only
-(`LOAD_LIBRARY_SEARCH_SYSTEM32`); `Load::Path(path)` loads the application's own copy. Both check the
-Authenticode signature (`WinVerifyTrust`, offline: no revocation fetch) and the signer's name, `O=TWAIN
-Working Group`, by name and not by certificate (2.5.0 and 2.5.1 have different certificates and the same
-signer), unless `Trust::Unchecked` is asked for. Safe, as `sane-dl`'s `load_from` is, with its trust said in
-its docs: a DLL's code runs when it loads, and in Rust's terms that's the platform's contract, not a memory
-contract the caller could keep. One `Twain` per process at a time (a second `run` while one lives is
-`AlreadyRunning`), as `sane-dl` has one live `Sane`: the DSM keeps one application connection per identity and
-the sample keys its state by it.
+**5. Loading and trust.** `twain.load(Load::System)` loads `<system folder>\TWAINDSM.dll` by its full path
+(`GetSystemDirectoryW`, SysWOW64 in a 32-bit process); `Load::Path(path)` the application's own copy. Either
+way: the file opened denying writes and deletes; its Authenticode signature checked through that handle
+(`WinVerifyTrust`, offline) and its signer's name, `O=TWAIN Working Group` (by name, not certificate: 2.5.0
+and 2.5.1 have different certificates and one signer), **before** it's loaded; loaded while the handle is
+held; its loaded path compared with the path checked; and refused if a `TWAINDSM.dll` from elsewhere is in the
+process already (`GetModuleHandleW`). No unchecked load: nothing in this slice needs one, and calling an
+unverified DLL through `DSMENTRYPROC`'s ABI would be a contract only a caller could keep. One `Loaded` at a
+time per `Twain`, and **one `Twain` per process**: the DSM has no locks (none in `dsm.cpp`, `apps.cpp`,
+`hook.cpp`), so two TWAIN threads would race on its globals; the flag is an atomic taken by `compare_exchange`
+and released by a guard, so it clears on a panic too, and stays taken if a teardown had to leak.
 
-**6. The callback's context.** The DSM hands the callback's `RefCon` back as its data pointer (`dsm.cpp`
-2486-2497, read): `RefCon` points to the window's slot, boxed in the `Twain`, which lives as long as any source
-could call. The callback posts to the window and returns `TWRC_SUCCESS`; it touches no other state and can't
-panic.
+**6. The callback.** Registered with `DAT_CALLBACK2` only (its `RefCon` is `TW_UINTPTR`; `DAT_CALLBACK`'s is
+32 bits, `dsm.cpp` 1006), its procedure our trampoline, its context a `static` (the window's handle, atomic,
+and a generation number), so it can never dangle; it posts to the window and returns `TWRC_SUCCESS`, touching
+nothing else and unable to panic. **Delivery is fixed per open source** (`open_source(id, Delivery)`): TWAIN
+has no unregister, and a registration survives `MSG_DISABLEDS` and `MSG_CLOSEDS` (the review's probe: a later
+event-mode enable hung). `Delivery::Events` registers a null procedure, which clears a stale one, and offers
+every message to `MSG_PROCESSEVENT` while enabled; `Delivery::Callback` is refused for a source without
+`DF_DS2`, which signals only through `MSG_PROCESSEVENT`.
 
-**What stays `unsafe`, inside:** the DSM and Win32 calls (one module each), the callback trampoline,
-`GetProcAddress`'s cast, the reads of a driver's blocks (each length checked first). Safe means safe given a
-DSM and drivers that keep TWAIN's calling rules, as any FFI does; their data stays untrusted (caps on every
-length, as `plan.md`'s rule has it).
+**What stays `unsafe`, inside:** the DSM and Win32 calls (one module each), the trampoline, `GetProcAddress`'s
+cast, the reads of a driver's blocks (each length checked first). `ffi`'s function-pointer types and the
+structs holding them (`TW_ENTRYPOINT`, `TW_CALLBACK2`) are `pub(crate)`. Safe means safe given a DSM and
+drivers that keep TWAIN's calling rules, as any FFI does; their data stays untrusted.
 
-**A scan, as the API reads** (memory transfer, no UI):
+**A scan, as the API reads** (memory transfer, no UI; `Cmd` is the caller's request type):
 
 ```rust
-twain_dsm::run(|twain| -> Result<(), Error> {
-    let opened = twain.load(Load::System)?.open()?;
+let report = twain_dsm::run::<Cmd, _>(|twain| -> Result<(), Error> {
+    let opened = twain.load(Load::System)?.open(App::new("pdf-scan", "worker", "worker"))
+        .map_err(Refused::into_error)?;
     let id = opened.sources()?.into_iter().find(|s| s.product_name() == "TWAIN2 Software Scanner")
         .ok_or(Error::NoSuchSource)?;
-    let mut source = opened.open_source(&id)?;
+    let mut source = opened.open_source(&id, Delivery::Callback).map_err(Refused::into_error)?;
     source.set(cap::ICAP_XFERMECH, Value::U16(ffi::TWSX_MEMORY))?;
-    let remote = twain.remote(); // to another thread, for a cancel
-    let mut enabled = source.enable(Ui::Hidden, Delivery::Callback)?;
-    let mut ready = match enabled.next_event(Duration::from_secs(20))? {
-        Event::XferReady => enabled.ready(),
-        other => return Err(Error::Unexpected(other)),
+    let remote = twain.remote(); // to another thread: remote.post(Cmd::Cancel)
+    let mut enabled = source.enable(Ui::Hidden).map_err(Refused::into_error)?;
+    let mut ready = loop {
+        match enabled.next_event(Duration::from_secs(20))? {
+            Next::Ready(ready) => break ready,
+            Next::Request(back, Cmd::Cancel) => { back.disable().map_err(Refused::into_error)?; return Ok(()) }
+            Next::Event(back, _) | Next::Timeout(back) => enabled = back,
+        }
     };
     loop {
         let info = ready.image_info()?;
-        let mut transfer = ready.memory()?;
+        let mut transfer = ready.memory().map_err(Refused::into_error)?;
         let mut buf = vec![0; transfer.preferred_size()];
         while let Some(b) = transfer.next_buffer(&mut buf)? { /* b.shape(), b.bytes() */ }
-        match transfer.end()? {
+        match transfer.end().map_err(Refused::into_error)? {
             Pending::More(next) => ready = next,
-            Pending::Done(back) => { back.disable()?; break; }
+            Pending::Done(back) => { back.disable().map_err(Refused::into_error)?; break }
         }
     }
     Ok(())
-})?;
+})?; // RunError: AlreadyRunning, Apartment; report.value is the closure's result
 ```
 
 ## The design
 
-- **The crate:** `/crates/twain-dsm/`, a library, edition 2024, MIT OR Apache-2.0, `publish = false` at
-  0.0.0 (decision 7), `lints.workspace = true`. Windows only in what it does: every module but `ffi`, the codes
-  and the pure decoders is `#[cfg(windows)]`, so the crate builds, lints and tests (its pure parts) on every
-  runner. Dependencies: `windows-sys` 0.61 (Windows only; the spike's features, plus `Win32_Security_WinTrust`
-  and `Win32_Security_Cryptography` for the signature), `thiserror` 2; dev: `rusty-fork` 0.3 (`timeout`) and
-  `cc` 1 (to find MSVC for the header contract), vetted at the step that adds them as slice 1 vets its own.
-- **`ffi`** (public, types and constants only, no unsafe): every constant `TWAINH.cs`'s enums define that
-  `twain.h` defines too, generated by a script from `TWAINH.cs` and checked against `twain.h` (the spike's
-  `consts.py`, grown to every enum; kept in `scratch/`, its output committed; its report of names in one file
-  and not the other saved); the structs the crate uses and the containers' (`TW_RANGE`, `TW_ARRAY`,
-  `TW_FRAME`, the `TW_STR*`), `#[repr(C, packed(2))]`, layouts asserted at compile time for both bitnesses;
-  function-pointer types from `twain.h`. The notice from `TWAINH.cs` and the TWAIN Toolkit's disclaimer in the
-  file and in the crate's docs (rustdoc), as the TWAIN License asks.
+- **The crate:** `/crates/twain-dsm/`, a library, edition 2024, `rust-version` measured as slice 1 measures
+  it (the floor 1.89), MIT OR Apache-2.0, `publish = false` at 0.0.0 (decision 7), `lints.workspace = true`.
+  Windows only in what it does: every module but `ffi`, the codes and the pure decoders is `#[cfg(windows)]`.
+  Dependencies: `windows-sys` 0.61 (Windows only; the spike's features, plus `Win32_Security_WinTrust`,
+  `Win32_Security_Cryptography` and `Win32_System_SystemInformation`), `thiserror` 2; dev: `rusty-fork` 0.3
+  (`timeout`) and `find-msvc-tools` (MSVC for the header contract; smaller than `cc`, which wraps it), vetted
+  at the step that adds them. `thiserror` and `rusty-fork` move to `[workspace.dependencies]`, as the root
+  `Cargo.toml`'s comment asks once two members take one, `sane-dl`'s two lines with them.
+- **`ffi`** (public, types and constants only, no unsafe): every numeric `#define` of `twain.h` that
+  `TWAINH.cs` defines too (about 1150 of 1205), generated from `TWAINH.cs` and checked against `twain.h` by
+  `/scripts/twain-bindings.py` (committed; it fetches both files at their pins into a temporary folder, writes
+  `ffi`'s constants and a `CONSTANTS: &[(&str, u64)]` table, and reports the names in one file and not the
+  other, with its rename map: `TWBT.X3OF9` for `TWBT_3OF9` and the like); the rest (`TWPT_BGR`, `TWSX_FILE2`,
+  `TWAF_`, others) written by hand from `twain.h`, each said. The structs the crate uses and the containers'
+  (`TW_RANGE`, `TW_ARRAY`, `TW_FRAME`, the `TW_STR*` and `TW_UNI512`), `#[repr(C, packed(2))]`, layouts
+  asserted at compile time for both bitnesses. The notice from `TWAINH.cs` and the TWAIN Toolkit's disclaimer
+  in the file and in the crate's rustdoc.
 - **The header contract** (an integration test, Windows): with `twain.h` at `TWAIN_DSM_TWAIN_H` (here,
   `scratch/reference/twain/twain-dsm/twain.h`; in CI, fetched at twain-dsm `a50f7326a191` into the runner's
-  temp, never committed: the header grants no license), it writes a C program printing every struct's size and
-  field offsets, compiles it with MSVC found by `cc`'s `windows_registry::find_tool` for the test's own target,
-  runs it, and compares with the bindings; and it reads every numeric `#define` in the header and checks each
-  has a constant of the same value, the exceptions listed with why. Without the header it says so on stderr;
-  `TWAIN_DSM_REQUIRE_HEADER=1` (CI) makes that a failure.
+  temp, its SHA-256 pinned, never committed: the header grants no licence), it writes a C program (`<windows.h>`
+  first, which `twain.h` needs) printing every struct's size and field offsets, compiles it with the MSVC that
+  `find-msvc-tools` finds for the test's own target, runs it, and compares; and it reads every numeric
+  `#define` and checks each has an entry of the same value in `CONSTANTS`, the hand-written exceptions listed.
+  Without the header it says so on stderr; `TWAIN_DSM_REQUIRE_HEADER=1` (CI, and every check here) fails.
 - **Codes:** `ReturnCode(pub u16)` and `ConditionCode(pub u16)` with a constant per code, `name()` and
-  `Display`; `Triplet { dg, dat, msg }` named for messages ("DG_CONTROL/DAT_PARENT/MSG_OPENDSM").
-- **Errors** (thiserror): `LoadError` (`NotFound`, `MissingEntry`, `Unsigned`, `WrongSigner { subject }`,
-  `Machine`, `AlreadyRunning`); `Error` with `Failed { triplet, rc, source: Option<ConditionCode>, dsm:
-  Option<ConditionCode> }` (each party asked once, the DSM first: asking clears a code), `Refused` for a
-  container or block that doesn't hold up, `Timeout`, `Gone`, `Unexpected(Event)`; `Refused<S>`. Errors are
-  `#[non_exhaustive]`; plain data isn't.
-- **The thread** (`run`): enters a single-threaded apartment, registers and creates the hidden top-level
-  window (its procedure `DefWindowProcW`), runs the closure, then destroys the window and leaves the
-  apartment; refuses a thread already in a multithreaded apartment. The loop is the states' `next_event`:
-  only the window's own messages are the crate's (matched by window, not by number); requests are kept while
-  it waits; in `Delivery::Events` every other message is offered to `MSG_PROCESSEVENT` while a source is
-  enabled, and in `Delivery::Callback` none is; a carrier of a source message isn't dispatched.
-- **Capabilities:** `get`, `get_current`, `get_default`, `set`, `reset`, `query_support`, with `CapValue`
-  for `TW_ONEVALUE`, `TW_ENUMERATION`, `TW_RANGE` and `TW_ARRAY` of the item types TWAIN defines (integers,
-  `TW_BOOL`, `TW_FIX32`, `TW_FRAME`, the strings), every length checked against `GlobalSize` before it's read.
-  `set` takes one value, an enumeration or an array.
-- **Transfers and the end of a batch:** `Ready::image_info`; `Ready::native() -> (Dib, Transferred)`;
-  `Ready::memory() -> MemoryTransfer` (`setup`, `preferred_size`, `next_buffer`, `end`); `ext_image_info(ids)`
-  in state 7; `Transferred::end() -> Pending` (`More(Ready)` or `Done(Enabled)`, the count kept, 0xFFFF as
-  "unknown"); `Ready::reset() -> Enabled`; `stop_feeder`; `TWRC_CANCEL` from a transfer keeps the state at 7.
-- **For the seam** (`crates/twain-dsm.md`): per transfer, `DAT_IMAGEINFO` as TWAIN gives it; the pending count;
-  extended image info as offered; each memory buffer's shape and bytes, and a native transfer's DIB block,
-  not assembled; events with how they came (callback or `MSG_PROCESSEVENT`); condition codes from both
-  parties.
+  `Display`; `Triplet { dg, dat, msg }` named ("DG_CONTROL/DAT_PARENT/MSG_OPENDSM").
+- **Errors** (thiserror, `#[non_exhaustive]`; plain data isn't): `RunError` (`AlreadyRunning`, `Apartment`,
+  `Window`); `LoadError` (`NotFound`, `Elsewhere { loaded }`, `Unsigned`, `WrongSigner { subject }`,
+  `MissingEntry`, `Machine`, `AlreadyLoaded`); `Error` with `Failed { triplet, rc, by_source:
+  Option<ConditionCode>, by_dsm: Option<ConditionCode> }`. Each party asked once, the DSM first; the DSM keeps
+  some refusals' codes globally, and asking with the application's identity reads and clears only its own, so
+  a per-application `TWCC_SUCCESS` after a DSM failure is asked again with an identity whose id is out of range,
+  which reads the global one (`apps.cpp` 619-637), and is `None` if that's success too. Also `Refused` (a
+  container or block that doesn't hold up), `Timeout`, `NoSuchSource`, `CallbackUnsupported`.
+- **The thread** (`run`): takes the process's flag; enters a single-threaded apartment (a thread already in a
+  multithreaded one is `RunError::Apartment`); registers and creates the hidden top-level window (its procedure
+  `DefWindowProcW`); runs the closure; then the teardown above (`MSG_CLOSEDSM` if the record says open), clears
+  the `Remote`s' handle, destroys the window, leaves the apartment, releases the flag. The loop (`wait`,
+  `next_event`): only the window's own messages are the crate's (matched by window, not number); requests are
+  kept; in `Delivery::Events` every other message is offered to `MSG_PROCESSEVENT` while a source is enabled,
+  and a carrier of a source message isn't dispatched; a callback's post in `Events` mode, or a `DSEVENT` in
+  `Callback` mode, is a failure.
+- **Capabilities:** `get`, `get_current`, `get_default`, `set`, `reset`, `query_support`; `CapValue` for all four
+  containers and every item type `twain.h` defines (integers, `TW_BOOL`, `TW_FIX32`, `TW_FRAME`, the strings,
+  `TWTY_STR1024` and `TWTY_UNI512` among them), every length checked against `GlobalSize` before it's read.
+- **Enabling and the driver's window:** `Source::enable(Ui::Hidden | Ui::Shown)` (`Shown` parented to the hidden
+  window: the application's own as owner is slice 9's); `Source::settings_ui()` (`MSG_ENABLEDSUIONLY`, where
+  `CAP_ENABLEDSUIONLY` says the source has it); `Event::CloseRequest` (`MSG_CLOSEDSREQ`), `Event::CloseOk`
+  (`MSG_CLOSEDSOK`), `Event::Device` (`MSG_DEVICEEVENT`, then `DAT_DEVICEEVENT`).
+- **Transfers and a batch's end:** `Ready::image_info`, `native`, `memory`; `ext_image_info(ids)` in state 7;
+  `Transferred::end() -> Pending` (`More(Ready)` or `Done(Enabled)`, the count kept, 0xFFFF "unknown");
+  `Ready::reset() -> Enabled`; `Ready::stop_feeder()`.
+- **For the seam** (`crates/twain-dsm.md`): per transfer, `DAT_IMAGEINFO` as TWAIN gives it; the pending
+  count; extended image info as offered; each memory buffer's shape and bytes, and a native transfer's DIB
+  block, not assembled; events with how they came; condition codes from both parties; requests served in every
+  state.
+- **Hostile input:** the decoders (containers, extended image info, strings) take random input in a unit test
+  (a fixed-seed generator, many thousand cases, every result `Ok` or `Err`, never a panic, on every runner,
+  i686 included); a `cargo-fuzz` target for them is TEST-7, for a slice with nightly at hand.
 
 ### How the tests run
 
-- **Each test that loads the DSM runs in a child process of its own** (rusty-fork, `timeout`), as `sane-dl`'s
-  do: one `Twain` per process, and the DSM never unloaded; its `CAP_XFERCOUNT` given in the child's
-  environment at spawn. Where the sample source isn't installed the test says so on stderr and passes;
-  `TWAIN_DSM_REQUIRE_SAMPLE=1` (CI's job, and every check here) makes it a failure.
-- **The spike's scenarios as tests:** listing; native and memory transfers in both delivery modes, page counts
-  and pending counts; `compare` (the spike's `image` module in `tests/support/`); the cancel mid-page and before
-  the enable; a state dropped right after the enable rolling back to state 1; the signature check (the installed
-  DSM passes; Windows' `twain_32.dll`, signed by Microsoft, is `WrongSigner`; an unsigned DLL, `Unsigned`);
-  `AlreadyRunning`; a `Remote` posting after its `run` ends (`Gone`).
+- **Every test that calls `run` runs in a child process of its own** (rusty-fork, `timeout`), as `sane-dl`'s
+  do: one `Twain` per process, the DSM never unloaded; `CAP_XFERCOUNT` given in the child's environment at
+  spawn. A test that needs the sample source and doesn't find it exits 77 after saying why, and the parent says
+  so on its own stderr and passes; `TWAIN_DSM_REQUIRE_SAMPLE=1` (CI's job, and every check here) fails instead.
+- **The spike's scenarios as tests:** listing; native and memory transfers in both deliveries, page and
+  pending counts; `compare` (the spike's `image` module in `tests/support/`); a cancel mid-page and one before
+  the enable; a state dropped right after the enable rolling back; **an `Enabled` forgotten (`mem::forget`),
+  `run` closing the connection, and a second `run` in the same process working**; a delivery switched on a
+  reopened source not hanging (the null procedure); the signature cases (the installed DSM passes; Windows'
+  `twain_32.dll`, catalog-signed, is `Unsigned`; a DLL with an embedded signature not the TWAIN Working
+  Group's, chosen by probe in step 2, is `WrongSigner`, refused before it's loaded); `AlreadyRunning`;
+  `AlreadyLoaded`; `Gone`.
+- **Inside the crate** (unit tests with access to its private calls, in child processes): a source triplet to a
+  source never opened, which the DSM refuses itself (`TWCC_SEQERROR`, `dsm.cpp` 599), reported with both
+  parties' codes.
+- **Compile-time checks:** `compile_fail,E0521` (a state returned from `run`'s closure) and `compile_fail,E0277`
+  (a state sent to a thread) doctests, each beside a passing twin that differs only by the violation, all
+  Windows only.
 - **Unit tests** need no DSM and run everywhere: containers both ways, extended image info items, codes,
-  strings, `FIX32`, the triplets' names.
+  strings, `FIX32`, the triplets' names, the random-input test.
 
 ## Steps
 
@@ -205,79 +245,128 @@ compared with the step before's; `~/.cargo` unchanged; every `SAFETY` comment th
 call; the diff and message scanned for local paths, the username, the downstream app's name outside
 `docs/pm/`, and the maintainer's name anywhere.
 
-1. **The crate and its bindings.** The manifest, crate doc (the disclaimer), `ffi` generated and checked (the
-   script and its report in `scratch/work/s0-8/`), the codes, the header contract, the pure decoders
-   (containers, extended image info, strings) and their unit tests; the gates' devices-layer list gains
-   `twain-dsm`; CI's TWAIN job fetches `twain.h` and runs the contract in both bitnesses. Slice 7's close-out
+1. **The crate and its bindings.** The manifest and `[workspace.dependencies]`, the crate doc (the disclaimer),
+   `/scripts/twain-bindings.py` and `ffi` from it (its report saved in `scratch/work/s0-8/`), the hand-written
+   exceptions, `CONSTANTS`, the codes, the header contract, the pure decoders with their unit and random-input
+   tests; the gates' devices-layer list gains `twain-dsm`; CI's TWAIN job fetches `twain.h` and runs the
+   contract in both bitnesses; a `twain-dsm-msrv` job (Windows, the measured toolchain). Slice 7's close-out
    pushed with it.
-   **Done when:** the core; the script's check clean, its report saved; the contract passing in both
-   bitnesses and seen to fail when a field's type is changed (a scratch edit, reverted); `cargo +1.89 check`
-   clean, the MSRV measured as slice 1 measures it.
-2. **The thread, loading, states 1 to 3.** `run`, `Twain`, `Remote`, `load` with the signature, `Loaded`,
-   `Opened`, `sources`, the rollback scaffold and `stranded`; the DSM's memory functions inside.
-   **Done when:** the core; listing in both bitnesses; the signature cases; `AlreadyRunning`; `Gone`; a
-   compile-fail check that a state can't leave `run`'s closure (a `compile_fail` doctest) nor be sent to
-   another thread.
-3. **Sources and capabilities.** `Source`, `open_source`, `get` and the rest, the callback's registration,
-   both parties' codes.
-   **Done when:** the core; the spike's table of answers for the capabilities, through the API, in both
-   bitnesses; a refusal reported with both codes (`DAT_CALLBACK2` given a null procedure, which the DSM
-   refuses itself).
-4. **Enabled, transfers, events, cancels.** `Enabled`, `Ready`, `Dib`, `MemoryTransfer`, `Transferred`,
-   `Pending`, `next_event` in both deliveries, requests, `ext_image_info`, `stop_feeder`, `reset`, every
-   `Drop` and the rollback; the spike's scenarios as tests.
-   **Done when:** the core; every test above in both bitnesses, here and in CI; the rollback test from state
-   6; a make-fail where a step down is refused, leaving the DSM loaded and `stranded` saying so.
-5. **The spike retired; what it found, written down.** `crates/twain-spike` deleted (its `image` module in
-   `tests/support/`); CI's job renamed `twain-dsm`, its recipe `twain-dsm-sample`; README rows;
-   `crates/twain-dsm.md` (what was built, "For the seam" as built), the seam note where it changed, the
-   milestone, `status.md`, `decisions.md`, this plan's "So far".
-   **Done when:** the core; the workspace with no trace of the spike but its archived plan; every claim in the
-   docs traced to a report or a line.
+   **Done when:** the core; the script's report saved; the contract passing in both bitnesses and seen to fail
+   on a change the compile-time assertions don't cover (a constant's value; an unasserted offset), reverted;
+   the MSRV measured.
+2. **The thread, loading, states 1 to 3.** `run`, `RunError`, the flag and its guard, `Twain`, `wait`,
+   `take_request`, `Remote<T>`, `load` with the signature and its order, `Loaded`, `Opened`, `App`, `sources`,
+   the record, the teardown, `RunReport`.
+   **Done when:** the core; listing in both bitnesses; the signature cases; `AlreadyRunning`, `AlreadyLoaded`,
+   `Gone`; requests through `wait` with no source open; the compile-time checks, each twin passing.
+3. **Sources and capabilities.** `Source`, `open_source` with `Delivery`, the null procedure, `get` and the
+   rest, `SetOutcome`, both parties' codes.
+   **Done when:** the core; the spike's capability answers through the API in both bitnesses; the internal
+   refusal test; `CallbackUnsupported` for a source without `DF_DS2` (a unit test of the check, the sample
+   having it).
+4. **Enabled, transfers and events.** `Enabled`, `Next`, `Ready`, `Native`, `Dib`, `MemoryTransfer`,
+   `Transferred`, `Pending`, `ext_image_info`, `stop_feeder`, `reset`, `Ui::Shown`, `settings_ui`, the events.
+   **Done when:** the core; the transfer tests (both mechanisms, both deliveries, page and pending counts,
+   `compare`) in both bitnesses; `Ui::Shown` and `settings_ui` run by hand here (the sample's Qt window, closed
+   by hand), not in CI.
+5. **Drops, rollback, cancels, teardown.** Every state's `Drop` and the rollback; requests in `next_event`; the
+   cancels; the forgotten state and the second `run`; the delivery switch.
+   **Done when:** the core; those tests in both bitnesses, here and in CI; a make-fail where `MSG_CLOSEDSM` is
+   taken as refused: `run` keeps its window and apartment, `RunReport::stranded` says so, a second `run` is
+   `AlreadyRunning`, no crash.
+6. **The spike retired; what it found, written down.** `crates/twain-spike` deleted (its `image` module in
+   `tests/support/`); CI's job renamed `twain-dsm` and its recipe `twain-dsm-sample`; README rows; the code and
+   CI free of the spike, the docs citing it as history; `crates/twain-dsm.md` (as built, "For the seam"), the
+   seam note where it changed, the milestone, `status.md`, `decisions.md`, TEST-7, this plan's "So far".
+   **Done when:** the core; every claim in the docs traced to a report or a line.
 
 **Closing:** the code review (parallel reviewers), the fixes, CI green, approval.
 
 ## Decisions taken alone, for review
 
-1. **The thread is the caller's, scoped by `run`** (question 1), not the crate's behind a handle.
-2. **An owned chain of states, one source at a time** (question 2).
-3. **The DSM never unloaded; containers decoded at once; the DIB an owner** (question 3).
-4. **`Load::Path` is safe, its trust documented, and signatures are checked by default** (question 5);
-   `Trust::Unchecked` exists for a DSM the TWAIN Working Group didn't sign.
-5. **One `Twain` per process** (question 5).
-6. **`RefCon` carries the callback's context** (question 6).
-7. **`publish = false` at 0.0.0** until slice 9's backend has used the API; then made ready to publish, as
-   `sane-dl` is in its slice.
-8. **The bindings: every constant both sources define; the structs the crate and the containers use**, the
-   rest when a slice needs them.
-9. **The header contract compiles `twain.h` fetched at test time**, never committed.
+1. **The thread is the caller's, scoped by `run`**, with `wait`, `take_request` and `Remote<T>` for slice 9.
+2. **An owned chain of states, one source at a time;** no blanket `From<Refused<S>>`.
+3. **Teardown from `Twain`'s record, not from `Drop`:** `MSG_CLOSEDSM` at `run`'s end; a leak of the window and
+   apartment, said, if even that fails.
+4. **The DSM never unloaded; containers decoded at once; the DIB an owner locked for life.**
+5. **Loading by full path, verified before the load through a held handle; no unchecked load.**
+6. **One `Twain` per process, for the DSM's lack of locks.**
+7. **`publish = false` at 0.0.0** until slice 9's backend has used the API; then made ready to publish.
+8. **The bindings: every constant of `twain.h`, generated where `TWAINH.cs` has it, by hand where not;** the
+   structs the crate and the containers use, the rest when a slice needs them.
+9. **The header contract compiles `twain.h` fetched at test time,** never committed.
 10. **The spike's `image` module lives in the tests until slice 9.**
+11. **The callback's context a `static`; delivery fixed per open source.**
 
 ## Security, for review
 
 1. **Loading the DSM runs every installed source's code** in the process (the DSM loads each at
-   `MSG_OPENDSM`); the backend runs it in a worker (slice 9). The default load is the system folder's only;
-   `Load::Path` trusts its path; the signer is checked unless the caller says not to.
-2. **The header is fetched at test time** from the TWAIN Working Group's repository at a pinned commit, over
-   TLS, by CI only; its hash pinned in the job.
+   `MSG_OPENDSM`); the backend runs it in a worker (slice 9). The DSM is loaded by its full path, its file held
+   against change, its signer checked before its code runs.
+2. **The header and `TWAINH.cs` are fetched** by the binding script and by CI from the TWAIN Working Group's
+   repositories at pinned commits, over TLS, their hashes pinned.
 3. **A driver's bytes are untrusted:** containers, extended image info, the DIB block and memory buffers are
    checked against their measured lengths and the caps before they're read.
 
 ## Risks
 
-1. **The API meets its first real user in slice 9:** the backend may want shapes this plan didn't choose
-   (question 1's (A), several sources). Kept at 0.0.0 meanwhile.
-2. **The brand lifetime** may make the API awkward to hold in a struct across calls; the backend's loop is
-   written inside `run`'s closure, which this plan assumes is enough.
-3. **MSVC found by `cc` at test time**, on `windows-latest` and here, in both bitnesses: seen in step 1, or the
-   contract moves to a `just` recipe run from a developer prompt.
-4. **Child processes per test, in both bitnesses,** lengthen CI; the job's timeout grows if it must.
-5. **Slice 1 lands on `master` meanwhile:** this branch rebases before each push; the justfile, CI and
-   `status.md` are the likely conflicts.
+1. **The API meets its first real user in slice 9:** kept at 0.0.0 meanwhile.
+2. **`find-msvc-tools` at test time** on `windows-latest` (the review saw it work here in both bitnesses).
+3. **Child processes per test, in both bitnesses,** lengthen CI; the job's timeout grows if it must.
+4. **Slice 1 lands on `master` meanwhile:** this branch rebases before each push; `sane-dl`'s manifest (the
+   workspace dependencies), the justfile, CI and `status.md` are the likely conflicts.
+5. **The sample signals synchronously and is TWAIN 2:** a 1.x driver (the fi-6130's may be) is seen only by
+   hand, in slice 12.
 
 ## Plan review
 
-Not yet.
+2026-11-08, before step 1, by one adversarial reviewer (a fresh agent given the plan, the repository, the
+spike's code in git and the primary sources), with probes in `scratch/work/s0-8/review-probe/` (the spike
+rebuilt and run against the sample; a branded-lifetime crate; MSVC found from a test; the DSM's load order;
+`WinVerifyTrust`; the constants counted). The load-bearing findings were re-read in the DSM's source here: a
+null callback procedure accepted (`dsm.cpp` 1069-1087), refusals' codes kept globally (`apps.cpp` 619-637), no
+locks anywhere. The plan as drawn is at `scratch/work/s0-8/plan.before-review.md`. All 24 accepted; none
+rejected.
+
+**High:** 1. *Soundness rested on `Drop`*, which `mem::forget` skips, leaving a registered callback's
+context freed under the DSM: now the record in `Twain`, `MSG_CLOSEDSM` at `run`'s end, the callback's context
+a `static`, and a test that forgets a state. 2. *The DSM accepts a null callback procedure*, so step 3's
+refusal couldn't happen: now a triplet to a source never opened, from inside the crate. 3. *Requests couldn't
+be served outside `Enabled`*, and a crate-defined request type couldn't carry the backend's: now `wait` in
+every state, `take_request`, `Remote<T>`.
+
+**Medium:** 4. A callback registration survives close and reopen, and 1.x sources never call it: delivery fixed
+per open source, a null procedure for events, `Callback` refused without `DF_DS2`. 5. The DSM keeps some codes
+globally: asked again with an out-of-range id, else `None`. 6. `twain_32.dll` is catalog-signed, so
+`Unsigned`, not `WrongSigner`: an embedded-signed DLL found by probe for that. 7. A bare-name load returns any
+`TWAINDSM.dll` already loaded, and a check after loading is too late: full path, a held handle, check first,
+compare after. 8. One `Twain` per process for the DSM's lack of locks, not its connections; the flag released
+by a guard. 9. Every test calling `run` forked; exit 77 for a skip. 10. The header contract: `<windows.h>`
+first; `CONSTANTS`; a deliberate failure the compile-time asserts don't catch first. 11. thiserror reads a
+field named `source` as the error's source: `by_source`, `by_dsm`. 12. The driver's window, its close events
+and `TWRC_CHECKSTATUS` were missing: `Ui::Shown`, `settings_ui`, the events, `SetOutcome`. 13. A bare
+`compile_fail` passes on any error and on Linux: error codes pinned, passing twins, Windows only. 14.
+`ready()` could forge state 6: only `next_event` makes a `Ready`. 15. `?` through a blanket `From` walked whole
+chains down unseen: `into_error` and `into_state`, `#[must_use]`. 16. The make-fail asserted what can't fail
+(the DSM is never unloaded; the DSM copies identities): it asserts the window and apartment kept and a second
+`run` refused. 17. `Trust::Unchecked` was a caller's memory contract under a safe name: left out.
+
+**Low:** 18. Two `Loaded` from one `Twain`: `AlreadyLoaded`. 19. `DAT_CALLBACK2` only (its `RefCon` is full
+width; `DAT_CALLBACK`'s 32 bits). 20. The DIB locked for life, `Native::Cancelled`, `preferred_size` resolving
+`TWON_DONTCARE32`, `MinBufSize` checked. 21. 1205 numeric defines, 58 without a `TWAINH.cs` name: the
+generator committed with its rename map, the rest by hand, `TWTY_STR1024` and `TWTY_UNI512` decoded. 22.
+Function-pointer types `pub(crate)`. 23. `rust-version`, `[workspace.dependencies]`, an MSRV job, the decoders'
+random-input test and TEST-7, `App` given to `open`, `RunError`, `find-msvc-tools` direct. 24. Six steps, not
+five; step 6's "no trace" limited to code and CI; question 4 a borrow, not a brand.
+
+**Checked and sound** (the reviewer's list, kept): a state can't be returned from `run`'s closure or stored in a
+thread-local (E0521), and `!Send` carries through `&'t Twain`; `DAT_CALLBACK2`'s `RefCon` comes back full width
+in both bitnesses; a null procedure clears a stale callback; `find-msvc-tools` (through `cc`) finds `cl.exe` for
+both targets from a test with no developer prompt; `twain.h` builds with MSVC after `<windows.h>`, `TW_IDENTITY`
+156 bytes in both; both installed DSMs pass `WinVerifyTrust` offline; never unloading is enough for the
+function pointers, and the DSM frees its state at the last `MSG_CLOSEDSM`, so a later `run` starts clean; the
+DSM refuses a duplicate `MSG_OPENDSM`; `MSG_CLOSEDSM` force-closes open sources; `TWRC_CANCEL` leaves the source
+in state 7; a `Dib` is `Send`.
 
 ## So far
 
