@@ -57,7 +57,18 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   - **Cancel by state:** in states 6 and 7, the transfer in flight finished, then `MSG_ENDXFER` and
     `MSG_RESET`; `MSG_STOPFEEDER` where a driver has it (the sample hasn't); in state 5 a natural cancel, since
     forcing it there draws an error from some scanners. A cancel from another thread is a message posted to
-    the TWAIN thread's window: a flag alone can't wake its `GetMessageW`.
+    the TWAIN thread's window, a flag alone being unable to wake its `GetMessageW`; the loop keeps such
+    requests while it waits for the source, and takes only its own window's.
+  - **Walking down:** the application's record of the state can lag the source's (the sample is in state 6
+    inside `MSG_ENABLEDS`), so a step refused with `TWCC_SEQERROR` restarts the walk from state 7's first step,
+    as `TWAIN.cs`'s rollback does; and the DSM is never unloaded while a source is open, since the source
+    keeps the DSM's entry points and calls through them. In the typestate, a state that can't step down stays
+    alive, not dropped. Seen with DSM 2.5.0: `MSG_CLOSEDS` with an identity it never opened answers success.
+  - **Condition codes:** the DSM refuses some source triplets itself (a callback it won't register, a source
+    not open) and keeps its own code; a failure asks the DSM first, then the source through it, each once,
+    since asking clears it.
+  - **Containers' memory functions** are only callable while the DSM that gave them is loaded: tie them to
+    the DSM's lifetime (the spike's `Allocator` makes every call `unsafe` instead).
   - Condition codes: `TWCC_PAPERJAM`, `TWCC_PAPERDOUBLEFEED`, `TWCC_NOMEDIA`, cover open.
   - Both bitnesses: built for `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`. A source loads only into
     a process of its own bitness, and the office's fi-6130s have a 32-bit driver (M5 ask 12).
@@ -79,7 +90,8 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   settled the route:** `scripts/twain-sample.ps1` installs the sample's MSI silently (`msiexec /qn`, the DSM
   2.5.0 with it, both bitnesses), on `windows-latest` too; and `twain-spike` lists, transfers, compares and
   cancels through it with a hidden window in both bitnesses here. CI's `twain-spike` job runs the same on
-  `windows-latest`, green on every push of the slice (all seven scenarios, both bitnesses). `twain-dsm`'s own
+  `windows-latest`, green on every push of the slice (`list` at step 1, six scenarios at step 2, all at step 3
+  on). `twain-dsm`'s own
   tests replace the spike's, and the spike goes.
 - **Open:**
   - `twain.h`'s license, settled 2026-11-08: no copy grants a license (copyright notices, "All rights

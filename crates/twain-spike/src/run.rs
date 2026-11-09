@@ -67,11 +67,15 @@ fn run_one(scenario: &'static Scenario) -> u32 {
             Ok(Event::Paused { page }) => match twain_window {
                 Some(w) if window::post(w, WM_REQUEST, REQUEST_CANCEL, 0) => {
                     println!(
-                        "  (main thread) paused in page {page}: a cancel posted to the TWAIN thread's window"
+                        "  (main thread) {}: a cancel posted to the TWAIN thread's window",
+                        where_paused(page)
                     );
                 }
                 _ => {
-                    println!("  FAIL paused in page {page}, and the cancel couldn't be posted");
+                    println!(
+                        "  FAIL {}, and the cancel couldn't be posted",
+                        where_paused(page)
+                    );
                     failures += 1;
                 }
             },
@@ -116,11 +120,20 @@ fn usage(problem: &str) -> i32 {
 
 /// Ends the process at once. Not `std::process::exit`: `ExitProcess` runs
 /// every loaded DLL's detach code after the other threads are killed, and a
-/// hung TWAIN thread may hold a lock that code takes (the sample source's
-/// `DllMain` unloads the DSM on detach), so exiting could hang too.
+/// hung TWAIN thread may hold a lock that code takes (the loader lock, while
+/// the DSM loads a source, or one inside a driver), so exiting could hang too.
 fn terminate(code: u32) -> ! {
     let _ = std::io::stdout().flush();
     // SAFETY: the pseudo-handle for this process; ends it with `code`.
     unsafe { TerminateProcess(GetCurrentProcess(), code) };
     std::process::abort()
+}
+
+/// Where the TWAIN thread paused, in words.
+fn where_paused(page: usize) -> String {
+    if page == 0 {
+        "paused before the batch".to_owned()
+    } else {
+        format!("paused in page {page}")
+    }
 }

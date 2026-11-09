@@ -1,6 +1,6 @@
 # S0 slice 7: the TWAIN spike, end to end
 
-Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; its four steps done, the code review next. Milestone:
+Status: running, on branch `s0-7-twain-spike` (pull request #1), from 2026-11-08; its four steps, code review and fix stage done; approval closes it. Milestone:
 `milestones/s0-devices.md`, slice 7. Run on the Windows machine, while slice 1 runs on Linux.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -217,7 +217,8 @@ slice 8's own tests replace it, and it's deleted then.
     `MSG_RESET` (6 to 5, count 0), disables, and walks down. Checked: page 1 complete, no second transfer, the
     states in that order, down to 1. One page.
 - **What it checks itself, exiting 1 on any failure:** the sample source found, exactly once; every answer as
-  the table has it; the states walked in order and back to 1; each scenario's page count; each image's size
+  the table has it; the application's record of the states back to 1 (its own bookkeeping, not the
+  source's, which can be further along); each scenario's page count and pending counts; each image's size
   from `DAT_IMAGEINFO` equal to the decoded DIB's and to the assembled tiles'; native and memory equal pixel for
   pixel per pixel type; `CAP_INDICATORS` false after setting it; the cancel's single page. What it observes
   but doesn't judge (callback thread and timing, strip shapes, pending counts, palettes, the module's path and
@@ -247,8 +248,8 @@ slice 8's own tests replace it, and it's deleted then.
 no equivalent on Windows, and these builds are small.
 
 **At every step**, the check runs once, on this machine: `just fmt clippy test doc` (what CI's check job
-runs; `gates` and `msrv` can't run here: the gates read ELF files and need `jq`, and no 1.89 toolchain is
-installed); for the other targets, `cargo clippy --locked -p twain-spike --all-targets -- -D warnings` with
+runs; `gates` can't run here: they read ELF files and need `jq`; the 1.89 toolchain is installed, and the
+fix stage checked the spike on it once); for the other targets, `cargo clippy --locked -p twain-spike --all-targets -- -D warnings` with
 `--target i686-pc-windows-msvc` and with `--target x86_64-unknown-linux-gnu` (a check build, no linker), and
 `RUSTDOCFLAGS="-D warnings" cargo doc --locked -p twain-spike --no-deps --target x86_64-unknown-linux-gnu`;
 from the gates, the parts that can run here by hand: the name gate's `git grep` and `cargo tree -p
@@ -302,9 +303,9 @@ the step adds.
    **Done when:** the core; every claim in the revised sections traced to a report under `scratch/work/s0-7/`
    or a line of the sources; the docs read for anything private (the repository is public).
 
-**Closing:** the code review (parallel reviewers), the fixes, and then, once approved, the pull request
-marked ready; CI's check job on three systems and the `twain-spike` job green closes the slice (and TEST-3, if
-step 4 couldn't).
+**Closing:** the code review (parallel reviewers), the fixes, CI's check job on three systems and the
+`twain-spike` job green on them, and approval close the slice; the pull request (#1, opened ready, not as a
+draft) is merged once approved.
 
 ## Baselines
 
@@ -439,6 +440,53 @@ won't stall (the DSM posts `WM_NULL`); `DAT_ENTRYPOINT` needs `DF_APP2` and an e
 facts as corrected above; native and memory pages match at defaults; windows-sys 0.61.2 has each function in
 the feature named; the script is ASCII with LF endings and passes the name gate.
 
+## Code review
+
+2026-11-08, after step 4: four fresh reviewers at once, one lens each, given the code, the plan and the
+sources, not the author's reasoning: FFI and unsafe soundness; TWAIN's protocol and the spike's own checks;
+the pure modules against hostile input; CI, the script, the rules and the docs. Their probes, in both
+bitnesses, are in `scratch/work/s0-7/review-code/`. 39 findings (8, 8, 12 and 11), three found twice; all
+accepted, none rejected, each checked before it was acted on (the reviewers' probes, and the fix stage's own
+make-fails below).
+
+**High, and the medium ones that changed the spike:**
+
+1. *Sizes overflowed a 32-bit `usize`* (pure 1 and 2; FFI 3): a row of a wide RGB image, and a buffer whose
+   rows a driver spaces 4 GiB apart, panicked in i686 debug builds and were wrongly accepted in release. Now
+   worked out in `u64`, the pixel cap first; tests for those inputs; and CI runs the unit tests on i686
+   (pure 5), which it never had.
+2. *A driver's memory wasn't bounded by the image cap* (pure 4): every buffer was kept whole until the end.
+   Now an `Assembler` places each buffer as it comes and holds only the image.
+3. *`compare` ignored the data's length* (pure 3 and 10): two images of the same size but different data
+   lengths could pass. Now refused.
+4. *The walk down stopped at state 5 with the source in 6, and unloaded the DSM under an open source*
+   (protocol 1; FFI 2, seen to crash): now a step refused with `TWCC_SEQERROR` rolls back from state 7, as
+   `TWAIN.cs` does, and a session that can't get below state 3 keeps the DSM loaded and says so.
+5. *Requests were dropped while the loop waited for the source, and messages matched by number only*
+   (protocol 2; FFI 4): now kept, matched by window, and acted on whenever the source is in state 6; a new
+   scenario, `cancel-early`, shows a cancel kept by the loop; the seam note and `twain-dsm.md` narrowed to what
+   was shown.
+6. *The cancel scenario's checks couldn't fail* (protocol 3): now the pages are counted, the source must stay
+   quiet after `MSG_RESET`, and the disable that follows shows state 5.
+7. *`Allocator` was a safe API that could call into an unloaded DSM* (FFI 1, seen to crash): its methods and
+   `take_entry_points` are now `unsafe`, with that contract.
+8. *Condition codes from the wrong party* (protocol 4): the DSM refuses some source triplets itself; a failure
+   now asks the DSM, then the source, each once.
+9. *Event mode passed on callback delivery* (protocol 5): now a failure.
+10. *CI's history misread* (CI 1): CI had run the scans, green, at steps 2 and 3, before step 4 narrowed the
+    claim; the docs give each push's scenarios and run. *Pull request #1 isn't a draft* (CI 2): the docs say
+    so; whether to make it one is for review.
+11. *A relative `-CacheDir` broke `Download` and `Install`* (CI 3): resolved once, to a full path.
+
+**Low:** "the states walked in order" claimed more than the bookkeeping shows (protocol 6); `CAP_XFERCOUNT` of
+0 or less made runs flaky, so it's refused (protocol 7); pending counts asserted (protocol 8); a block freed
+while locked (FFI 5); the callback's thread and inside-enable carried in its post, and its window cleared
+(FFI 6); the terminate comment (FFI 7); `open_source` with a source open (FFI 8); test gaps (pure 6 to 8, 12);
+a cap that couldn't bind (pure 11); `u32::MAX` sizes (pure 9); the seam note's wording (CI 4, 5, 10); stale
+lines in `status.md` and the slices index (CI 6); the 1.89 toolchain is installed (CI 7); the TWAIN Toolkit
+disclaimer in the crate's docs and a README row (CI 8); the Git Bash note in the justfile (CI 9); the trace's
+evidence kept (CI 11).
+
 ## So far
 
 ### Step 1: the sample source on CI; the DSM loaded; sources listed (2026-11-08)
@@ -482,8 +530,8 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   - *`just twain-spike` takes the scenario as an optional second argument*, `all` by default, so the CI job
     runs `all` from now on (just `list` so far) and doesn't change in step 3.
   - *`TWLG_USA`*, not `TWLG_ENGLISH_USA`, which both sources define as an alias of it.
-- **CI:** pushed, and the draft pull request opened (2026-11-08); every job passed ("ci passed
-  on GH"): the check job on Ubuntu, Windows and macOS, so the spike's split for other systems holds; and the
+- **CI:** pushed, and pull request #1 opened (2026-11-08, ready, not a draft as the plan had it); every
+  job passed (run 42557972395): the check job on Ubuntu, Windows and macOS, so the spike's split for other systems holds; and the
   `twain-spike` job, so **the sample source installs silently on `windows-latest`** (`msiexec /qn`, the runner
   elevated) and the DSM loads, opens with the hidden window and lists it in both bitnesses there. TEST-3's
   install question is answered; its scanning one waits on step 2's push.
@@ -578,15 +626,38 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
 - **Checked here:** every new claim traced to a report or a line of the sources
   (`scratch/work/s0-7/step-4/trace.md`; the DSM's `_chdir` and its `wiatwain.ds` skip read in its own
   `apps.cpp`, and `0x031F` checked as `WM_DWMNCRENDERINGCHANGED`, by this step rather than taken from the
-  review); one claim caught and narrowed before it went in (that CI scans on `windows-latest`: so far CI has
-  shown the install and the listing); the docs read for anything private; the core.
-- **Departures from the plan:** *TEST-3 updated, not closed*: CI's scans on the runner weren't in yet;
-  closed once they were (below).
+  review); the docs read for anything private; the core. A claim was narrowed here (that CI scans on
+  `windows-latest`) on the belief that CI had shown only the install and the listing; the code review
+  found it had already run the scans, green, at steps 2 and 3 (runs 42559459205, 42559970065), unread.
+- **Departures from the plan:** *TEST-3 updated, not closed*: its CI scans hadn't been looked at; closed
+  once they were (below).
 
 ### CI, for the slice (2026-11-08)
 
-Green on every push ("so far ci has been green for all of slice 7"): the check job on Ubuntu, Windows and
-macOS, and the `twain-spike` job running all seven scenarios on `windows-latest` in both bitnesses, so the
-sample source installs silently and scans with a hidden window on the runner, both delivery modes, the
-comparison and the cancel included. TEST-3 is closed into `archive/backlog-done.md`; Risk 1's fallbacks
+Green on every push ("so far ci has been green for all of slice 7"; runs 42557972395 (step 1, `list`), 42559459205 (step 2, six scenarios), 42559970065 (step 3, seven), 42560458700, 42560706170 and 42561129071 (docs)): the check job on Ubuntu,
+Windows and macOS, and the `twain-spike` job on `windows-latest` in both bitnesses, `list` at step 1, six
+scenarios at step 2, seven from step 3, so the sample source installs silently and scans with a hidden window
+on the runner, both delivery modes, the comparison and the cancel included. TEST-3 is closed into `archive/backlog-done.md`; Risk 1's fallbacks
 weren't needed.
+
+### Fix stage (2026-11-08)
+
+- **What it does:** every finding above. In the code: `image` in `u64` with `Assembler`, `written` and a
+  stricter `compare`; `Allocator` and `take_entry_points` `unsafe`; requests kept and matched by window
+  (`take_request`, `request_queued`); the callback's facts in its post; the rollback and the kept DSM;
+  both condition codes; a cancel acted on in state 6 wherever it is; `cancel-early`; pending counts and
+  page counts checked; `CAP_XFERCOUNT` of 0 or less refused. Outside it: CI's i686 unit tests
+  (`just twain-spike-test`), the script's `-CacheDir`, the justfile's note, the crate doc's disclaimer, a
+  README row; the docs above corrected.
+- **Checked here:** the core on all three targets and the spike on Rust 1.89 (its `rust-version`), without a
+  warning; 24 unit tests on x64 and i686 (17 before, none lost); `all`, eight scenarios, passing in both
+  bitnesses with `CAP_XFERCOUNT=3` and unset (`scratch/work/s0-7/fix/all-*.txt`), and `CAP_XFERCOUNT=0`
+  refused; two make-fails, each reverted: giving up right after the enable now rolls back (`MSG_DISABLEDS`
+  refused with `TWCC_SEQERROR`, then `MSG_ENDXFER`, `MSG_RESET`, `MSG_DISABLEDS`) and the DSM's log shows
+  `MSG_CLOSEDS` and `MSG_CLOSEDSM` (`make-fail-giveup.txt`, `giveup-dsm.log`); a refused close leaves the DSM
+  loaded and the run exits 1, no crash (`make-fail-leak.txt`); `Download` with a relative `-CacheDir`, the
+  process's directory and PowerShell's apart, extracts from the right place; `~/.cargo` unchanged; the name
+  gate. The trace's evidence from outside `scratch/` saved in `scratch/work/s0-7/evidence/`.
+- **Found:** DSM 2.5.0 answers `MSG_CLOSEDS` with success for an identity it never opened (a scratch probe
+  meant to make it fail); `cancel-early`: the loop meets the queued request before the callback's
+  `MSG_XFERREADY` and keeps it, and `MSG_RESET` from state 6 ends the batch before any transfer.

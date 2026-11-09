@@ -36,7 +36,8 @@ struct MemoryFunctions {
 /// `DAT_ENTRYPOINT` has given them, else `GlobalAlloc` and its kin. Windows'
 /// DSM allocates with `GlobalAlloc` underneath, so `GlobalSize` measures
 /// either kind of block. `Copy`, so a session can hold it across a call to the
-/// DSM.
+/// DSM; and so every method is `unsafe`: a copy outlives nothing, and the DSM's
+/// functions are only there while the [`Dsm`] that gave them is loaded.
 #[derive(Clone, Copy)]
 pub struct Allocator(Option<MemoryFunctions>);
 
@@ -51,10 +52,16 @@ impl Allocator {
     }
 
     /// Allocates `size` bytes. Null if it couldn't.
-    pub fn alloc(self, size: u32) -> *mut c_void {
+    ///
+    /// # Safety
+    ///
+    /// The [`Dsm`] this came from must still be loaded (always so for
+    /// [`Allocator::GLOBAL`]).
+    pub unsafe fn alloc(self, size: u32) -> *mut c_void {
         match self.0 {
-            // SAFETY: the DSM's allocator, as `DAT_ENTRYPOINT` gave it, takes a
-            // size and returns a handle or null.
+            // SAFETY: the DSM's allocator, as `DAT_ENTRYPOINT` gave it, in a
+            // DSM the caller keeps loaded; it takes a size and returns a handle
+            // or null.
             Some(m) => unsafe { (m.allocate)(size) },
             // SAFETY: GlobalAlloc takes flags and a size and returns a handle or
             // null.
@@ -66,7 +73,8 @@ impl Allocator {
     ///
     /// # Safety
     ///
-    /// `handle` must be a live handle from this allocator.
+    /// `handle` must be a live handle from this allocator, and its [`Dsm`]
+    /// still loaded.
     pub unsafe fn lock(self, handle: *mut c_void) -> *mut c_void {
         match self.0 {
             // SAFETY: the caller passes a live handle.
@@ -80,7 +88,8 @@ impl Allocator {
     ///
     /// # Safety
     ///
-    /// `handle` must be a live, locked handle from this allocator.
+    /// `handle` must be a live, locked handle from this allocator, and its
+    /// [`Dsm`] still loaded.
     pub unsafe fn unlock(self, handle: *mut c_void) {
         match self.0 {
             // SAFETY: the caller passes a live, locked handle.
@@ -97,7 +106,7 @@ impl Allocator {
     /// # Safety
     ///
     /// `handle` must be a live, unlocked handle from this allocator, never used
-    /// again.
+    /// again, and its [`Dsm`] still loaded.
     pub unsafe fn free(self, handle: *mut c_void) {
         match self.0 {
             // SAFETY: the caller passes a live handle and drops it.
@@ -195,7 +204,13 @@ impl Dsm {
     /// Takes the memory functions from `DAT_ENTRYPOINT`'s answer, if it gives
     /// all four; otherwise containers stay with `GlobalAlloc`. Returns whether
     /// the DSM's are used.
-    pub fn take_entry_points(&mut self, ep: &TW_ENTRYPOINT) -> bool {
+    ///
+    /// # Safety
+    ///
+    /// `ep` must be this DSM's own answer to `DAT_ENTRYPOINT`: its pointers are
+    /// called as the functions `twain.h` declares, for as long as `self` is
+    /// loaded.
+    pub unsafe fn take_entry_points(&mut self, ep: &TW_ENTRYPOINT) -> bool {
         let (allocate, free, lock, unlock) = (
             ep.DSM_MemAllocate,
             ep.DSM_MemFree,

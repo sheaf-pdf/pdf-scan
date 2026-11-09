@@ -106,6 +106,8 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\twain-sample.ps1 Status
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Unit tests, 32-bit
+        run: just twain-spike-test i686-pc-windows-msvc
       - name: TWAIN, 64-bit
         run: just twain-spike x86_64-pc-windows-msvc
       - name: TWAIN, 32-bit

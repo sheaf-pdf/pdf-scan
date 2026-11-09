@@ -36,7 +36,7 @@ synchronously, has one image, and can't jam, feed two sides or report extended i
 | API | How |
 |---|---|
 | SANE | `sane_get_devices` (optionally local only) gives each device's `name`, `vendor`, `model`, `type`. Slow (10.7 s here with nothing attached). No attach or detach events. The name is the backend's: fujitsu's carries the model and a serial (`fujitsu:fi-6130dj:…`), others a USB bus address that changes on replugging (to confirm per backend in S0 slice 1). |
-| TWAIN | The DSM lists sources (`DAT_IDENTITY`, `MSG_GETFIRST`/`MSG_GETNEXT`) as `TW_IDENTITY`s: product name, manufacturer, product family, version. Local, but per bitness: a 64-bit DSM lists 64-bit sources only. The DSM loads every source's library at `MSG_OPENDSM`, before anything is listed, so opening the DSM runs each installed driver's code (its log says so), and its cost grows with the drivers installed. DSM 2.5 deliberately skips Windows' own `wiatwain.ds` (its log: "We're deliberately skipping this file"), so WIA devices aren't reached through TWAIN. A source is opened by its identity. No serial. `MSG_DEVICEEVENT` reports events of an open source, not attach and detach. |
+| TWAIN | The DSM lists sources (`DAT_IDENTITY`, `MSG_GETFIRST`/`MSG_GETNEXT`) as `TW_IDENTITY`s: product name, manufacturer, product family, version. Local, but per bitness: a 64-bit DSM lists 64-bit sources only. The DSM loads every source's library at `MSG_OPENDSM`, before anything is listed, so opening the DSM runs each installed driver's code (its log says so), and its cost grows with the drivers installed. DSM 2.5 deliberately skips Windows' own `wiatwain.ds` (its log: "We're deliberately skipping this file"), so WIA devices aren't reached through `TWAINDSM.dll`. A source is opened by its identity. No serial. `MSG_DEVICEEVENT` reports events of an open source, not attach and detach. |
 | WIA | `IWiaDevMgr2::EnumDeviceInfo`: a device id string, name, manufacturer. `RegisterEventCallbackInterface` can report connect and disconnect. |
 | ICA | `ICDeviceBrowser` and its delegate: devices added and removed as they come (`didAddDevice`, `didRemoveDevice`), asynchronously; each with a persistent id (to confirm). |
 
@@ -105,10 +105,13 @@ it, and 16-bit little-endian, both said in the type); whether to ask TWAIN and W
 or tiles (leaning: tiles, assembled by the backend, so `twain-dsm` stays TWAIN alone); what a native DIB's
 palette becomes.
 
-**Settled by the TWAIN spike:** `twain-dsm` hands over **tiles as TWAIN gives them** (each buffer's offsets,
+**Decided by the TWAIN spike:** `twain-dsm` hands over **tiles as TWAIN gives them** (each buffer's offsets,
 columns, rows, bytes per row and bytes written) and **the DIB's bytes as a block**; the `twain` backend
-assembles and decodes, checking each against its bounds before reading (`twain-spike`'s `image` module is the
-shape: tiles in any order, overlaps and gaps refused, 1-bit tiles that start or end within a byte refused).
+assembles and decodes, checking each against its bounds before reading. The sample only ever sent full-row
+strips, in order; tiles in two dimensions, out of order, are handled (`twain-spike`'s `image` module, with an
+`Assembler` that places each buffer as it comes and holds nothing but the image) but shown only by unit tests
+on made-up data, and which drivers send them is slice 12's. The refusals (overlaps, gaps, 1-bit tiles that
+start or end within a byte, an 8-bit color palette) are the backend's policy, not the sample's behaviour.
 **A DIB's palette is the backend's to apply:** a 1-bit palette black then white (the sample's) or white then
 black, read into the raw layout's polarity; an 8-bit gray palette read through (the sample's is an identity
 ramp); a color palette on 8 bits refused until a driver sends one. A memory transfer's 1-bit and gray polarity
@@ -191,7 +194,8 @@ sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks 
 feeders do, and whether `MSG_STOPFEEDER` helps where a driver has it.
 
 **Proposed, for slice 3 (for review; asked 2026-11-08 whether `in-progress` fits):** the cancel handle
-and the progress events through `in-progress`, his crate, which `scan-cleanup` already takes. A `Tracker` is the
+and the progress events through the `in-progress` crate (github.com/sheaf-pdf/in-progress), which
+`scan-cleanup` already takes. A `Tracker` is the
 `Send + Sync` handle any thread can cancel; each backend calls `check()` between pages, never within one, which
 is "finish the page in flight"; progress is `set_total(Some(page bytes), Unit::Bytes)` and `inc` per buffer;
 and the intake pipeline could give scanning and cleanup weighted children of one tracker. Two seams: its
@@ -216,7 +220,17 @@ cancels and requests to it. `scan-worker` sees one shape for all of them. **TWAI
 on a channel (`std::sync::mpsc`); requests come in as the application's own messages (`WM_APP` and up) posted to
 the TWAIN thread's window, taken in the loop and never forwarded to the DSM; the window procedure is
 `DefWindowProcW` itself, so no backend code runs in a callback frame (a panic there would abort the process),
-and the callback holds only atomics. A cancel posted from another thread was taken 5 ms later.
+and the callback holds only atomics. Only messages to the spike's own window are the spike's (matched by
+window, not by number: a source's own windows may use the same numbers), and a request that comes while the
+loop waits for the source is kept, not dropped. **Cancel, as shown:** a cancel queued before the enable was
+kept by the loop that waited for `MSG_XFERREADY` and ended the batch before any transfer (`MSG_RESET` from
+state 6, the source then accepting `MSG_DISABLEDS`); one posted during a memory transfer, at a pause the TWAIN
+thread made after the page's first buffer, ended the batch after that page. Nothing is taken during a native
+transfer or while the thread is inside a DSM call; how the backend serves requests while a driver is busy is
+slices 8 and 9's. **The state the application records isn't the source's:** the sample is in state 6 as
+soon as it signals inside `MSG_ENABLEDS`, before the application has heard, so a walk down after a failure
+there must allow for it; `twain-spike` rolls back as `TWAIN.cs` does (on `TWCC_SEQERROR`, from state 7's first
+step), and never unloads the DSM while a source is open, since the source holds the DSM's entry points.
 
 ## 9. The driver's own window
 
@@ -262,7 +276,7 @@ Each section's "To settle", gathered, with what settles it:
 | Whether SANE can stop after the page in flight | S0 slice 1, the `test` backend |
 | Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | **Settled, S0 slice 7:** tiles and the DIB's block; the backend assembles, decodes and applies the palette (section 3) |
 | How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S0 slice 9 |
-| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; the application's own messages posted to the window, never forwarded (section 8) |
+| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). Serving requests while a driver is busy, slices 8 and 9 |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
 | Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
 | The cancel handle and progress through `in-progress` (proposed) | S0 slice 3, for review |

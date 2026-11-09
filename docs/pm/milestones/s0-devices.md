@@ -63,9 +63,9 @@ S1 back: S1 can start once the Linux slices are done.
    - **Done here, 2026-11-08, ahead of slices 2 to 6** (ruled 2026-11-08; `slices/s0-7-twain-spike.md`): it
      installed silently, here and on `windows-latest`, and scanned with a hidden window in both bitnesses
      here: native and memory, two delivery modes, a pixel-for-pixel comparison, a cancel from another thread.
-     The seam note is revised (its TWAIN rows). CI's `twain-spike` job ran all seven scenarios on
-     `windows-latest` in both bitnesses, green on every push (TEST-3, done); the code review and its fixes
-     close the slice.
+     The seam note is revised (its TWAIN rows). CI's `twain-spike` job ran the scenarios on
+     `windows-latest` in both bitnesses, green on every push (TEST-3, done). The code review, its fixes, CI
+     green on them and approval close the slice.
 8. **twain-dsm:** bindings ported from `TWAINH.cs` (MIT; `TWAIN.cs`, beside it, wraps it) and checked
    against `twain.h` 2.5, the state
    machine, the STA thread and hidden top-level window, capabilities, transfers, condition codes; built for

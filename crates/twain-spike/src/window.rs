@@ -17,7 +17,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    KillTimer, MSG, PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SetTimer,
+    KillTimer, MSG, PM_NOREMOVE, PM_REMOVE, PeekMessageW, PostMessageW, RegisterClassExW, SetTimer,
     TranslateMessage, UnregisterClassW, WM_APP, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
@@ -29,8 +29,6 @@ pub const WM_SOURCE: u32 = WM_APP + 1;
 pub const WM_REQUEST: u32 = WM_APP + 2;
 /// The request a paused TWAIN thread is sent: stop after the page in flight.
 pub const REQUEST_CANCEL: usize = 1;
-/// The spike's own messages, never forwarded to the DSM.
-pub const SPIKE_MESSAGES: core::ops::RangeInclusive<u32> = WM_SOURCE..=WM_REQUEST;
 
 /// The calling thread made a single-threaded apartment, until dropped. Not
 /// `Send`: it belongs to the thread that entered it.
@@ -171,13 +169,22 @@ pub fn next_message() -> Option<MSG> {
     (got > 0).then_some(msg)
 }
 
-/// The next of the spike's own requests already queued, without waiting, and
-/// leaving every other message where it is.
-pub fn take_request() -> Option<MSG> {
+/// The next request queued for `window`, without waiting, leaving every other
+/// message, and other windows' `WM_REQUEST`s, where they are.
+pub fn take_request(window: HWND) -> Option<MSG> {
     let mut msg = empty_message();
-    // SAFETY: `msg` is writable; the filter takes only WM_REQUEST, removed.
-    let got = unsafe { PeekMessageW(&mut msg, null_mut(), WM_REQUEST, WM_REQUEST, PM_REMOVE) };
+    // SAFETY: `msg` is writable; the filter takes only WM_REQUEST to `window`,
+    // a window of this thread, removed.
+    let got = unsafe { PeekMessageW(&mut msg, window, WM_REQUEST, WM_REQUEST, PM_REMOVE) };
     (got != 0).then_some(msg)
+}
+
+/// Whether a request is queued for `window`, leaving it queued.
+pub fn request_queued(window: HWND) -> bool {
+    let mut msg = empty_message();
+    // SAFETY: `msg` is writable; the filter looks at WM_REQUEST to `window`, a
+    // window of this thread, and removes nothing.
+    unsafe { PeekMessageW(&mut msg, window, WM_REQUEST, WM_REQUEST, PM_NOREMOVE) != 0 }
 }
 
 /// A message translated and sent to its window's procedure.
@@ -191,8 +198,10 @@ pub fn dispatch(msg: &MSG) {
 
 /// Posts a message to a window, from any thread. False if it couldn't.
 pub fn post(window: usize, message: u32, wparam: usize, lparam: isize) -> bool {
-    // SAFETY: posting copies the arguments into the window's queue; a window
-    // that's gone makes the call fail, not misbehave.
+    // SAFETY: posting copies the arguments into the queue of the window's
+    // thread and touches no memory of ours. A window that's gone makes the call
+    // fail; a handle reused for another window would deliver it there, so
+    // callers post only to a window they know is alive.
     unsafe { PostMessageW(window as HWND, message, wparam, lparam) != 0 }
 }
 

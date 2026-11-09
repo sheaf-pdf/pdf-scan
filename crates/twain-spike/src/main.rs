@@ -15,7 +15,21 @@
 //! bitness of the build decides which DSM and which sources it sees.
 //!
 //! It is a spike: what it finds goes into twain-dsm's design, and it is
-//! deleted once twain-dsm's own tests replace it.
+//! deleted once twain-dsm's own tests replace it. It's never published.
+//!
+//! Its TWAIN definitions (`ffi.rs`) are ported from `TWAINH.cs` in the TWAIN
+//! Working Group's twain-cs, under Kodak Alaris's MIT notice, which the file
+//! keeps; and, as the TWAIN License asks of software based on the TWAIN
+//! Toolkit:
+//!
+//! > The TWAIN Toolkit is distributed as is. The developer and distributors of
+//! > the TWAIN Toolkit expressly disclaim all implied, express or statutory
+//! > warranties including, without limitation, the implied warranties of
+//! > merchantability, noninfringement of third party rights and fitness for a
+//! > particular purpose. Neither the developers nor the distributors will be
+//! > liable for damages, whether direct, indirect, special, incidental, or
+//! > consequential, as a result of the reproduction, modification,
+//! > distribution or other use of the TWAIN Toolkit.
 
 // Only the modules that call Windows or the DSM may hold unsafe code.
 #![deny(unsafe_code)]

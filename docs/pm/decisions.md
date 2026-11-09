@@ -125,5 +125,5 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   different machine, different paths, different build tools; I'm not sure how much value the old workflow
   would have here. we just want a plan with 2-6 steps depending on how complicated, then an adversarial
   review, then the implementation steps, then a set of reviewers in parallel and a fix stage"). A commit per
-  step, pushed with each ("commit and push on each step and continue"), on a branch with a draft pull
+  step, pushed with each ("commit and push on each step and continue"), on a branch with a pull
   request, so CI runs as the slice goes.

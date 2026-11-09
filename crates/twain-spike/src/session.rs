@@ -1,10 +1,17 @@
 //! A TWAIN session on the TWAIN thread: the state it's in, the identities, and
 //! the triplets the scenarios call, each answer checked against what's
 //! expected and reported.
+//!
+//! The state it keeps is the application's record, moved as each triplet
+//! succeeds. The source can be further along: the sample is in state 6 as soon
+//! as it signals inside `MSG_ENABLEDS`, before the application has heard. The
+//! walk down allows for that.
 
 use core::ffi::c_void;
 use core::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{GlobalFree, HWND};
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
@@ -14,9 +21,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{MSG, WM_TIMER};
 use crate::container::{self, Current};
 use crate::dsm::{Allocator, Dsm};
 use crate::ffi::*;
-use crate::image::{self, Tile};
+use crate::image::{self, Assembler, Format, Shape};
 use crate::twain_thread::Out;
-use crate::window::{self, SPIKE_MESSAGES, WM_SOURCE};
+use crate::window::{self, WM_REQUEST, WM_SOURCE};
 
 /// Who a triplet goes to, so its condition code is asked of the same party.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,24 +47,25 @@ pub enum Mode {
 /// the main thread's 30-second watchdog.
 const SOURCE_WAIT_MS: u32 = 20_000;
 const SOURCE_TIMER: usize = 1;
+/// How long a paused TWAIN thread waits for the main thread's request.
+const PAUSE: Duration = Duration::from_secs(10);
 
-/// The largest native transfer block taken: the image cap and a header.
-const MAX_DIB_BYTES: usize = image::MAX_BYTES as usize + (1 << 16);
 /// The largest memory transfer buffer the spike allocates.
 const MAX_BUFFER: u32 = 64 << 20;
 /// The most buffers one memory transfer may take.
 const MAX_TILES: usize = 1 << 20;
 
-// What the callback knows: the window it posts to, whether `MSG_ENABLEDS` is
-// on the stack, and the thread it last ran on. Atomics, so the callback does
-// nothing that can panic.
+// What the callback knows: the window it posts to (0 when no source has it
+// registered), and whether `MSG_ENABLEDS` is on the stack. Atomics, so the
+// callback does nothing that can panic.
 static CALLBACK_WINDOW: AtomicUsize = AtomicUsize::new(0);
 static ENABLING: AtomicBool = AtomicBool::new(false);
-static CALLBACK_THREAD: AtomicU32 = AtomicU32::new(0);
 
-/// The application's callback: records what it was told and posts it to the
-/// window, never calling the DSM; returns `TWRC_SUCCESS`, since the DSM hands
-/// the return to the source, which fails the enable on anything else.
+/// The application's callback: posts what it was told to the window, never
+/// calling the DSM, and returns `TWRC_SUCCESS`, since the DSM hands the return
+/// to the source, which fails the enable on anything else. The post carries
+/// the message and whether `MSG_ENABLEDS` was on the stack in `wParam`, and the
+/// thread it ran on in `lParam`, so each message keeps its own facts.
 unsafe extern "system" fn callback(
     _origin: *mut TW_IDENTITY,
     _dest: *mut TW_IDENTITY,
@@ -66,19 +74,21 @@ unsafe extern "system" fn callback(
     msg: u16,
     _data: *mut c_void,
 ) -> u16 {
-    // SAFETY: no arguments; always succeeds.
-    CALLBACK_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
-    let inside = ENABLING.load(Ordering::SeqCst);
-    window::post(
-        CALLBACK_WINDOW.load(Ordering::SeqCst),
-        WM_SOURCE,
-        usize::from(msg),
-        isize::from(inside),
-    );
+    let window = CALLBACK_WINDOW.load(Ordering::SeqCst);
+    if window != 0 {
+        // SAFETY: no arguments; always succeeds.
+        let thread = unsafe { GetCurrentThreadId() };
+        let inside = ENABLING.load(Ordering::SeqCst);
+        let wparam = usize::from(msg) | (usize::from(inside) << 16);
+        window::post(window, WM_SOURCE, wparam, thread as isize);
+    }
     TWRC_SUCCESS
 }
 
 pub struct Session {
+    /// Declared first, so it's dropped before the identities on the way out;
+    /// after a failed walk down it's kept loaded instead (see `Drop`).
+    dsm: Option<Dsm>,
     out: Out,
     hwnd: HWND,
     state: u8,
@@ -87,7 +97,12 @@ pub struct Session {
     app: Box<TW_IDENTITY>,
     /// The open source's identity, likewise.
     source: Option<Box<TW_IDENTITY>>,
-    dsm: Option<Dsm>,
+    /// The spike's own requests, taken off the queue and not yet acted on.
+    requests: VecDeque<usize>,
+    /// How many of them the message loop kept while waiting for the source.
+    kept_by_loop: usize,
+    /// The condition code of the last failure reported, its party's.
+    last_condition: Option<u16>,
 }
 
 impl Session {
@@ -109,12 +124,15 @@ impl Session {
             ProductName: TW_STR32::new("twain-spike"),
         };
         Session {
+            dsm: None,
             out,
             hwnd,
             state: 1,
             app: Box::new(app),
             source: None,
-            dsm: None,
+            requests: VecDeque::new(),
+            kept_by_loop: 0,
+            last_condition: None,
         }
     }
 
@@ -122,9 +140,14 @@ impl Session {
         &self.out
     }
 
-    /// The TWAIN state, 1 to 7.
+    /// The TWAIN state, 1 to 7, as the application has recorded it.
     pub fn state(&self) -> u8 {
         self.state
+    }
+
+    /// How many requests the message loop kept while waiting for the source.
+    pub fn kept_by_loop(&self) -> usize {
+        self.kept_by_loop
     }
 
     /// Reports a failure unless `ok`; returns `ok`.
@@ -135,12 +158,9 @@ impl Session {
         ok
     }
 
-    /// Records a move to state `to`: one step at a time, but for `MSG_ENDXFER`
-    /// with nothing pending, which goes from 7 to 5.
+    /// Records a move to state `to`, in the application's record.
     fn moved(&mut self, to: u8) {
         let from = self.state;
-        let legal = from.abs_diff(to) == 1 || (from == 7 && to == 5);
-        self.check(legal, format!("state {from} -> {to} skips a state"));
         self.out.line(format!("state {from} -> {to}"));
         self.state = to;
     }
@@ -193,14 +213,8 @@ impl Session {
     /// Down to state 1 from wherever the session is, a step at a time: what
     /// every scenario ends with, and what a failed one is left to.
     pub fn walk_down(&mut self) {
-        if self.state == 7 {
-            self.end_transfer();
-        }
-        if self.state == 6 {
-            self.reset();
-        }
-        if self.state == 5 {
-            self.disable();
+        if self.state >= 5 {
+            self.roll_back_to_4();
         }
         if self.state == 4 {
             self.close_source();
@@ -210,6 +224,46 @@ impl Session {
         }
         if self.state == 2 {
             self.unload_dsm();
+        }
+    }
+
+    /// From state 5, 6 or 7 to 4. A step the source refuses with
+    /// `TWCC_SEQERROR` means it's further along than recorded, so, as
+    /// `TWAIN.cs`'s rollback does, the walk starts again from state 7's first
+    /// step: `MSG_ENDXFER`, `MSG_RESET`, then `MSG_DISABLEDS`.
+    fn roll_back_to_4(&mut self) {
+        if self.state == 7 {
+            self.end_transfer();
+        }
+        if self.state == 6 {
+            self.reset();
+        }
+        if self.state == 5 {
+            self.disable();
+        }
+        if self.state > 4 && self.last_condition == Some(TWCC_SEQERROR) {
+            self.out.line("the source refused a step out of sequence: it's further along than recorded; rolling back from state 7");
+            for (name, msg) in [("MSG_ENDXFER", MSG_ENDXFER), ("MSG_RESET", MSG_RESET)] {
+                let mut pending = TW_PENDINGXFERS::default();
+                // SAFETY: DAT_PENDINGXFERS takes a TW_PENDINGXFERS, `pending`,
+                // which lives on this frame for the call.
+                let rc = unsafe {
+                    self.triplet(
+                        Party::Source,
+                        DG_CONTROL,
+                        DAT_PENDINGXFERS,
+                        msg,
+                        (&raw mut pending).cast(),
+                    )
+                };
+                self.out.line(format!(
+                    "rollback: DAT_PENDINGXFERS/{name}: {}",
+                    rc_name(rc)
+                ));
+            }
+            self.out.line("state taken as 5, the rollback done");
+            self.state = 5;
+            self.disable();
         }
     }
 
@@ -265,7 +319,9 @@ impl Session {
                 format!("an entry point is null: {present:?}"),
             );
             let dsm = self.dsm.as_mut().expect("the DSM is loaded in state 3");
-            let own = dsm.take_entry_points(&ep);
+            // SAFETY: `ep` is this DSM's own answer to DAT_ENTRYPOINT, just
+            // given; the session keeps the DSM loaded while it allocates.
+            let own = unsafe { dsm.take_entry_points(&ep) };
             self.out.line(if own {
                 "containers: the DSM's memory functions"
             } else {
@@ -296,6 +352,7 @@ impl Session {
         true
     }
 
+    /// How containers are allocated; `GlobalAlloc` before the DSM is open.
     fn allocator(&self) -> Allocator {
         self.dsm.as_ref().map_or(Allocator::GLOBAL, Dsm::allocator)
     }
@@ -305,7 +362,9 @@ impl Session {
     pub fn memory_round_trip(&mut self) {
         const LEN: usize = 64;
         let mem = self.allocator();
-        let handle = mem.alloc(LEN as u32);
+        // SAFETY: the DSM that gave `mem` is loaded (state 3) for this call
+        // and the ones below.
+        let handle = unsafe { mem.alloc(LEN as u32) };
         if !self.check(!handle.is_null(), "allocating 64 bytes failed") {
             return;
         }
@@ -374,8 +433,12 @@ impl Session {
 
     // States 3 and 4: the source opened, its capabilities.
 
-    /// State 3 to 4: the source with this identity opened.
+    /// State 3 to 4: the source with this identity opened. Refused if one is
+    /// open already.
     pub fn open_source(&mut self, id: &TW_IDENTITY) -> bool {
+        if !self.check(self.source.is_none(), "a source is open already") {
+            return false;
+        }
         let source: *mut TW_IDENTITY = &raw mut **self.source.insert(Box::new(*id));
         // SAFETY: MSG_OPENDS takes the source's identity, which the DSM
         // completes; it's boxed in `self.source`, so it never moves.
@@ -416,6 +479,7 @@ impl Session {
         if !self.expect("DAT_IDENTITY/MSG_CLOSEDS", rc, TWRC_SUCCESS, Party::Dsm) {
             return false;
         }
+        CALLBACK_WINDOW.store(0, Ordering::SeqCst);
         self.source = None;
         self.moved(3);
         true
@@ -476,7 +540,9 @@ impl Session {
     fn cap_set(&mut self, cap: u16, item_type: u16, raw: u32) -> Option<u16> {
         let mem = self.allocator();
         let bytes = container::onevalue(item_type, raw);
-        let handle = mem.alloc(bytes.len() as u32);
+        // SAFETY: the DSM that gave `mem` is loaded (a source is open) for
+        // this call and the ones below.
+        let handle = unsafe { mem.alloc(bytes.len() as u32) };
         if !self.check(!handle.is_null(), "allocating a container failed") {
             return None;
         }
@@ -575,19 +641,24 @@ impl Session {
             return (rc, None);
         }
         let mem = self.allocator();
-        // SAFETY: the source allocated `handle` with the DSM's allocator and
-        // the application now owns it.
+        // SAFETY: the source allocated `handle` with the DSM's allocator, the
+        // DSM is loaded, and the application now owns the block.
         let size = unsafe { mem.size(handle) };
-        // SAFETY: as above; locked once, unlocked once.
+        // SAFETY: as above; locked once here, unlocked once below if it
+        // locked.
         let p = unsafe { mem.lock(handle) }.cast::<u8>();
-        let decoded = if p.is_null() || size == 0 {
-            Err("its container couldn't be locked or measured".to_owned())
+        let decoded = if p.is_null() {
+            Err("its container couldn't be locked".to_owned())
         } else {
-            // SAFETY: `p` points to the locked block of `size` bytes, as
-            // GlobalSize measured it; it's read, then unlocked.
-            let bytes = unsafe { core::slice::from_raw_parts(p, size) };
-            let decoded = container::decode(contype, bytes).map_err(|e| e.to_string());
-            // SAFETY: locked above, unlocked once; `bytes` isn't used after.
+            let decoded = if size == 0 {
+                Err("its container couldn't be measured".to_owned())
+            } else {
+                // SAFETY: `p` points to the locked block of `size` bytes, as
+                // GlobalSize measured it; `bytes` isn't used after the unlock.
+                let bytes = unsafe { core::slice::from_raw_parts(p, size) };
+                container::decode(contype, bytes).map_err(|e| e.to_string())
+            };
+            // SAFETY: locked above, unlocked once.
             unsafe { mem.unlock(handle) };
             decoded
         };
@@ -599,7 +670,7 @@ impl Session {
     // States 4 to 7: enabled, transferring.
 
     /// State 4 to 5: the source enabled without its UI. The sample signals
-    /// `MSG_XFERREADY` within this call.
+    /// `MSG_XFERREADY` within this call, and is in state 6 when it returns.
     pub fn enable(&mut self) -> bool {
         let mut ui = TW_USERINTERFACE {
             ShowUI: 0,
@@ -679,15 +750,25 @@ impl Session {
         got
     }
 
+    /// The message loop, until the source says something or `ms` pass. Only
+    /// the spike's own window's messages are the spike's: its timer, the
+    /// callback's posts and the main thread's requests, which are kept for the
+    /// scenario, never dropped. Everything else is offered to the source in
+    /// event mode, and dispatched.
     fn source_message(&mut self, mode: Mode, ms: u32, required: bool) -> Option<u16> {
-        window::set_timer(self.hwnd, SOURCE_TIMER, ms);
+        if !window::set_timer(self.hwnd, SOURCE_TIMER, ms) {
+            self.out
+                .fail("SetTimer failed: no deadline for the source's message");
+            return None;
+        }
         let got = loop {
             let Some(mut msg) = window::next_message() else {
                 self.out
                     .fail("the message loop ended (WM_QUIT, or GetMessageW failed)");
                 break None;
             };
-            if msg.message == WM_TIMER && msg.wParam == SOURCE_TIMER {
+            let ours = msg.hwnd == self.hwnd;
+            if ours && msg.message == WM_TIMER && msg.wParam == SOURCE_TIMER {
                 if required {
                     self.out.fail(format!(
                         "no message from the source in {} seconds",
@@ -696,26 +777,33 @@ impl Session {
                 }
                 break None;
             }
-            if msg.message == WM_SOURCE {
-                let twmsg = msg.wParam as u16;
-                let thread = CALLBACK_THREAD.load(Ordering::SeqCst);
+            if ours && msg.message == WM_SOURCE {
+                let twmsg = (msg.wParam & 0xffff) as u16;
+                let inside = (msg.wParam >> 16) & 1 != 0;
+                let thread = msg.lParam as u32;
                 let on = if thread == window::thread_id() {
                     "the TWAIN thread".to_owned()
                 } else {
                     format!("thread {thread}")
                 };
-                let when = if msg.lParam != 0 { "inside" } else { "after" };
+                let when = if inside { "inside" } else { "after" };
                 self.out.line(format!(
                     "{} via the callback, {when} MSG_ENABLEDS, on {on}",
                     msg_name(twmsg)
                 ));
+                self.check(
+                    mode == Mode::Callback,
+                    "a callback delivered a message in event mode",
+                );
                 break Some(twmsg);
             }
-            if SPIKE_MESSAGES.contains(&msg.message) {
+            if ours && msg.message == WM_REQUEST {
                 self.out.line(format!(
-                    "request {} set aside while waiting for the source",
+                    "request {} kept: it came while waiting for the source",
                     msg.wParam
                 ));
+                self.requests.push_back(msg.wParam);
+                self.kept_by_loop += 1;
                 continue;
             }
             if mode == Mode::Event && (5..=7).contains(&self.state) {
@@ -768,6 +856,32 @@ impl Session {
         (rc, event.TWMessage)
     }
 
+    /// The next of the spike's requests: one the loop kept, else one queued.
+    pub fn take_request(&mut self) -> Option<usize> {
+        self.requests
+            .pop_front()
+            .or_else(|| window::take_request(self.hwnd).map(|m| m.wParam))
+    }
+
+    /// Paused before the batch: the main thread told, then, for up to 10
+    /// seconds, until a request is queued for the window, left queued for the
+    /// message loop to come on.
+    pub fn await_request_queued(&mut self) -> bool {
+        self.out
+            .line("paused before enabling, until a request is queued");
+        self.out.paused(0);
+        let started = Instant::now();
+        while started.elapsed() < PAUSE {
+            if window::request_queued(self.hwnd) {
+                self.out.line("a request is queued; enabling");
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.out.fail("no request queued in 10 seconds");
+        false
+    }
+
     /// State 5 to 6, on `MSG_XFERREADY`.
     pub fn transfer_ready(&mut self) {
         self.moved(6);
@@ -805,6 +919,13 @@ impl Session {
                 (&raw mut handle).cast(),
             )
         };
+        if rc == TWRC_CANCEL {
+            self.moved(7);
+            self.out.fail(
+                "DAT_IMAGENATIVEXFER/MSG_GET: TWRC_CANCEL, the source cancelled the transfer",
+            );
+            return None;
+        }
         if !self.expect(
             "DAT_IMAGENATIVEXFER/MSG_GET",
             rc,
@@ -820,34 +941,48 @@ impl Session {
         // SAFETY: on Windows the handle is a GlobalAlloc block holding a packed
         // DIB, now the application's.
         let size = unsafe { GlobalSize(handle) };
-        // SAFETY: as above; locked once, unlocked once below.
+        // SAFETY: as above; locked once here, unlocked once below if it locked.
         let p = unsafe { GlobalLock(handle) }.cast::<u8>().cast_const();
-        let bytes = if p.is_null() || size == 0 || size > MAX_DIB_BYTES {
-            self.out
-                .fail(format!("the DIB's block: {size} bytes, locked at {p:?}"));
+        let bytes = if p.is_null() {
+            self.out.fail("the DIB's block couldn't be locked");
             None
         } else {
+            let fits = size != 0 && size as u64 <= image::MAX_DIB_BYTES;
             // SAFETY: `p` points to the locked block of `size` bytes, as
-            // GlobalSize measured it; it's copied, then unlocked.
-            let bytes = unsafe { core::slice::from_raw_parts(p, size) }.to_vec();
+            // GlobalSize measured it; it's copied before the unlock.
+            let bytes = fits.then(|| unsafe { core::slice::from_raw_parts(p, size) }.to_vec());
             // SAFETY: locked above, unlocked once.
             unsafe { GlobalUnlock(handle) };
-            Some(bytes)
+            if bytes.is_none() {
+                self.out.fail(format!(
+                    "the DIB's block is {size} bytes, past the cap or empty"
+                ));
+            }
+            bytes
         };
         // SAFETY: the application owns the DIB's block and frees it once.
         unsafe { GlobalFree(handle) };
         bytes
     }
 
-    /// A memory transfer (state 6 to 7): every buffer's tile, in order. Given a
-    /// page number, it pauses after the first buffer: it tells the main thread, then takes only the spike's own
-    /// requests for up to 10 seconds, and goes on with the transfer whatever
-    /// comes. The tiles, and the request that came, if one did.
-    pub fn memory_pausing(
+    /// A memory transfer (state 6 to 7) of a `width` by `height` image in
+    /// `format`, each buffer placed in the image as it comes. Given a page
+    /// number, it pauses after the first buffer: it tells the main thread, then
+    /// takes only the spike's own requests for up to 10 seconds, keeps what
+    /// came for the page's end, and goes on with the transfer. The image so
+    /// far, and each buffer's shape.
+    pub fn memory(
         &mut self,
+        (width, height, format): (u32, u32, Format),
         pause_in_page: Option<usize>,
-    ) -> Option<(Vec<Tile>, Option<usize>)> {
-        let mut request = None;
+    ) -> Option<(Assembler, Vec<Shape>)> {
+        let mut assembler = match Assembler::new(width, height, format) {
+            Ok(a) => a,
+            Err(e) => {
+                self.out.fail(format!("the image described: {e}"));
+                return None;
+            }
+        };
         let mut setup = TW_SETUPMEMXFER::default();
         // SAFETY: DAT_SETUPMEMXFER writes a TW_SETUPMEMXFER into `setup`, which
         // lives on this frame for the call.
@@ -880,7 +1015,7 @@ impl Session {
             "memory buffers: min {min}, max {max}, preferred {preferred}: {size} used"
         ));
         let mut buffer = vec![0u8; size as usize];
-        let mut tiles = Vec::new();
+        let mut shapes = Vec::new();
         loop {
             let mut mx = TW_IMAGEMEMXFER {
                 Compression: TWON_DONTCARE16,
@@ -908,6 +1043,15 @@ impl Session {
                     (&raw mut mx).cast(),
                 )
             };
+            if rc == TWRC_CANCEL {
+                if self.state == 6 {
+                    self.moved(7);
+                }
+                self.out.fail(
+                    "DAT_IMAGEMEMXFER/MSG_GET: TWRC_CANCEL, the source cancelled the transfer",
+                );
+                return None;
+            }
             if rc != TWRC_SUCCESS && rc != TWRC_XFERDONE {
                 self.expect("DAT_IMAGEMEMXFER/MSG_GET", rc, TWRC_SUCCESS, Party::Source);
                 return None;
@@ -922,34 +1066,62 @@ impl Session {
             ) {
                 return None;
             }
-            let shape = (mx.XOffset, mx.YOffset, mx.Columns, mx.Rows, mx.BytesPerRow);
-            match Tile::from_buffer(shape, mx.BytesWritten, &buffer) {
-                Ok(tile) => {
-                    tiles.push(tile);
-                    if let (1, Some(page)) = (tiles.len(), pause_in_page) {
-                        request = self.pause(page);
-                    }
-                }
-                Err(e) => {
-                    self.out.fail(format!("buffer {}: {e}", tiles.len()));
-                    return None;
-                }
+            let shape = Shape {
+                x: mx.XOffset,
+                y: mx.YOffset,
+                columns: mx.Columns,
+                rows: mx.Rows,
+                bytes_per_row: mx.BytesPerRow,
+            };
+            let placed = image::written(mx.BytesWritten, &buffer)
+                .and_then(|bytes| assembler.place(shape, bytes).map_err(|e| e.to_string()));
+            if let Err(e) = placed {
+                self.out.fail(format!("buffer {}: {e}", shapes.len()));
+                return None;
+            }
+            shapes.push(shape);
+            if let (1, Some(page)) = (shapes.len(), pause_in_page) {
+                self.pause(page);
             }
             if rc == TWRC_XFERDONE {
                 self.out.line(format!(
                     "DAT_IMAGEMEMXFER/MSG_GET: TWRC_SUCCESS {} times, then TWRC_XFERDONE",
-                    tiles.len() - 1
+                    shapes.len() - 1
                 ));
                 break;
             }
             if !self.check(
-                tiles.len() < MAX_TILES,
+                shapes.len() < MAX_TILES,
                 format!("more than {MAX_TILES} buffers: stopped"),
             ) {
                 return None;
             }
         }
-        Some((tiles, request))
+        Some((assembler, shapes))
+    }
+
+    /// Paused within page `page`: the main thread told, then the spike's own
+    /// requests taken, nothing else dispatched, for up to 10 seconds. What
+    /// came is kept for the page's end.
+    fn pause(&mut self, page: usize) {
+        self.out.line(format!(
+            "page {page}: paused after its first buffer, waiting for a request"
+        ));
+        self.out.paused(page);
+        let started = Instant::now();
+        while started.elapsed() < PAUSE {
+            if let Some(msg) = window::take_request(self.hwnd) {
+                self.out.line(format!(
+                    "page {page}: request {} came during the page; kept for its end",
+                    msg.wParam
+                ));
+                self.requests.push_back(msg.wParam);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.out
+            .fail(format!("page {page}: no request in 10 seconds"));
     }
 
     /// The extended image info asked for (state 7); the sample refuses.
@@ -1007,31 +1179,6 @@ impl Session {
         self.out.line(format!("pending: {}", pending_text(count)));
         self.moved(if count == 0 { 5 } else { 6 });
         Some(count)
-    }
-
-    /// Paused within page `page`: the main thread told, then the spike's own
-    /// requests taken, without dispatching anything else, for up to 10
-    /// seconds. The request's `wParam`, if one came.
-    fn pause(&mut self, page: usize) -> Option<usize> {
-        self.out.line(format!(
-            "page {page}: paused after its first buffer, waiting for a request"
-        ));
-        self.out.paused(page);
-        let started = std::time::Instant::now();
-        while started.elapsed() < std::time::Duration::from_secs(10) {
-            if let Some(msg) = window::take_request() {
-                let waited = started.elapsed().as_millis();
-                self.out.line(format!(
-                    "page {page}: request {} taken after {waited} ms; the page goes on",
-                    msg.wParam
-                ));
-                return Some(msg.wParam);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        self.out
-            .fail(format!("page {page}: no request in 10 seconds"));
-        None
     }
 
     /// `MSG_STOPFEEDER` (state 6), which the sample refuses.
@@ -1139,39 +1286,57 @@ impl Session {
         (rc == TWRC_SUCCESS).then_some(status.ConditionCode)
     }
 
+    /// A failure's condition codes, each asked once (asking clears it), its
+    /// party's kept for the walk down. For a source triplet the DSM's too, and
+    /// first: the DSM refuses some itself (a callback it won't register, a
+    /// source it doesn't have open) and keeps its own code, which the source
+    /// can't report, and the source's own is asked through the DSM.
+    fn conditions(&mut self, party: Party) -> (Option<u16>, String) {
+        let named = |cc: Option<u16>| cc.map_or("unavailable".to_owned(), cc_name);
+        let (own, words) = match party {
+            Party::Dsm => {
+                let own = self.condition(Party::Dsm);
+                (own, named(own))
+            }
+            Party::Source => {
+                let dsm = self.condition(Party::Dsm);
+                let own = self.condition(Party::Source);
+                (own, format!("source {}, DSM {}", named(own), named(dsm)))
+            }
+        };
+        self.last_condition = own;
+        (own, words)
+    }
+
     /// Reports a triplet's answer, failing if it isn't `want`; on a failure the
-    /// condition code is asked for and reported.
+    /// condition codes are asked for and reported.
     fn expect(&mut self, what: &str, rc: u16, want: u16, party: Party) -> bool {
         if rc == want {
             self.out.line(format!("{what}: {}", rc_name(rc)));
             return true;
         }
-        let cc = self
-            .condition(party)
-            .map_or("condition code unavailable".to_owned(), cc_name);
+        let (_, codes) = self.conditions(party);
         self.out.fail(format!(
-            "{what}: {} ({cc}), expected {}",
+            "{what}: {} ({codes}), expected {}",
             rc_name(rc),
             rc_name(want)
         ));
         false
     }
 
-    /// Reports a triplet that should fail with condition code `want`.
+    /// Reports a triplet that should fail with its party's condition code
+    /// `want`.
     fn expect_failure(&mut self, what: &str, rc: u16, want: u16, party: Party) -> bool {
-        let cc = (rc == TWRC_FAILURE)
-            .then(|| self.condition(party))
-            .flatten();
-        if rc == TWRC_FAILURE && cc == Some(want) {
+        let (own, codes) = self.conditions(party);
+        if rc == TWRC_FAILURE && own == Some(want) {
             self.out.line(format!(
                 "{what}: TWRC_FAILURE, {}, as expected",
                 cc_name(want)
             ));
             return true;
         }
-        let got = cc.map_or(String::new(), |c| format!(" ({})", cc_name(c)));
         self.out.fail(format!(
-            "{what}: {}{got}, expected TWRC_FAILURE with {}",
+            "{what}: {} ({codes}), expected TWRC_FAILURE with {}",
             rc_name(rc),
             cc_name(want)
         ));
@@ -1180,9 +1345,23 @@ impl Session {
 }
 
 impl Drop for Session {
-    /// Walks down whatever a failed scenario left up.
+    /// Walks down whatever a failed scenario left up. If it can't get below
+    /// state 3, the DSM stays loaded and the identities are kept: an open or
+    /// enabled source holds the DSM's entry points, and unloading under it
+    /// would leave the next call into the source calling unmapped code.
     fn drop(&mut self) {
         self.walk_down();
+        if self.state > 2 {
+            self.out.fail(format!(
+                "left in state {}: the DSM stays loaded and the identities are kept, not freed",
+                self.state
+            ));
+            std::mem::forget(self.dsm.take());
+            let _ = Box::leak(std::mem::take(&mut self.app));
+            if let Some(source) = self.source.take() {
+                let _ = Box::leak(source);
+            }
+        }
     }
 }
 

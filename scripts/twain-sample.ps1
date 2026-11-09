@@ -57,6 +57,10 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+# One full path for every caller: PowerShell's cmdlets resolve a relative path
+# against its location, .NET and msiexec against the process's directory, and
+# the two differ once a session has changed directory.
+$CacheDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CacheDir)
 # Windows PowerShell's Invoke-WebRequest is many times slower while it draws a progress bar.
 $ProgressPreference = 'SilentlyContinue'
 

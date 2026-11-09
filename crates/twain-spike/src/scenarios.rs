@@ -2,8 +2,8 @@
 
 use crate::container::Value;
 use crate::ffi::*;
-use crate::image::{self, DibFacts, Format, Image, Polarity, Tile};
-use crate::session::{Mode, Session, describe};
+use crate::image::{self, DibFacts, Format, Image, Polarity, Shape};
+use crate::session::{Mode, Session, describe, pending_text};
 use crate::window::REQUEST_CANCEL;
 
 pub struct Scenario {
@@ -46,8 +46,13 @@ pub const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "cancel",
-        about: "a cancel posted from the main thread during page 1: the page finished, nothing more transferred",
+        about: "a cancel posted from the main thread during page 1: the page finished, then the batch ended",
         run: cancel,
+    },
+    Scenario {
+        name: "cancel-early",
+        about: "a cancel queued before the enable, kept by the message loop, ending the batch before any transfer",
+        run: cancel_early,
     },
 ];
 
@@ -56,17 +61,21 @@ const SAMPLE_MANUFACTURER: &str = "TWAIN Working Group";
 const SAMPLE_PRODUCT: &str = "TWAIN2 Software Scanner";
 
 /// What `CAP_XFERCOUNT` in the environment makes the sample feed: that many if
-/// it's a positive number, 2 if it's unset, and `None`, not judged, if it's
-/// anything else (0 or less is a random count).
-fn expected_pages() -> Option<u32> {
+/// it's a positive number, 2 if it's unset. Anything else is refused: 0 or
+/// less draws a random count, 0 and 1 included, which the checks can't judge.
+fn expected_pages() -> Result<u32, String> {
     match std::env::var("CAP_XFERCOUNT") {
-        Err(std::env::VarError::NotPresent) => Some(2),
+        Err(std::env::VarError::NotPresent) => Ok(2),
         Ok(v) => v
             .trim()
             .parse::<u32>()
             .ok()
-            .filter(|&n| (1..=1000).contains(&n)),
-        Err(_) => None,
+            .filter(|&n| (1..=1000).contains(&n))
+            .ok_or(format!(
+                "CAP_XFERCOUNT is {v:?}: it must be unset or a page count from 1 to 1000, \
+                 since 0 or less makes the sample draw a random count"
+            )),
+        Err(e) => Err(format!("CAP_XFERCOUNT: {e}")),
     }
 }
 
@@ -125,6 +134,32 @@ struct Run {
     /// The capability `CAP_XFERCOUNT`: -1 for all the feeder has.
     count: i16,
     pixel_type: Option<u16>,
+    /// The page whose memory transfer pauses after its first buffer for the
+    /// main thread's request.
+    pause_in_page: Option<usize>,
+    /// Whether to wait, before enabling, until the main thread has queued a
+    /// request.
+    request_before_enable: bool,
+}
+
+impl Run {
+    fn plain(mechanism: u16, mode: Mode, count: i16) -> Run {
+        Run {
+            mechanism,
+            mode,
+            count,
+            pixel_type: None,
+            pause_in_page: None,
+            request_before_enable: false,
+        }
+    }
+}
+
+/// What a batch gave.
+struct Batch {
+    pages: Vec<Page>,
+    /// Where a cancel ended it: after this many pages.
+    cancelled_after: Option<usize>,
 }
 
 /// A batch begun, from state 3 to 6: the source opened, its capabilities set
@@ -215,6 +250,9 @@ fn prepare(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Polarity>
         TWCC_CAPUNSUPPORTED,
     );
 
+    if run.request_before_enable && !s.await_request_queued() {
+        return None;
+    }
     if !s.enable() {
         return None;
     }
@@ -231,27 +269,87 @@ fn prepare(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Polarity>
 }
 
 /// One batch, from state 3 to 3: begun, every page transferred while the count
-/// isn't 0, disabled, closed. The pages, or `None` if the batch failed (the
-/// session walks down).
-fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
+/// isn't 0, disabled, closed. A cancel request ends it at the next point the
+/// source is in state 6: before the first transfer, or after a page's
+/// `MSG_ENDXFER`. The pages, or `None` if the batch failed (the session walks
+/// down). With `expected`, the pending count is checked after each page.
+fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run, expected: Option<u32>) -> Option<Batch> {
     let polarity = prepare(s, sample, run)?;
     let mut pages = Vec::new();
-    loop {
-        let (page, _) = transfer_one(s, run.mechanism, polarity, pages.len() + 1, false)?;
+    let mut cancelled_after = None;
+    if let Some(request) = s.take_request() {
+        cancelled_after = Some(cancel_batch(s, run.mode, request, 0)?);
+    }
+    while cancelled_after.is_none() {
+        let n = pages.len() + 1;
+        let page = transfer_one(s, run.mechanism, polarity, n, run.pause_in_page == Some(n))?;
         pages.push(page);
         s.ext_image_info();
-        match s.end_transfer() {
-            Some(0) => break,
-            Some(_) if pages.len() >= 50 => {
-                s.out().fail("50 pages and still pending: stopped");
-                s.reset();
-                break;
-            }
-            Some(_) => {}
-            None => return None,
+        let pending = s.end_transfer()?;
+        if let Some(want) = pending_expected(run.count, expected, n) {
+            s.check(
+                pending == want,
+                format!(
+                    "pending after page {n}: {}, expected {}",
+                    pending_text(pending),
+                    pending_text(want)
+                ),
+            );
+        }
+        if pending == 0 {
+            break;
+        }
+        if let Some(request) = s.take_request() {
+            cancelled_after = Some(cancel_batch(s, run.mode, request, n)?);
+        } else if n >= 50 {
+            s.out().fail("50 pages and still pending: stopped");
+            s.reset();
+            break;
         }
     }
     if !s.disable() || !s.close_source() {
+        return None;
+    }
+    Some(Batch {
+        pages,
+        cancelled_after,
+    })
+}
+
+/// The pending count the sample gives after page `n`: with the capability -1
+/// and `expected` pages, "don't know" until the last, then 0; with a count of
+/// 1, 0. `None` where it isn't known.
+fn pending_expected(count: i16, expected: Option<u32>, n: usize) -> Option<u16> {
+    match (count, expected) {
+        (-1, Some(e)) if n < e as usize => Some(TWON_DONTCARE16),
+        (-1, Some(e)) if n == e as usize => Some(0),
+        (1, _) => Some(0),
+        _ => None,
+    }
+}
+
+/// A request acted on in state 6, after `pages` pages: a cancel tries
+/// `MSG_STOPFEEDER` (the sample refuses it), `MSG_RESET`s the batch (6 to 5),
+/// and checks the source says nothing more; the disable that follows shows
+/// it's in state 5, since the sample refuses `MSG_DISABLEDS` in any other.
+/// `pages`, or `None` if it failed.
+fn cancel_batch(s: &mut Session, mode: Mode, request: usize, pages: usize) -> Option<usize> {
+    if !s.check(
+        request == REQUEST_CANCEL,
+        format!("request {request}, not a cancel"),
+    ) {
+        return None;
+    }
+    s.out().line(format!(
+        "the cancel acted on after {pages} pages, the source in state 6"
+    ));
+    s.stop_feeder();
+    if !s.reset() {
+        return None;
+    }
+    if let Some(msg) = s.quiet_for(mode, 1000) {
+        s.out()
+            .fail(format!("the source sent {msg:#06x} after MSG_RESET"));
         return None;
     }
     Some(pages)
@@ -259,15 +357,14 @@ fn scan(s: &mut Session, sample: &TW_IDENTITY, run: &Run) -> Option<Vec<Page>> {
 
 /// One page (state 6 to 7): its image info, the transfer, the image decoded and
 /// checked against the info. With `pause`, a memory transfer pauses after its
-/// first buffer for the main thread's request, which comes back with the page.
+/// first buffer for the main thread's request.
 fn transfer_one(
     s: &mut Session,
     mechanism: u16,
     polarity: Polarity,
     n: usize,
     pause: bool,
-) -> Option<(Page, Option<usize>)> {
-    let mut request = None;
+) -> Option<Page> {
     let info = s.image_info()?;
     let (width, height) = (info.ImageWidth, info.ImageLength);
     let (samples, bits, per_pixel) = (info.SamplesPerPixel, info.BitsPerSample, info.BitsPerPixel);
@@ -278,7 +375,7 @@ fn transfer_one(
          {x_res}x{y_res} ppi, compression {compression}, planar {planar}",
         &bits[..usize::try_from(samples).unwrap_or(0).min(8)]
     ));
-    let format = match image::Format::from_image_info(pixel_type, samples, bits[0]) {
+    let format = match Format::from_image_info(pixel_type, samples, bits[0]) {
         Ok(f) => f,
         Err(e) => {
             s.out().fail(format!("page {n}: {e}"));
@@ -324,14 +421,13 @@ fn transfer_one(
             }
         }
     } else {
-        let (tiles, asked) = s.memory_pausing(pause.then_some(n))?;
-        request = asked;
+        let (assembler, shapes) = s.memory((w, h, format), pause.then_some(n))?;
         s.out()
-            .line(format!("page {n} memory: {}", describe_tiles(&tiles, w)));
-        match image::assemble(w, h, format, polarity, &tiles) {
+            .line(format!("page {n} memory: {}", describe_shapes(&shapes, w)));
+        match assembler.finish(polarity) {
             Ok(image) => Page { image, dib: None },
             Err(e) => {
-                s.out().fail(format!("page {n}: the tiles refused: {e}"));
+                s.out().fail(format!("page {n}: the buffers refused: {e}"));
                 return None;
             }
         }
@@ -347,35 +443,35 @@ fn transfer_one(
             format.name()
         ),
     );
-    Some((page, request))
+    Some(page)
 }
 
 /// The shape of a memory transfer's buffers, in a line.
-fn describe_tiles(tiles: &[Tile], width: u32) -> String {
-    let strips = tiles.iter().all(|t| t.x == 0 && t.columns == width);
-    let in_order = tiles
+fn describe_shapes(shapes: &[Shape], width: u32) -> String {
+    let strips = shapes.iter().all(|t| t.x == 0 && t.columns == width);
+    let in_order = shapes
         .windows(2)
         .all(|w| (w[0].y, w[0].x) < (w[1].y, w[1].x));
-    let mut shapes: Vec<(u32, u32, u32)> = tiles
+    let mut kinds: Vec<(u32, u32, u32)> = shapes
         .iter()
         .map(|t| (t.columns, t.rows, t.bytes_per_row))
         .collect();
-    shapes.dedup();
-    let shape_list: Vec<String> = shapes
+    kinds.dedup();
+    let listed: Vec<String> = kinds
         .iter()
         .take(4)
         .map(|(c, r, b)| format!("{c}x{r} ({b} bytes a row)"))
         .collect();
     format!(
         "{} {}, {}{}, {}",
-        tiles.len(),
+        shapes.len(),
         if strips {
             "strips of full rows"
         } else {
             "tiles"
         },
-        shape_list.join(", then "),
-        if shapes.len() > 4 { ", ..." } else { "" },
+        listed.join(", then "),
+        if kinds.len() > 4 { ", ..." } else { "" },
         if in_order {
             "top to bottom"
         } else {
@@ -386,37 +482,36 @@ fn describe_tiles(tiles: &[Tile], width: u32) -> String {
 
 /// A batch of every page the feeder holds, through `mechanism` and `mode`.
 fn batch(s: &mut Session, mechanism: u16, mode: Mode) {
-    let expected = expected_pages();
-    let Some(sample) = open_to_sample(s) else {
-        return;
+    let expected = match expected_pages() {
+        Ok(n) => n,
+        Err(e) => return s.out().fail(e),
     };
-    let run = Run {
-        mechanism,
-        mode,
-        count: -1,
-        pixel_type: None,
-    };
-    if let Some(pages) = scan(s, &sample, &run) {
-        match expected {
-            Some(n) => {
-                s.check(
-                    pages.len() == n as usize,
-                    format!("{} pages, expected {n}", pages.len()),
-                );
-            }
-            None => s
-                .out()
-                .line("the page count isn't judged: CAP_XFERCOUNT isn't a positive number"),
-        }
-        s.out().line(format!("{} pages transferred", pages.len()));
+    if let Some(sample) = open_to_sample(s)
+        && let Some(batch) = scan(s, &sample, &Run::plain(mechanism, mode, -1), Some(expected))
+    {
+        let n = batch.pages.len();
+        s.check(
+            n == expected as usize,
+            format!("{n} pages, expected {expected}"),
+        );
+        s.check(
+            batch.cancelled_after.is_none(),
+            "the batch was cancelled, and nothing asked it to be",
+        );
+        s.out().line(format!("{n} pages transferred"));
+    } else {
+        s.out().fail("the batch didn't complete");
     }
     s.walk_down();
 }
 
 /// For each pixel type, a page native and a page through memory, compared.
 fn compare(s: &mut Session) {
+    if let Err(e) = expected_pages() {
+        return s.out().fail(e);
+    }
     let Some(sample) = open_to_sample(s) else {
-        return;
+        return s.walk_down();
     };
     for (pixel_type, format) in [
         (TWPT_RGB, Format::Rgb),
@@ -425,23 +520,21 @@ fn compare(s: &mut Session) {
     ] {
         let mut one = |mechanism| {
             let run = Run {
-                mechanism,
-                mode: Mode::Event,
-                count: 1,
                 pixel_type: Some(pixel_type),
+                ..Run::plain(mechanism, Mode::Event, 1)
             };
-            let pages = scan(s, &sample, &run)?;
-            s.check(
-                pages.len() == 1,
-                format!("{} pages, expected 1", pages.len()),
-            )
-            .then(|| pages.into_iter().next())
-            .flatten()
+            let batch = scan(s, &sample, &run, Some(1))?;
+            let n = batch.pages.len();
+            s.check(n == 1, format!("{n} pages, expected 1"))
+                .then(|| batch.pages.into_iter().next())
+                .flatten()
         };
         let Some(native) = one(TWSX_NATIVE) else {
+            s.out().fail("the batch didn't complete");
             break;
         };
         let Some(memory) = one(TWSX_MEMORY) else {
+            s.out().fail("the batch didn't complete");
             break;
         };
         let palette = native
@@ -465,51 +558,83 @@ fn compare(s: &mut Session) {
 
 /// A cancel posted from the main thread while page 1 is in flight, at a fixed
 /// point: the TWAIN thread pauses after the page's first buffer until the
-/// cancel comes, finishes the page, ends the transfer, tries `MSG_STOPFEEDER`,
-/// then `MSG_RESET`s the batch and disables the source. Memory transfers,
-/// event mode; the feeder must hold two pages or more.
+/// request comes, finishes the page, ends the transfer, then acts on the
+/// cancel (`scan`). Memory transfers, event mode; the feeder must hold two
+/// pages or more.
 fn cancel(s: &mut Session) {
-    let expected = expected_pages();
-    if expected == Some(1) {
-        s.out()
-            .fail("a cancel needs two pages or more in the feeder, and CAP_XFERCOUNT is 1");
-        return;
-    }
-    let pages = open_to_sample(s).and_then(|sample| {
-        let run = Run {
-            mechanism: TWSX_MEMORY,
-            mode: Mode::Event,
-            count: -1,
-            pixel_type: None,
-        };
-        let polarity = prepare(s, &sample, &run)?;
-        let (_, request) = transfer_one(s, TWSX_MEMORY, polarity, 1, true)?;
-        s.check(
-            request == Some(REQUEST_CANCEL),
-            format!("page 1's request: {request:?}, not the cancel"),
-        );
-        s.ext_image_info();
-        let pending = s.end_transfer()?;
-        if !s.check(
-            pending != 0,
-            "nothing pending after page 1, so the cancel shows nothing",
-        ) {
-            return None;
+    let expected = match expected_pages() {
+        Ok(n) if n >= 2 => n,
+        Ok(n) => {
+            return s.out().fail(format!(
+                "a cancel needs two pages or more in the feeder, and CAP_XFERCOUNT is {n}"
+            ));
         }
-        s.stop_feeder();
-        if !s.reset() {
-            return None;
-        }
-        s.quiet_for(Mode::Event, 1000);
-        (s.disable() && s.close_source()).then_some(1usize)
-    });
-    if let Some(n) = pages {
+        Err(e) => return s.out().fail(e),
+    };
+    let run = Run {
+        pause_in_page: Some(1),
+        ..Run::plain(TWSX_MEMORY, Mode::Event, -1)
+    };
+    if let Some(sample) = open_to_sample(s)
+        && let Some(batch) = scan(s, &sample, &run, Some(expected))
+    {
+        let n = batch.pages.len();
         s.check(
             n == 1,
             format!("{n} pages transferred around the cancel, not 1"),
         );
-        s.out()
-            .line("1 page transferred; the cancel ended the batch after it");
+        s.check(
+            batch.cancelled_after == Some(1),
+            format!(
+                "the cancel acted on after {:?} pages, not 1",
+                batch.cancelled_after
+            ),
+        );
+        s.out().line(format!(
+            "{n} page transferred; the cancel ended the batch after it, {} more pending",
+            expected - 1
+        ));
+    } else {
+        s.out().fail("the batch didn't complete");
+    }
+    s.walk_down();
+}
+
+/// A cancel the main thread posts before the enable, while the TWAIN thread
+/// waits for it to be queued: the message loop that waits for the source's
+/// `MSG_XFERREADY` meets it first and keeps it, and the batch ends before any
+/// transfer. Callback mode, where the source's signal is posted inside
+/// `MSG_ENABLEDS`, after the request, so the loop must pass the request on
+/// its way.
+fn cancel_early(s: &mut Session) {
+    if let Err(e) = expected_pages() {
+        return s.out().fail(e);
+    }
+    let run = Run {
+        request_before_enable: true,
+        ..Run::plain(TWSX_NATIVE, Mode::Callback, -1)
+    };
+    if let Some(sample) = open_to_sample(s)
+        && let Some(batch) = scan(s, &sample, &run, None)
+    {
+        let n = batch.pages.len();
+        s.check(
+            s.kept_by_loop() == 1,
+            format!("the message loop kept {} requests, not 1", s.kept_by_loop()),
+        );
+        s.check(n == 0, format!("{n} pages transferred, not 0"));
+        s.check(
+            batch.cancelled_after == Some(0),
+            format!(
+                "the cancel acted on after {:?} pages, not 0",
+                batch.cancelled_after
+            ),
+        );
+        s.out().line(
+            "no page transferred; the cancel kept by the loop ended the batch before the first",
+        );
+    } else {
+        s.out().fail("the batch didn't complete");
     }
     s.walk_down();
 }

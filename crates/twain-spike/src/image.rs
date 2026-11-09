@@ -5,18 +5,24 @@
 //! past each row's last pixel zero.
 //!
 //! A driver's bytes are untrusted. A DIB's header, palette and rows are checked
-//! against the size of the block that holds them, and each memory tile against
-//! the image's bounds, its own buffer and the tiles before it, before anything
-//! is read.
+//! against the size of the block that holds them, and each memory buffer
+//! against the image's bounds, what the source wrote and the buffers before
+//! it, before anything is read. Sizes are worked out in `u64`, since on a
+//! 32-bit target a driver's widths and row lengths overflow `usize`. An
+//! [`Assembler`] places each buffer as it comes and keeps only the image, so a
+//! memory transfer costs no more than the image cap.
 
 use std::fmt;
 
 use crate::ffi::{TWPT_BW, TWPT_GRAY, TWPT_RGB};
 
-/// The largest image, in bytes, the spike assembles.
-pub const MAX_BYTES: u64 = 1 << 30;
-/// The most pixels an image may have (16384 by 16384).
+/// The most pixels an image may have (16384 by 16384). It's the cap that
+/// binds: at it, an RGB image is 768 MiB.
 pub const MAX_PIXELS: u64 = 1 << 28;
+/// The largest native transfer block taken: a DIB's rows hold at most 4 bytes
+/// a pixel (24 bits a pixel padded to a 4-byte row, at width 1), and a header
+/// and palette fit in the rest.
+pub const MAX_DIB_BYTES: u64 = 4 * MAX_PIXELS + (1 << 16);
 
 /// The pixel formats TWAIN's sample source delivers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +33,7 @@ pub enum Format {
 }
 
 impl Format {
-    pub fn bits(self) -> usize {
+    pub fn bits(self) -> u64 {
         match self {
             Format::Bw => 1,
             Format::Gray => 8,
@@ -79,8 +85,8 @@ pub struct Image {
 }
 
 /// The bytes of one row of `width` pixels, unpadded.
-pub fn row_bytes(width: u32, format: Format) -> usize {
-    (width as usize * format.bits()).div_ceil(8)
+pub fn row_bytes(width: u32, format: Format) -> u64 {
+    (u64::from(width) * format.bits()).div_ceil(8)
 }
 
 /// Why an image was refused.
@@ -110,14 +116,15 @@ impl fmt::Display for Refusal {
             }
             Refusal::Header(what) => write!(f, "the DIB's header: {what}"),
             Refusal::Palette(what) => write!(f, "the DIB's palette: {what}"),
-            Refusal::Tile { index, why } => write!(f, "tile {index}: {why}"),
-            Refusal::Overlap { index } => write!(f, "tile {index} overlaps an earlier one"),
-            Refusal::Uncovered { pixels } => write!(f, "{pixels} pixels no tile covered"),
+            Refusal::Tile { index, why } => write!(f, "buffer {index}: {why}"),
+            Refusal::Overlap { index } => write!(f, "buffer {index} overlaps an earlier one"),
+            Refusal::Uncovered { pixels } => write!(f, "{pixels} pixels no buffer covered"),
         }
     }
 }
 
-/// Bytes the image needs, after its size is checked against the caps.
+/// Bytes the image needs, the pixel cap checked first, so nothing after can
+/// overflow.
 fn checked_size(width: u32, height: u32, format: Format) -> Result<usize, Refusal> {
     if width == 0 || height == 0 {
         return Err(Refusal::Size {
@@ -126,11 +133,12 @@ fn checked_size(width: u32, height: u32, format: Format) -> Result<usize, Refusa
         });
     }
     let pixels = u64::from(width) * u64::from(height);
-    let bytes = row_bytes(width, format) as u64 * u64::from(height);
-    if pixels > MAX_PIXELS || bytes > MAX_BYTES {
+    if pixels > MAX_PIXELS {
         return Err(Refusal::TooLarge { width, height });
     }
-    Ok(bytes as usize)
+    // At most 3 bytes a pixel and a byte a row: under 2^30.
+    let bytes = row_bytes(width, format) * u64::from(height);
+    usize::try_from(bytes).map_err(|_| Refusal::TooLarge { width, height })
 }
 
 /// What a DIB said of itself, for the report.
@@ -142,8 +150,9 @@ pub struct DibFacts {
     pub palette: Vec<[u8; 3]>,
 }
 
-/// A packed DIB (a `BITMAPINFOHEADER`, its palette, then its rows, each padded
-/// to four bytes), as a native transfer's handle holds it on Windows.
+/// A packed DIB (a `BITMAPINFOHEADER` or a larger header, its palette, then its
+/// rows, each padded to four bytes), as a native transfer's handle holds it on
+/// Windows.
 pub fn decode_dib(bytes: &[u8]) -> Result<(Image, DibFacts), Refusal> {
     if bytes.len() < 40 {
         return Err(Refusal::Short {
@@ -158,7 +167,7 @@ pub fn decode_dib(bytes: &[u8]) -> Result<(Image, DibFacts), Refusal> {
     let bits = u16_at(bytes, 14);
     let compression = u32_at(bytes, 16);
     let colors_used = u32_at(bytes, 32);
-    if header_size < 40 || header_size as usize > bytes.len() {
+    if header_size < 40 || u64::from(header_size) > bytes.len() as u64 {
         return Err(Refusal::Header(format!("its size is {header_size}")));
     }
     if planes != 1 {
@@ -196,7 +205,7 @@ pub fn decode_dib(bytes: &[u8]) -> Result<(Image, DibFacts), Refusal> {
             "{entries} entries, more than {most} for {bits} bits"
         )));
     }
-    let palette_at = header_size as u64;
+    let palette_at = u64::from(header_size);
     let rows_at = palette_at + u64::from(entries) * 4;
     let stride = (u64::from(w) * u64::from(bits)).div_ceil(32) * 4;
     let need = rows_at + stride * u64::from(h);
@@ -206,15 +215,16 @@ pub fn decode_dib(bytes: &[u8]) -> Result<(Image, DibFacts), Refusal> {
             have: bytes.len(),
         });
     }
+    // Every offset below is under `need`, so under the block's length: they
+    // fit `usize`.
     let palette: Vec<[u8; 3]> = (0..entries as usize)
         .map(|i| {
             let at = palette_at as usize + i * 4;
             [bytes[at + 2], bytes[at + 1], bytes[at]]
         })
         .collect();
-
     let (rows_at, stride) = (rows_at as usize, stride as usize);
-    let out_row = row_bytes(w, format);
+    let out_row = row_bytes(w, format) as usize;
     let mut data = Vec::with_capacity(total);
     let invert_bw = match format {
         Format::Bw => match palette.as_slice() {
@@ -276,115 +286,138 @@ pub fn decode_dib(bytes: &[u8]) -> Result<(Image, DibFacts), Refusal> {
     ))
 }
 
-/// One buffer of a memory transfer: `rows` rows of `columns` pixels at (`x`,
-/// `y`), `bytes_per_row` apart.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tile {
+/// Where a memory transfer's buffer goes: `rows` rows of `columns` pixels at
+/// (`x`, `y`), `bytes_per_row` apart, as `TW_IMAGEMEMXFER` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shape {
     pub x: u32,
     pub y: u32,
     pub columns: u32,
     pub rows: u32,
     pub bytes_per_row: u32,
-    pub data: Vec<u8>,
 }
 
-impl Tile {
-    /// A tile copied out of the transfer's buffer, `written` (the source's
-    /// `BytesWritten`) checked against the buffer first.
-    pub fn from_buffer(
-        (x, y, columns, rows, bytes_per_row): (u32, u32, u32, u32, u32),
-        written: u32,
-        buffer: &[u8],
-    ) -> Result<Tile, String> {
-        if written as usize > buffer.len() {
-            return Err(format!(
+/// The bytes the source wrote into `buffer`: `BytesWritten` checked against
+/// the buffer first.
+pub fn written(written: u32, buffer: &[u8]) -> Result<&[u8], String> {
+    usize::try_from(written)
+        .ok()
+        .and_then(|n| buffer.get(..n))
+        .ok_or_else(|| {
+            format!(
                 "{written} bytes written into a {}-byte buffer",
                 buffer.len()
-            ));
-        }
-        Ok(Tile {
+            )
+        })
+}
+
+/// A memory transfer's image, put together as its buffers come: each placed
+/// inside the image, none overlapping, every pixel covered by the end. It
+/// holds the image and which pixels are covered, nothing of the buffers.
+pub struct Assembler {
+    width: u32,
+    height: u32,
+    format: Format,
+    stride: u64,
+    data: Vec<u8>,
+    covered: Coverage,
+    placed: usize,
+}
+
+impl Assembler {
+    /// An empty image of the size and format `DAT_IMAGEINFO` gave, after the
+    /// caps.
+    pub fn new(width: u32, height: u32, format: Format) -> Result<Assembler, Refusal> {
+        let total = checked_size(width, height, format)?;
+        Ok(Assembler {
+            width,
+            height,
+            format,
+            stride: row_bytes(width, format),
+            data: vec![0; total],
+            covered: Coverage::new(width, height),
+            placed: 0,
+        })
+    }
+
+    /// One buffer placed, from what the source wrote into it.
+    pub fn place(&mut self, shape: Shape, bytes: &[u8]) -> Result<(), Refusal> {
+        let index = self.placed;
+        let bad = |why: String| Refusal::Tile { index, why };
+        let Shape {
             x,
             y,
             columns,
             rows,
             bytes_per_row,
-            data: buffer[..written as usize].to_vec(),
-        })
-    }
-}
-
-/// The tiles of a memory transfer put together: each inside the image, none
-/// overlapping, every pixel covered.
-pub fn assemble(
-    width: u32,
-    height: u32,
-    format: Format,
-    polarity: Polarity,
-    tiles: &[Tile],
-) -> Result<Image, Refusal> {
-    let total = checked_size(width, height, format)?;
-    let stride = row_bytes(width, format);
-    let mut data = vec![0u8; total];
-    let mut covered = Coverage::new(width, height);
-    for (index, t) in tiles.iter().enumerate() {
-        let bad = |why: String| Refusal::Tile { index, why };
-        if t.columns == 0 || t.rows == 0 {
+        } = shape;
+        if columns == 0 || rows == 0 {
             return Err(bad("it's empty".to_owned()));
         }
-        if u64::from(t.x) + u64::from(t.columns) > u64::from(width)
-            || u64::from(t.y) + u64::from(t.rows) > u64::from(height)
+        if u64::from(x) + u64::from(columns) > u64::from(self.width)
+            || u64::from(y) + u64::from(rows) > u64::from(self.height)
         {
             return Err(bad(format!(
-                "{} by {} at ({}, {}) runs past the {width} by {height} image",
-                t.columns, t.rows, t.x, t.y
+                "{columns} by {rows} at ({x}, {y}) runs past the {} by {} image",
+                self.width, self.height
             )));
         }
-        let tile_row = row_bytes(t.columns, format);
-        if (t.bytes_per_row as usize) < tile_row {
+        // Inside the image, so `rows` is at most 2^28: nothing below overflows
+        // `u64`, and what reaches `usize` is under the buffer's length.
+        let tile_row = row_bytes(columns, self.format);
+        if u64::from(bytes_per_row) < tile_row {
             return Err(bad(format!(
-                "{} bytes a row, under the {tile_row} its columns need",
-                t.bytes_per_row
+                "{bytes_per_row} bytes a row, under the {tile_row} its columns need"
             )));
         }
-        let need = (t.rows as usize - 1) * t.bytes_per_row as usize + tile_row;
-        if t.data.len() < need {
-            return Err(bad(format!("{} bytes, and needs {need}", t.data.len())));
+        let need = u64::from(rows - 1) * u64::from(bytes_per_row) + tile_row;
+        if (bytes.len() as u64) < need {
+            return Err(bad(format!("{} bytes, and needs {need}", bytes.len())));
         }
-        if format == Format::Bw
-            && (t.x % 8 != 0 || (t.columns % 8 != 0 && t.x + t.columns != width))
+        if self.format == Format::Bw
+            && (x % 8 != 0 || (columns % 8 != 0 && x + columns != self.width))
         {
             return Err(bad(
                 "it starts or ends within a byte of 1-bit rows".to_owned()
             ));
         }
-        if !covered.mark(t.x, t.y, t.columns, t.rows) {
+        if !self.covered.mark(x, y, columns, rows) {
             return Err(Refusal::Overlap { index });
         }
-        let x_byte = t.x as usize * format.bits() / 8;
-        for r in 0..t.rows as usize {
-            let dst = (t.y as usize + r) * stride + x_byte;
-            let src = r * t.bytes_per_row as usize;
-            data[dst..dst + tile_row].copy_from_slice(&t.data[src..src + tile_row]);
+        let x_byte = u64::from(x) * self.format.bits() / 8;
+        let (tile_row, bpr) = (tile_row as usize, bytes_per_row as usize);
+        for r in 0..rows as usize {
+            let dst = ((u64::from(y) + r as u64) * self.stride + x_byte) as usize;
+            let src = r * bpr;
+            self.data[dst..dst + tile_row].copy_from_slice(&bytes[src..src + tile_row]);
         }
+        self.placed += 1;
+        Ok(())
     }
-    let missing = u64::from(width) * u64::from(height) - covered.count;
-    if missing > 0 {
-        return Err(Refusal::Uncovered { pixels: missing });
+
+    /// The image, once every pixel is covered, in the comparable form.
+    pub fn finish(self, polarity: Polarity) -> Result<Image, Refusal> {
+        let missing = u64::from(self.width) * u64::from(self.height) - self.covered.count;
+        if missing > 0 {
+            return Err(Refusal::Uncovered { pixels: missing });
+        }
+        let mut data = self.data;
+        if polarity == Polarity::ZeroWhite && self.format != Format::Rgb {
+            data.iter_mut().for_each(|b| *b = !*b);
+        }
+        let mut image = Image {
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            data,
+        };
+        clear_padding_bits(&mut image);
+        Ok(image)
     }
-    if polarity == Polarity::ZeroWhite && format != Format::Rgb {
-        data.iter_mut().for_each(|b| *b = !*b);
-    }
-    let mut image = Image {
-        width,
-        height,
-        format,
-        data,
-    };
-    clear_padding_bits(&mut image);
-    Ok(image)
 }
 
-/// The first difference between two images, if any.
+/// The first difference between two images, if any. Images whose data isn't
+/// the size their dimensions say are refused, not compared.
 pub fn compare(a: &Image, b: &Image) -> Result<(), String> {
     if (a.width, a.height, a.format) != (b.width, b.height, b.format) {
         return Err(format!(
@@ -397,11 +430,23 @@ pub fn compare(a: &Image, b: &Image) -> Result<(), String> {
             b.format.name()
         ));
     }
+    let stride = row_bytes(a.width, a.format);
+    let expected = stride * u64::from(a.height);
+    if expected == 0 || a.data.len() as u64 != expected || b.data.len() as u64 != expected {
+        return Err(format!(
+            "{} and {} bytes, where {} by {} {} is {expected}",
+            a.data.len(),
+            b.data.len(),
+            a.width,
+            a.height,
+            a.format.name()
+        ));
+    }
     let Some(at) = a.data.iter().zip(&b.data).position(|(x, y)| x != y) else {
         return Ok(());
     };
     let differing = a.data.iter().zip(&b.data).filter(|(x, y)| x != y).count();
-    let stride = row_bytes(a.width, a.format);
+    let stride = stride as usize;
     let (row, byte) = (at / stride, at % stride);
     let column = match a.format {
         Format::Rgb => byte / 3,
@@ -433,7 +478,7 @@ fn clear_padding_bits(image: &mut Image) {
         return;
     }
     let keep = 0xffu8 << (8 - used);
-    let stride = row_bytes(image.width, image.format);
+    let stride = row_bytes(image.width, image.format) as usize;
     for row in image.data.chunks_exact_mut(stride) {
         if let Some(last) = row.last_mut() {
             *last &= keep;
@@ -441,7 +486,7 @@ fn clear_padding_bits(image: &mut Image) {
     }
 }
 
-/// Which pixels the tiles so far have covered.
+/// Which pixels the buffers so far have covered.
 struct Coverage {
     width: u32,
     bits: Vec<u64>,
@@ -490,6 +535,75 @@ fn i32_at(b: &[u8], at: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A buffer of a memory transfer, as the tests make them.
+    #[derive(Debug, Clone)]
+    struct Tile {
+        x: u32,
+        y: u32,
+        columns: u32,
+        rows: u32,
+        bytes_per_row: u32,
+        data: Vec<u8>,
+    }
+
+    /// Tiles placed in order through an [`Assembler`].
+    fn assemble(
+        width: u32,
+        height: u32,
+        format: Format,
+        polarity: Polarity,
+        tiles: &[Tile],
+    ) -> Result<Image, Refusal> {
+        let mut a = Assembler::new(width, height, format)?;
+        for t in tiles {
+            let shape = Shape {
+                x: t.x,
+                y: t.y,
+                columns: t.columns,
+                rows: t.rows,
+                bytes_per_row: t.bytes_per_row,
+            };
+            a.place(shape, &t.data)?;
+        }
+        a.finish(polarity)
+    }
+
+    /// Tiles of `columns` by `rows` cut from an image held in the comparable
+    /// form, each row padded by `pad` bytes, in the order `order` gives.
+    fn grid(
+        width: u32,
+        height: u32,
+        (columns, rows): (u32, u32),
+        format: Format,
+        image: &[u8],
+        pad: u32,
+    ) -> Vec<Tile> {
+        let stride = row_bytes(width, format) as usize;
+        let mut tiles = Vec::new();
+        for y in (0..height).step_by(rows as usize) {
+            for x in (0..width).step_by(columns as usize) {
+                let (c, r) = (columns.min(width - x), rows.min(height - y));
+                let tile_row = row_bytes(c, format) as usize;
+                let x_byte = (u64::from(x) * format.bits() / 8) as usize;
+                let mut data = Vec::new();
+                for row in 0..r as usize {
+                    let at = (y as usize + row) * stride + x_byte;
+                    data.extend_from_slice(&image[at..at + tile_row]);
+                    data.extend(std::iter::repeat_n(0xcc, pad as usize));
+                }
+                tiles.push(Tile {
+                    x,
+                    y,
+                    columns: c,
+                    rows: r,
+                    bytes_per_row: tile_row as u32 + pad,
+                    data,
+                });
+            }
+        }
+        tiles
+    }
 
     /// A packed DIB from rows given top down, each row's pixel bytes as the DIB
     /// holds them (BGR, indices or bits), padded here.
@@ -642,7 +756,7 @@ mod tests {
         image: &[u8],
         pad: u32,
     ) -> Vec<Tile> {
-        let row = row_bytes(width, format);
+        let row = row_bytes(width, format) as usize;
         let bpr = row as u32 + pad;
         (0..height)
             .step_by(rows_each as usize)
@@ -787,12 +901,160 @@ mod tests {
             assemble(16, 1, Format::Bw, Polarity::ZeroBlack, &mid_byte),
             Err(Refusal::Tile { index: 0, .. })
         ));
-        assert!(Tile::from_buffer((0, 0, 4, 1, 4), 9, &[0; 8]).is_err());
+        assert!(written(9, &[0; 8]).is_err());
+        assert!(written(u32::MAX, &[0; 8]).is_err());
+        assert_eq!(written(4, &[1, 2, 3, 4, 5]), Ok(&[1u8, 2, 3, 4][..]));
+    }
+
+    #[test]
+    fn rgb_and_1_bit_tiles_off_the_left_edge_assemble_out_of_order() {
+        // RGB, 5 by 5 in 2 by 2 tiles (the last column and row narrower).
+        let rgb: Vec<u8> = (0..5 * 5 * 3).map(|i| (i * 7) as u8).collect();
+        let mut tiles = grid(5, 5, (2, 2), Format::Rgb, &rgb, 3);
+        tiles.reverse();
         assert_eq!(
-            Tile::from_buffer((0, 0, 4, 1, 4), 4, &[1, 2, 3, 4, 5])
+            assemble(5, 5, Format::Rgb, Polarity::ZeroBlack, &tiles)
                 .unwrap()
                 .data,
-            [1, 2, 3, 4]
+            rgb
+        );
+        // 1-bit, 21 pixels wide (3 bytes a row, the last 5 bits used), in
+        // tiles 8 pixels wide; padding bits zero in the source image.
+        let mut bw: Vec<u8> = (0..3 * 4).map(|i| (i * 37 + 11) as u8).collect();
+        for row in bw.as_chunks_mut::<3>().0 {
+            row[2] &= 0b1111_1000;
+        }
+        let mut tiles = grid(21, 4, (8, 3), Format::Bw, &bw, 1);
+        tiles.rotate_left(2);
+        assert_eq!(
+            assemble(21, 4, Format::Bw, Polarity::ZeroBlack, &tiles)
+                .unwrap()
+                .data,
+            bw
+        );
+    }
+
+    #[test]
+    fn partial_overlaps_and_tiles_past_the_right_edge_are_refused() {
+        let image = vec![0u8; 4 * 4];
+        let ok = grid(4, 4, (2, 2), Format::Gray, &image, 0);
+        let mut down_one = ok[0].clone();
+        down_one.y = 1;
+        assert!(matches!(
+            assemble(
+                4,
+                4,
+                Format::Gray,
+                Polarity::ZeroBlack,
+                &[ok[0].clone(), down_one]
+            ),
+            Err(Refusal::Overlap { index: 1 })
+        ));
+        let mut right_one = ok[0].clone();
+        right_one.x = 1;
+        assert!(matches!(
+            assemble(
+                4,
+                4,
+                Format::Gray,
+                Polarity::ZeroBlack,
+                &[ok[0].clone(), right_one]
+            ),
+            Err(Refusal::Overlap { index: 1 })
+        ));
+        let mut past = ok[1].clone();
+        past.x = 3;
+        assert!(matches!(
+            assemble(4, 4, Format::Gray, Polarity::ZeroBlack, &[past]),
+            Err(Refusal::Tile { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn vanilla_1_bit_of_odd_width_clears_the_inverted_padding() {
+        let bw = vec![0b1010_1010, 0b1100_0000];
+        let tiles = grid(10, 1, (10, 1), Format::Bw, &bw, 0);
+        let img = assemble(10, 1, Format::Bw, Polarity::ZeroWhite, &tiles).unwrap();
+        assert_eq!(img.data, [0b0101_0101, 0b0000_0000]);
+    }
+
+    #[test]
+    fn a_larger_header_and_a_24_bit_color_table_are_skipped() {
+        // A BITMAPV5HEADER (124 bytes): the palette starts after it.
+        let mut v5 = dib(2, 1, 8, 0, &gray_ramp(), &[vec![10, 20]]);
+        v5[0] = 124;
+        v5.splice(40..40, std::iter::repeat_n(0u8, 84));
+        assert_eq!(decode_dib(&v5).unwrap().0.data, [10, 20]);
+        // A 24-bit DIB with an optional 3-entry color table before its rows.
+        let table = dib(1, 1, 24, 3, &[[9, 9, 9]; 3], &[vec![1, 2, 3]]);
+        assert_eq!(decode_dib(&table).unwrap().0.data, [3, 2, 1]);
+    }
+
+    #[test]
+    fn sizes_a_32_bit_target_would_overflow_are_worked_out_or_refused() {
+        // RGB rows past 2^32 bits, under the pixel cap.
+        assert_eq!(row_bytes(178_956_971, Format::Rgb), 536_870_913);
+        assert_eq!(checked_size(178_956_971, 1, Format::Rgb), Ok(536_870_913));
+        assert!(matches!(
+            checked_size(u32::MAX, u32::MAX, Format::Rgb),
+            Err(Refusal::TooLarge { .. })
+        ));
+        // A buffer whose rows the source spaced 4 GiB apart.
+        let huge = Tile {
+            x: 0,
+            y: 0,
+            columns: 4,
+            rows: 2,
+            bytes_per_row: u32::MAX,
+            data: vec![0; 8],
+        };
+        assert!(matches!(
+            assemble(4, 4, Format::Gray, Polarity::ZeroBlack, &[huge]),
+            Err(Refusal::Tile { index: 0, .. })
+        ));
+        let spaced = Tile {
+            x: 0,
+            y: 0,
+            columns: 4,
+            rows: 3,
+            bytes_per_row: 0x8000_0000,
+            data: vec![0; 64],
+        };
+        assert!(matches!(
+            assemble(4, 4, Format::Gray, Polarity::ZeroBlack, &[spaced]),
+            Err(Refusal::Tile { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn compare_refuses_data_its_dimensions_dont_account_for() {
+        let a = Image {
+            width: 4,
+            height: 1,
+            format: Format::Gray,
+            data: vec![1, 2, 3, 4],
+        };
+        let short = Image {
+            data: vec![1, 2],
+            ..a.clone()
+        };
+        assert!(compare(&a, &short).is_err());
+        assert!(compare(&short, &a).is_err());
+        let empty = Image {
+            width: 0,
+            height: 1,
+            format: Format::Gray,
+            data: vec![1],
+        };
+        assert!(
+            compare(
+                &empty,
+                &Image {
+                    data: vec![2],
+                    ..empty.clone()
+                }
+            )
+            .is_err()
         );
     }
 

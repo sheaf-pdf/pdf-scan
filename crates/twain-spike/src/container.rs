@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn an_enumerations_items_are_read_misaligned() {
+    fn an_enumerations_items_are_read_at_their_offsets_from_any_start() {
         let b = enumeration(2, TWTY_UINT32, &[7, 0x0102_0304, 9], 4, 1);
         let got = decode(TWON_ENUMERATION, &b[2..]).unwrap();
         assert_eq!((got.raw, got.items), (0x0102_0304, 3));
@@ -302,6 +302,21 @@ mod tests {
         assert_eq!(
             decode(TWON_ENUMERATION, &b),
             Err(Refusal::TooMany(MAX_ITEMS + 1))
+        );
+    }
+
+    #[test]
+    fn enumerations_that_dont_hold_up_are_refused() {
+        let b = enumeration(0, 99, &[1], 2, 0);
+        assert_eq!(decode(TWON_ENUMERATION, &b), Err(Refusal::ItemType(99)));
+        let b = enumeration(0, TWTY_UINT16, &[], 2, 0);
+        assert_eq!(
+            decode(TWON_ENUMERATION, &b),
+            Err(Refusal::Index { index: 0, items: 0 })
+        );
+        assert_eq!(
+            decode(TWON_ENUMERATION, &[0; 13]),
+            Err(Refusal::Short { need: 14, have: 13 })
         );
     }
 }
