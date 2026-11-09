@@ -17,9 +17,17 @@ model lacking, each change said. The model it describes is provisional until S0 
 sections 1 to 3 and 5 to 8, from `sane-dl` as S0 slice 1 built it (`slices/s0-1-sane-dl.md`, "So far" and
 "Code review") and the slice's probes through it, against SANE's `test` and `pnm` backends, the installed
 backends with nothing attached, and `fake-libsane` (`slices/s0-2-seam-note.md`, "So far"); a table of SANE's
-names per backend (section 1); and the two SANE unknowns answered, names that change on replugging (section 1)
-and stopping after the page in flight (section 7), each with what only the fi-6130 settles (S0 slice 6).
-Slice 7's TWAIN rows, its TWAIN paragraphs and the TWAIN unknowns are as it left them.
+names per backend (section 1); the two SANE unknowns answered, names that change on replugging (section 1)
+and stopping after the page in flight (section 7), each with what only the fi-6130 settles (S0 slice 6); the
+raw layout fixed (section 3) and held beside `scanimage`'s pages; and the model written down for slice 3 to
+build ("The model, for slice 3"), the model's paragraphs of sections 1 to 8 revised to it, "Changes from
+proposal 9's model" with them, and the unknowns table's rows. Slice 7's TWAIN rows, its TWAIN paragraphs and
+the TWAIN unknowns are as it left them, but where the model both backends meet changed: a cancel finishes the
+sheet in flight, not the page (section 7's model paragraph and its question; in duplex, a delivered front's
+back too); section 7's `in-progress` proposal is the model's, its TWAIN facts kept and the TWAIN thread's
+wake-up left to slice 9 (that paragraph, and the unknowns' `in-progress` row); and section 8's model sentences,
+before "TWAIN, by the spike", say the two traits and `in-progress`. A new unknown, the back after a cancel,
+names slices 6 and 12.
 
 **Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (slice 7 ran first, on the Windows
 machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against
@@ -133,17 +141,22 @@ and names no longer there opened through the installed backends with nothing att
   scanner`, and no backend `office` (0 devices listed each), so such an alias that answers `INVAL` is `Gone`; one
   named after the backend it aliases falls back within that backend, as any id does. An id whose name starts with
   one of `dll`'s testing prefixes or with `:`, or is empty, none of which a backend forms, is refused before
-  `sane_open`. Who writes the directory and passes it at the spawn is slices 4's and 5's.
+  `sane_open`, as is one that isn't `sane:` and Latin-1 (a character past U+00FF) or holds a `NUL`: each is
+  `ScanError::BadId`, not `Gone`, since such an id never opens, whichever directory its worker was given. Who
+  writes the directory and passes it at the spawn is slices 4's and 5's.
 - *What only the fi-6130 settles* (S0 slice 6): its name through `fujitsu` (by serial, or by connection), what
   replugging does to it, what its open answers once it's gone or plugged in again (`INVAL` here, with nothing
   attached), and whether the fallback finds it.
 
-**The model:** `DeviceInfo { id, name, maker, model, driver }` (proposal 9). The id is opaque, namespaced by
-backend and, for TWAIN, bitness: `sane:<name>`, `twain32:<product name>`, `twain64:<product name>`,
-`wia:<device id>`, `ica:<persistent id>`. Listing is a snapshot under a deadline, in a short-lived worker of
-its own; no hot-plug events in the model, since SANE and TWAIN have none (proposal 10). Opening the last
-device goes straight to it by id, without a list: SANE's `sane_open(name)`, TWAIN's identity found by a quick
-DSM walk, WIA's `CreateDevice(id)`; ICA has to browse for it, under the same deadline.
+**The model** ("The model, for slice 3"): `DeviceInfo { id, name, maker, model, driver }` (proposal 9). The
+id (`DeviceId`) is opaque, compared whole, and namespaced by driver and, for TWAIN, bitness: `sane:` and the
+SANE name's bytes as Latin-1 (above), `twain32:<product name>`, `twain64:<product name>`, `wia:<device id>`,
+`ica:<persistent id>`, `fake:<name>`. Listing is a snapshot under a deadline (`Backend::list`), in a
+short-lived worker of its own; no hot-plug events in the model, since SANE and TWAIN have none (proposal 10).
+Opening the last device goes straight to it by id, without a list (`Backend::open`): SANE's
+`sane_open(name)`, TWAIN's identity found by a quick DSM walk, WIA's `CreateDevice(id)`; ICA has to browse
+for it, under the same deadline. A backend that opens another device in place of the stored id says so
+(`Opened::renamed_from`), and the app shows it: SANE's fallback above is the only one so far.
 
 **To settle:** how TWAIN's two lists merge (`scan-worker`'s client, leaning); ICA's persistent id. A SANE name
 that has changed (replugged), and a fallback to the same vendor and model: answered above, the fi-6130's by S0
@@ -158,23 +171,29 @@ slice 6.
 | WIA | Properties on items, with their valid values (a range, a list, flags): the root's children are the sources (`Flatbed`, `Feeder`); resolution, data type, depth and page size on each; duplex on the Feeder item (`DUPLEX` or `FRONT_ONLY`). |
 | ICA | Functional units (flatbed, document feeder), each with its supported resolutions, bit depths, pixel data types and scan area; the feeder says whether it supports duplex (to confirm). |
 
-**The model:** `Settings { source, dpi, mode, paper }` (proposal 9), clamped to what the device can do, and
-what was clamped said. **One change from proposal 9: capabilities per source.** In all four APIs what's
-allowed depends on the source chosen (SANE's options change with `source`; TWAIN's sizes with
-`CAP_FEEDERENABLED`; WIA's and ICA's live on the source's own item or unit), so `Caps` becomes a list of
-sources, each with its own resolutions, modes and largest area, and whether a feeder has duplex. Clamping is
-found the same way everywhere: set, then read back (SANE's `INEXACT`, TWAIN's `CHECKSTATUS`, WIA's and ICA's
-values read again). Modes are mapped by each backend's table (`Color`, `Gray`, `Bw` from whatever the
-backend calls them), as the feeder's names are.
+**The model** ("The model, for slice 3"): `Settings { source, duplex, dpi, format, paper }`, clamped to what
+the device can do, and what was clamped said (`Event::Applied`: the settings as the device took them, and
+each it changed, with what was asked). **Capabilities per source** (a change from proposal 9): in all four
+APIs what's allowed depends on the source chosen (SANE's options change with `source`; TWAIN's sizes with
+`CAP_FEEDERENABLED`; WIA's and ICA's live on the source's own item or unit), so `Caps` is a list of sources
+(`SourceCaps`), each with its own resolutions, formats and largest area, whether it has duplex, and whether
+the driver finds the paper's size itself. Resolutions are a list or a range (`Resolutions`), as SANE and
+TWAIN give either. Clamping is found the same way everywhere: set, then read back (SANE's `INEXACT`, TWAIN's
+`CHECKSTATUS`, WIA's and ICA's values read again). **What's asked for is a format** (`Format`, the raw
+layout's five, section 3), in place of proposal 9's `Mode` (`Color`, `Gray`, `Bw`), so 16-bit is asked for
+and clamped like any setting: each backend maps its API's names to it by a table (SANE's `mode` and `depth`,
+TWAIN's `ICAP_PIXELTYPE` and `ICAP_BITDEPTH`, WIA's data type and depth), as the feeder's names are. Paper is
+`Auto` (the driver's own size detection) or a size (`SizeMm`, in `f32` millimetres, as SANE gives its area;
+Letter, Legal and A4 its constants, since Letter's 215.9 isn't a whole millimetre).
 
 **Asking drivers not to drop pages.** Some drivers can discard blank pages themselves (TWAIN's
 `ICAP_AUTODISCARDBLANKPAGES`, PaperStream's own processing). That breaks every inference of a page's side
 (section 4), and `scan-cleanup` finds blank pages anyway, so backends turn it off where the API lets them.
 
-**To settle:** whether resolutions are listed or a range in the model (SANE and TWAIN give either); paper
-sizes against a feeder's own size detection (`Auto`, proposal 9) in each API. SANE's half, from S0 slice 1's
-step 3: a resolution comes as a range or a word list, `FIXED` or `INT`, and may offer an automatic value, so
-the model's answer takes all of them.
+**To settle:** paper sizes against a feeder's own size detection (`Auto`, proposal 9) in each API. Whether
+resolutions are listed or a range: both (`Resolutions`, S0 slice 2). SANE's, from S0 slice 1's step 3, come
+as a range or a word list, `FIXED` or `INT`, and may offer an automatic value: the `sane` backend gives whole
+dpi either way, and the app asks for a dpi, never the automatic value.
 
 ## 3. How a page arrives
 
@@ -185,22 +204,58 @@ the model's answer takes all of them.
 | WIA | Pushed: `IWiaTransfer::Download` calls back `GetNextStream` for each page (we hand it a stream) and `TransferCallback` with progress (`ulTransferredBytes`; not the percentage, which peaks near 40 then jumps), end of stream and end of transfer. The page's format is the driver's choice among what it lists (`EnumWIA_FORMAT_INFO`): a bitmap, WIA's raw format, PNG, JPEG or TIFF. |
 | ICA | Pushed, through delegates: memory-based transfers give bands (`ICScannerBandData`: the full image's size, bits per pixel and per component, rows from a start row, bytes per row, a buffer); file-based ones a file's URL (to confirm). |
 
-**The model:** `RawPage { pixels, dpi, sheet, side }` (proposal 9), with `pixels` one of two:
+**The model** ("The model, for slice 3"): `RawPage { pixels, dpi, sheet, side, side_known }` (proposal 9's,
+with section 4's `side_known`), with `pixels` one of two:
 
-- **raw**: one layout for every backend: rows top down, a stated stride, a format (1-bit, 8-bit gray, 16-bit
-  gray, 8-bit RGB, 16-bit RGB), 1-bit packed with the first pixel in the high bit and a stated polarity,
-  16-bit in a stated byte order. Each backend assembles its API's pieces into it: SANE's three passes and
-  padded rows, TWAIN's tiles and its DIB's bottom-up rows and palette, ICA's bands, WIA's raw header.
-- **encoded**: bytes as the driver gave them, with their kind (JPEG, PNG, TIFF, a bitmap, CCITT G4 with its
-  parameters), when the driver gives an encoded form and the settings ask for it. `scan-image` keeps a JPEG
-  as its bytes, so passing one through avoids a decode and a re-encode.
+- **raw** (`RawImage`): one layout for every backend, fixed by S0 slice 2 (below): a format (`Bw1`, `Gray8`,
+  `Gray16`, `Rgb8`, `Rgb16`), a width and a height, rows top down and packed, with one polarity, bit order and
+  byte order. Each backend assembles its API's pieces into it: SANE's three passes and padded rows, TWAIN's
+  tiles and its DIB's bottom-up rows and palette, ICA's bands, WIA's raw header.
+- **encoded** (`Encoded`): bytes as the driver gave them, with their kind (JPEG, PNG, TIFF, a bitmap, CCITT G4
+  with its width, height and polarity), when the driver gives an encoded form and the settings ask for it.
+  `scan-image` keeps a JPEG as its bytes, so passing one through avoids a decode and a re-encode. SANE 1 gives
+  none: its JPEG and CCITT frames are reserved (above).
 
 **A page is delivered whole**, once complete; a 600 dpi color Letter page is about 100 MB raw, and one at a
-time is fine. Progress is a separate event (bytes of the page in flight, against its size where known), as
-proposal 10's progress bar wants. A page cut short (a jam mid-page) is never delivered.
+time is fine. Progress goes through `in-progress` (section 7): each page's bytes as it's read, against its size
+where known, as proposal 10's progress bar wants. A page cut short (a jam mid-page) is never delivered.
 
-**To settle:** the 1-bit polarity and 16-bit byte order the raw layout fixes (proposed: 1 black, as SANE has
-it, and 16-bit little-endian, both said in the type); whether to ask TWAIN and WIA for compressed transfers
+**The raw layout** (S0 slice 2, its decisions 2 to 6, for review): one for every backend, which every
+`RawImage` holds.
+
+| | The model's `RawImage` | SANE gives (and `sane-dl` passes on unchanged) | TWAIN gives (slice 7's rows, as they are) | Which converts |
+|---|---|---|---|---|
+| Formats | `Bw1`, `Gray8`, `Gray16`, `Rgb8`, `Rgb16` | `GRAY` or `RGB` (or three single-channel frames, interleaved by `sane-dl`) at depth 1, 8 or 16 | Black and white, gray, RGB; 16 bits not seen (the sample offers 1, 8 and 24) | `sane`: RGB at depth 1 (byte-interleaved, a byte of eight pixels of one channel, the standard) expanded to `Rgb8`, each bit 0 or 255 |
+| Polarity | 0 the least intensity at every format: in `Bw1`, 0 black and 1 white | `GRAY` at depth 1: 1 black, 0 white; every other: 0 the least intensity (the standard) | DIB: through its palette (the sample's 1-bit black then white, its gray an identity ramp); memory: `ICAP_PIXELFLAVOR` (`TWPF_CHOCOLATE`, 0 black, all the sample offers) | `sane`: 1-bit gray inverted; `twain`: the palette and flavor applied (`TWPF_VANILLA`, or a white-then-black palette, inverted) |
+| Bits in a byte | The leftmost pixel in the most significant bit; bits past a row's last pixel 0 | The leftmost pixel in the most significant bit (the standard) | DIB: the leftmost pixel in the high bit (a DIB's rule); memory: equal to the DIB pixel for pixel on the sample, so the same, whatever `ICAP_BITORDER` reports (`TWBO_LSBFIRST`, read and never set: the sample's quirk reads it as a color order) | `sane`: padding bits cleared again after the inversion |
+| 16-bit | Little-endian, whatever the host | The host's byte order (the standard) | Not seen: slice 8 reads what TWAIN says, slice 12 sees a driver's | `sane`: swapped on a big-endian host, nothing on CI's three systems |
+| Rows | Top down, packed: each row exactly its pixels' bytes; no stride stored, `stride()` worked out from format and width | Top down; `bytes_per_line` may pad, `sane-dl` drops it | DIB bottom up, rows padded to four bytes; memory strips top down (the sample pads to four bytes), tiles by offset | `twain`: rows flipped (DIB), padding dropped, tiles placed |
+| Channels | R, G, B per pixel, interleaved | R, G, B (one frame, or three interleaved by `sane-dl`) | DIB B, G, R; memory R, G, B on the sample | `twain`: the DIB's swapped |
+
+WIA's and ICA's columns are to confirm (slice 10, and the `ica` slice). The layout is slice 7's comparable
+form (`twain-spike`'s `image` module, its module doc: rows top down, packed, RGB, gray and 1-bit with 0 black,
+the first pixel in the high bit, the bits past a row's last pixel zero), with 16-bit little-endian added, so
+the TWAIN side's conversion exists already and SANE's 1-bit gray is the one format a backend inverts. **Held
+beside a third party** (probe L2, `slices/s0-2-seam-note.md`, "So far"): `sane-dl`'s pages from the `test`
+backend at 157 pixels a row (not a multiple of 8), converted as the table says, equal the raster of `scanimage
+--format=png` of the same scan pixel for pixel at gray 1 (two pictures), 8 and 16 and color 8 and 16, PNG's
+big-endian 16-bit swapped first (unswapped, the bytes differ); PNG's 1-bit gray is 0 black, the high bit first,
+and SANE's bits as they came differ from it in every pixel. `scanimage` inverts a 1-bit row's whole bytes for
+PNG, padding bits included, so those are masked on its side; the model's are 0 in every row. Its TIFF of the
+same 1-bit page keeps SANE's bits (photometric 0, white is zero). 1-bit RGB has no third party here
+(`scanimage` refuses it: its assertion that an RGB frame is 8 or 16 bits deep stops it before it writes a byte,
+in PNG, TIFF and PNM alike): its channel order is probe L1's (the SANE row above).
+
+**`RawImage::new(format, width, height, data)` is the one way to make one** (its fields are private): `width`
+and `height` at least 1, `data` exactly `height` rows of the format's packed bytes, and a `Bw1` row's bits past
+its last pixel 0, so every `RawImage` holds the layout wherever it's made, the worker's client included. The
+length is worked out in `u64` with checked arithmetic, and a size past what `u64` or the platform's `usize`
+holds is refused, never wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize` (65,536 by 65,536 in
+`Rgb16` is 6 × 2^32 bytes, 0 once wrapped, which an empty buffer would match), and at `u32::MAX` by `u32::MAX`
+a format of two bytes a pixel or more overflows `u64` too (`twain-spike`'s `image` module works its sizes out
+in `u64` for the same reason). Probe M1 tests each, the 32-bit cases on a 32-bit target too.
+
+**To settle:** whether to ask TWAIN and WIA for compressed transfers
 (G4 for black and white, JPEG for color) to cut the pipe's bytes against the 58 MB/s the throughput gate needs
 (`crates/scan-worker.md`), or stay raw in the first version; whether `twain-dsm` hands over assembled images
 or tiles (leaning: tiles, assembled by the backend, so `twain-dsm` stays TWAIN alone); what a native DIB's
@@ -229,10 +284,12 @@ color order the opposite way in the two paths, so the backend never sets it.
 | WIA | Order: two pages a sheet in duplex, front first unless `BACK_FIRST` is set; nothing per page that names the side (to confirm). |
 | ICA | The feeder unit's odd and even page orientation and a reverse page order setting (to confirm); nothing per band that names the side (to confirm). |
 
-**The model:** `sheet` counted from 1 across a batch (and on through "Scan More", proposal 10); `side`
-`Front` or `Back`, and whether it was **reported** by the driver or **inferred** from the order. Inference is
-right only while no page is dropped, hence asking drivers not to drop blanks (section 2). The intake can pair
-and turn backs (proposal 10's "Scan backs") knowing which it has.
+**The model** ("The model, for slice 3"): `RawPage::sheet` counted from 1 across a batch, and on through "Scan
+More" (proposal 10), which starts the next batch at the sheet after (`Device::scan`'s `first_sheet`);
+`Event::Sheet` as each sheet begins; `side` `Front` or `Back`, and `side_known` whether it was **reported** by
+the driver (`SideKnown::Reported`) or **inferred** from the order (`Inferred`). Inference is right only while
+no page is dropped, hence asking drivers not to drop blanks (section 2). The intake can pair and turn backs
+(proposal 10's "Scan backs") knowing which it has.
 
 **To settle:** which drivers fill `TWEI_PAGESIDE` (the fi-6130's FUJITSU TWAIN32 and PaperStream IP, by hand
 in S0 slice 12); whether WIA or ICA says the side anywhere.
@@ -246,10 +303,12 @@ in S0 slice 12); whether WIA or ICA says the side anywhere.
 | WIA | `WIA_ERROR_PAPER_EMPTY` at the start: empty. `WIA_STATUS_END_OF_MEDIA` (0x210001), or the end of the transfer: done. `FEED_READY` is a hint, wrong either way at times. A page count reached while the feeder runs on: cancel and `WIA_CMD_STOP_FEEDER`. |
 | ICA | The feeder unit's "document loaded" (to confirm); the scan's completion delegate without an error: done. |
 
-**The model:** an empty feeder before any page is the error `ScanError::FeederEmpty` (nothing was scanned);
-an empty feeder after pages is `Done::FeederEmpty`; a flatbed's page is `Done::OnePage`; a cancel is
-`Done::Cancelled`. Proposal 9 has `FeederEmpty` in both; this is the line between them. "Scan More" is a new
-batch that carries the sheet count on.
+**The model** ("The model, for slice 3"): an empty feeder before any page is the error
+`ScanError::FeederEmpty` (nothing was scanned); an empty feeder after pages is `Done::FeederEmpty`; a
+flatbed's page is `Done::OnePage`; a cancel is `Done::Cancelled`, once the sheet in flight is delivered
+(section 7). Proposal 9 has `FeederEmpty` in both; this is the line between them. "Scan More" is a new batch
+that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `pages` 0 from a feeder is
+`ScanError::FeederEmpty`, and with pages before it `Done::FeederEmpty`.
 
 ## 6. Errors
 
@@ -259,18 +318,26 @@ batch that carries the sheet count on.
 | `DoubleFeed` | none: backends say a jam or an I/O error | `TWCC_PAPERDOUBLEFEED` | `WIA_ERROR_MULTI_FEED` | to confirm |
 | `CoverOpen` | `COVER_OPEN` | `TWCC_INTERLOCK` | `WIA_ERROR_COVER_OPEN` (SDK value and Learn's misprint both) | to confirm |
 | `Busy` | `DEVICE_BUSY`, at open too (`pnm` opens one device at a time) | `TWCC_MAXCONNECTIONS` | `WIA_ERROR_BUSY` | to confirm |
-| `Gone` (unplugged, offline) | `IO_ERROR` after opening; `INVAL` from `sane_open`, for a device gone and a backend not installed alike (section 1) | `TWCC_CHECKDEVICEONLINE` (offline at state 3 or less, lost at 4 or more) | `WIA_ERROR_OFFLINE` | the device removed |
-| `Driver { message, shown }` | other statuses: `INVAL` from `sane_start` (`StartInvalid`, the descriptors read again), `ACCESS_DENIED` (no authorization callback, FEAT-11), `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
+| `Gone` (unplugged, offline) | `IO_ERROR` after opening; `INVAL` from `sane_open`, for a device gone and a backend not installed alike (section 1); `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running: "The model, for slice 3") | `TWCC_CHECKDEVICEONLINE` (offline at state 3 or less, lost at 4 or more) | `WIA_ERROR_OFFLINE` | the device removed |
+| `Driver { message, shown }` | other statuses: `ACCESS_DENIED` (no authorization callback, FEAT-11), `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
+| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll` in the system folder (`twain-dsm`'s loading, slice 8) | to confirm | to confirm |
+| `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | slice 9's to say | to confirm | to confirm |
 
 **SANE, as `sane-dl` gives it** (S0 slice 1): every status with the function that answered it
 (`Error::Status { status, call }`), statuses SANE doesn't define kept as integers. No libsane at all is no
-status but `LoadError::NotFound`, with the names tried, which the model's errors must say apart from `Gone`.
+status but `LoadError::NotFound`, with the names tried: the model's `NotInstalled`, apart from `Gone`. The
+other `LoadError`s (a symbol missing, `sane_init` failing, a version not 1, a second load) are `Driver`.
 
-**The model:** proposal 9's `ScanError`, with two changes: `Driver` carries whether the driver has already
-shown its own message, so the app doesn't say it twice; and warming up is handled inside the backends (wait
-and retry: WIA's `WIA_ERROR_WARMING_UP`; SANE's warming-up status is reserved and never returned), not
-surfaced. `Stopped` stays the watchdog's (proposal 4). Pages before an error are kept; the page in flight is
-not.
+**The model** ("The model, for slice 3"): proposal 9's `ScanError`, with four changes: `Driver` carries
+whether the driver has already shown its own message (`shown`), so the app doesn't say it twice; warming up is
+waited on inside the backends (wait and retry: WIA's `WIA_ERROR_WARMING_UP`; SANE's warming-up status is
+reserved and never returned, and an empty read is made again, section 8) and said to the user as
+`Event::Status(Status::WarmingUp)` where the backend knows it, never an error; `NotInstalled { what }` says
+the system's driver API isn't there (no libsane, no `TWAINDSM.dll`: proposal 6's "Scanning on Linux needs
+SANE"), apart from `Gone`; and `BadId` says a stored id isn't one the driver forms, refused before the driver
+sees it (SANE's refusals, section 1), apart from `Gone` too: a device gone may come back, such an id never
+opens. `Stopped` stays the watchdog's (proposal 4), never a backend's. Pages before an error are kept; the
+page being read when it comes is not.
 
 **To settle:** what "Continue" after a jam is in each API (SANE: `sane_cancel`, then `sane_start` again,
 which `sane-dl`'s batch allows, calling `sane_cancel` after every error and starting again if asked, S0 slice
@@ -288,13 +355,17 @@ telling apart for the user beyond their words.
 | WIA | `S_FALSE` from `TransferCallback`, on the STA thread, or `IWiaTransfer::Cancel`. |
 | ICA | Cancel the scan on the device, on its run loop's thread (to confirm). |
 
-**The model:** `cancel` means **feed no more and stop after the page in flight** (proposal 10: "stops after
-the page in flight; pages so far stay"), through a handle any thread can call (the worker's protocol thread
-calls it). Each backend does it its way: SANE by not calling `sane_start` again (and `sane_cancel` if a read is
-stuck), TWAIN by `MSG_RESET` after the current transfer ends, WIA by refusing the next stream, ICA to confirm.
-Stopping mid-page is the watchdog's: it kills the worker (proposal 4).
+**The model** ("The model, for slice 3"; S0 slice 2's decision 8, for review): a cancel means **feed no more
+and finish the sheet in flight** (proposal 10: "stops after the page in flight; pages so far stay", read as
+the sheet): in duplex, a front already delivered is followed by its back, so "Scan More" never starts on a
+back. The caller cancels through the batch's `Tracker`, from any thread (the worker's protocol thread does),
+and a backend calls `check()` between sheets, never within one (below). Each backend does it its way: SANE by
+starting no next sheet once the check fails and dropping the batch (`sane_cancel`), not by `sane-dl`'s token,
+which stops at once and loses the sheet in flight (probe S1, below); TWAIN by `MSG_RESET` once the sheet's
+transfers end; WIA by refusing the next sheet's stream; ICA to confirm. Stopping mid-page is the watchdog's: it
+kills the worker (proposal 4).
 
-**To settle:** whether each API can finish the page in flight and feed no more, or only stop at once (S0's SANE
+**To settle:** whether each API can finish the sheet in flight and feed no more, or only stop at once (S0's SANE
 slices for SANE; WIA and ICA by hand). **TWAIN, by the spike:** the page in flight finishes and nothing more is
 transferred (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops is the driver's: the sample fed the next
 sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks (slice 12) say what real
@@ -317,15 +388,22 @@ has pulled the next sheet in before the page in flight ends; what a backend does
 batch is started (`fujitsu.c`'s `sane_cancel`, through `check_for_cancel`, sends the scanner a halt or a cancel
 command then, studied); and what a duplex scanner gives after a batch ended on a front.
 
-**Proposed, for slice 3 (for review; asked 2026-11-08 whether `in-progress` fits):** the cancel handle
-and the progress events through the `in-progress` crate (github.com/sheaf-pdf/in-progress), which
-`scan-cleanup` already takes. A `Tracker` is the
-`Send + Sync` handle any thread can cancel; each backend calls `check()` between pages, never within one, which
-is "finish the page in flight"; progress is `set_total(Some(page bytes), Unit::Bytes)` and `inc` per buffer;
-and the intake pipeline could give scanning and cleanup weighted children of one tracker. Two seams: its
-progress is polled, not pushed, so `scan-worker` polls the worker's tracker and forwards snapshots over its
-pipe; and a flag can't wake the TWAIN thread blocked in `GetMessageW`, so the TWAIN backend posts a message to
-its window as well.
+**Cancel and progress through `in-progress`, the model's** (proposed for slice 3 on 2026-11-08, asked that day
+whether `in-progress` fits; taken by S0 slice 2, its decision 10, for review, since slice 3's API needs an
+answer): the `in-progress` crate (github.com/sheaf-pdf/in-progress), which `scan-cleanup` already takes.
+`Device::scan` takes a `&dyn Progress`; the caller holds the `Tracker`, the `Send + Sync` handle any thread can
+cancel, and makes a new one for each batch, since a cancelled tracker stays cancelled. A backend calls
+`check()` between sheets, never within one, which is "finish the sheet in flight"; progress is each page's bytes,
+`set_total(Some(page bytes), Unit::Bytes)` (`None` while a page's length isn't known) and `set(0)` as it
+begins, then `inc` per buffer or `set`; and the intake pipeline could give scanning and cleanup weighted
+children of one tracker. A push backend's own thread reports through `Progress::child`, an owned `Box<dyn
+Progress>` cancelled with its parent, moved to that thread with a clone of the `Sender` for the batch. Two
+seams: its progress is polled, not pushed, so `scan-worker` polls the worker's tracker and forwards snapshots
+over its pipe, or implements `Progress` itself to push lines (slice 4's choice); and a flag can't wake the
+TWAIN thread blocked in `GetMessageW`, a posted message can, while `in-progress` calls nothing when cancelled,
+so the `twain` backend looks at the flag wherever its loop wakes (a source's message, a request, a timer) or
+slice 9 adds a wake-up to the model. The proposal had the TWAIN backend post a message to its window as well,
+which nothing in `in-progress` would call it to do: the one change here to what slice 9 meets of it.
 
 ## 8. Threads and events
 
@@ -336,10 +414,14 @@ its window as well.
 | WIA | Push, on an STA thread: `Download` is one blocking call that calls back on the same thread. |
 | ICA | Push, through delegates on a run loop: the main thread's by default; in a worker, the worker's main thread runs it (whether that's enough is open, the survey). |
 
-**The model:** `Backend::scan(settings, events)` blocks its own thread until the batch is done, sending
-`sheet`, `page`, `progress` and `status` events on the channel; `cancel` is a separate handle, `Send + Sync`.
-The SANE backend runs on that thread directly; the TWAIN, WIA and ICA backends start the thread their API
-needs (an STA thread with a message loop or a run loop), forward its events to the channel, and post
+**The model** ("The model, for slice 3"): two traits, as SANE's library and handle are, and as a worker keeps
+one device open while its dialog is (section 9): a `Backend` lists and opens, and the `Device` it opens gives
+its caps and scans; both are `Send`, and a device is a `Box<dyn Device>`. `Device::scan(settings,
+first_sheet, events, progress)` blocks its own thread until the batch is done, sending `Applied`, `Sheet`,
+`Page` and `Status` events on the channel (a `std::sync::mpsc::Sender<Event>`), with cancel and progress
+through `in-progress`'s `Progress` (section 7), not events or a handle of the model's own. The SANE backend
+runs on that thread directly; the TWAIN, WIA and ICA backends start the thread their API needs (an STA thread
+with a message loop or a run loop), hand it a clone of the `Sender` and a child progress for each batch, and pass
 cancels and requests to it. `scan-worker` sees one shape for all of them. **TWAIN, by the spike:** events go out
 on a channel (`std::sync::mpsc`); requests come in as the application's own messages (`WM_APP` and up) posted to
 the TWAIN thread's window, taken in the loop and never forwarded to the DSM; the window procedure is
@@ -378,17 +460,240 @@ TWAIN's `TWEI_PATCHCODE` and barcode text through `DAT_EXTIMAGEINFO`, and WIA 2.
 on the page, empty unless asked for; hints only, since `patch-codes` reads every edge and says which
 (FEAT-5). Later; it doesn't change the rest.
 
+## The model, for slice 3
+
+**Written by S0 slice 2, for review** (its decisions in `slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
+builds, proposal 9's model with this note's changes ("Changes from proposal 9's model"). Names are the
+design's: slice 3 may rename and says so, and the model stays provisional until slice 11 freezes it. Plain
+data, every field public but `RawImage`'s; an enum that may grow is `#[non_exhaustive]`; pixel sizes,
+resolutions and counts `u32`, the same in a 32-bit worker as in the 64-bit app (slice 9); paper sizes `f32`
+millimetres. The block leaves out bodies and `RawImage`'s methods; probe M1 (the slice's "So far") compiled it
+as it stands, formatted, with them added, against `in-progress` 0.1.0, and tested the shapes the bullets after
+it claim.
+
+```rust
+use std::{sync::mpsc::Sender, time::Duration};
+
+use in_progress::Progress;
+
+// Devices (section 1): an id is `<driver>:<native id>`, opaque, compared whole.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceId(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub id: DeviceId, pub name: String, pub maker: String, pub model: String, pub driver: Driver,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Driver { Sane, Twain { bits: u8 }, Wia, Ica, Fake }
+
+// What a device can do, per source, and what it's asked for (section 2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Caps { pub sources: Vec<SourceCaps>, pub settings_window: bool }
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceCaps {
+    pub source: Source, pub duplex: bool, pub resolutions: Resolutions, pub formats: Vec<Format>,
+    pub max_area: SizeMm, pub paper_auto: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Source { Flatbed, Feeder }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolutions { List(Vec<u32>), Range { min: u32, max: u32, step: u32 } }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SizeMm { pub width: f32, pub height: f32 }
+impl SizeMm {
+    pub const LETTER: SizeMm = SizeMm { width: 215.9, height: 279.4 };
+    pub const LEGAL: SizeMm = SizeMm { width: 215.9, height: 355.6 };
+    pub const A4: SizeMm = SizeMm { width: 210.0, height: 297.0 };
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct Settings { pub source: Source, pub duplex: bool, pub dpi: u32, pub format: Format, pub paper: Paper }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Paper { Auto, Size(SizeMm) }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Applied { pub settings: Settings, pub clamped: Vec<Clamped> }
+/// What was asked of a setting the device changed; what it took is in `Applied::settings`.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Clamped { Source(Source), Duplex(bool), Dpi(u32), Format(Format), Paper(Paper) }
+
+// The raw layout (section 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Format { Bw1, Gray8, Gray16, Rgb8, Rgb16 }
+/// Private fields: `RawImage::new` checks them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawImage { format: Format, width: u32, height: u32, data: Vec<u8> }
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum LayoutError {
+    #[error("an image has at least one row and one column")]
+    Empty,
+    #[error("{width} by {height} is more than this system can hold")]
+    TooLarge { width: u32, height: u32 },
+    #[error("{expected} bytes expected, {got} given")]
+    Length { expected: u64, got: u64 },
+    #[error("row {row}'s bits past its last pixel aren't 0")]
+    Padding { row: u32 },
+}
+
+// Pages (sections 3 and 4).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawPage {
+    pub pixels: Pixels, pub dpi: (f32, f32), pub sheet: u32, pub side: Side, pub side_known: SideKnown,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Pixels { Raw(RawImage), Encoded(Encoded) }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Encoded { pub kind: EncodedKind, pub bytes: Vec<u8> }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EncodedKind { Jpeg, Png, Tiff, Bmp, CcittG4 { width: u32, height: u32, black_is_1: bool } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side { Front, Back }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SideKnown { Reported, Inferred }
+
+// Events and outcomes (sections 5 to 8).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Event { Applied(Applied), Sheet(u32), Page(RawPage), Status(Status) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Status { WarmingUp }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Done { FeederEmpty, OnePage, Cancelled }
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ScanError {
+    #[error("the feeder is empty")]
+    FeederEmpty,
+    #[error("the paper jammed")]
+    Jammed,
+    #[error("two sheets fed at once")]
+    DoubleFeed,
+    #[error("the cover is open")]
+    CoverOpen,
+    #[error("the scanner is busy")]
+    Busy,
+    #[error("the scanner isn't there")]
+    Gone,
+    #[error("the device id isn't one this driver gives")]
+    BadId,
+    #[error("the scan stopped answering")]
+    Stopped,
+    #[error("{what} isn't installed")]
+    NotInstalled { what: String },
+    #[error("{message}")]
+    Driver { message: String, shown: bool },
+}
+
+// The traits (section 8).
+pub trait Backend: Send {
+    fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError>;
+    fn open(&mut self, id: &DeviceId) -> Result<Opened, ScanError>;
+}
+pub struct Opened { pub device: Box<dyn Device>, pub info: DeviceInfo, pub renamed_from: Option<DeviceId> }
+pub trait Device: Send {
+    fn caps(&mut self) -> Result<Caps, ScanError>;
+    fn scan(&mut self, settings: &Settings, first_sheet: u32, events: &Sender<Event>, progress: &dyn Progress)
+    -> Result<Done, ScanError>;
+    fn settings_window(&mut self) -> Result<(), ScanError>;
+}
+```
+
+- **Ids and opening** (section 1): `Backend::list` is a snapshot under the deadline; `Backend::open` takes a
+  stored id and opens it without a listing, refuses one its driver doesn't form (`BadId`), and where it opens
+  another device in its place (SANE's fallback) says so in `Opened::renamed_from`. A worker keeps one
+  `Box<dyn Device>` open while its dialog is.
+- **`RawImage`** (section 3): `RawImage::new(format, width, height, data)` checks the layout, and
+  `format()`, `width()`, `height()`, `stride()` (a row's bytes, from the format and the width), `data()` and
+  `into_data()` read it.
+- **A batch** (`Device::scan`, sections 4 to 8): `Event::Applied` once the settings are set, before the
+  first sheet; `Event::Sheet(n)` as sheet `n` begins, counted on from `first_sheet`; `Event::Page` for each
+  page, whole, once complete; `Event::Status` for what the user should know meanwhile (`WarmingUp`). It
+  returns a `Done` (section 5) or a `ScanError` (section 6): `FeederEmpty` only before any page, `Stopped`
+  never (the watchdog's, in `scan-worker`'s client), the pages sent before an error kept.
+- **Cancel and progress** (section 7), through the `Progress` it's given: `check()` between sheets, never
+  within one, and `Done::Cancelled` once it fails; each page's bytes reported. The caller cancels through the
+  batch's `Tracker`, from any thread; a cancelled tracker stays cancelled, so each batch has its own. A push
+  backend's thread gets `progress.child(..)` (an owned `Box<dyn Progress>`, `Send` and `'static`, cancelled
+  whenever its parent is) and a clone of the `Sender`, moved into a thread spawned for the batch or sent to
+  one that outlives it, as a TWAIN thread per open source would (M1 built and ran both).
+- **The settings window** (section 9): `Caps::settings_window` says the driver has one, `Device::settings_window`
+  opens it, and its settings apply to scans until changed.
+
+**What the `sane` backend maps** (S0 slice 5; the SANE rows of sections 1 to 8):
+
+| `sane-dl` gives | The model |
+|---|---|
+| `Device { name, vendor, model, kind }` | `DeviceInfo`: `id` `sane:` and the name's bytes as Latin-1; `name` the bytes as UTF-8 where they are, else as Latin-1; `maker` and `model` the vendor and model; `driver` `Sane` |
+| `Error::Status { INVAL, Open }` from a stored id | the fallback by backend, vendor and model (section 1), said in `Opened::renamed_from`; else `Gone` |
+| A stored id refused before `sane_open` (section 1): not `sane:` and Latin-1 (a character past U+00FF), a `NUL` (`Error::NulInName`, where one reaches `sane-dl`), `dll`'s testing prefixes, a leading `:`, the empty name | `BadId` |
+| `LoadError::NotFound`; the other `LoadError`s | `NotInstalled { what }`; `Driver` |
+| An option's descriptor and constraint; a set's `SetInfo` (`INEXACT`, `RELOAD_OPTIONS`) | `SourceCaps` (section 2); `Applied` and its `Clamped` |
+| `Error::StartInvalid` (the descriptors read again) | the settings set again and the start tried once more; `StartInvalid` again, `Gone` (`crates/scan-device.md`, the `sane` backend; section 6's table); a re-read that failed (`reload`), its error mapped as any other |
+| `Page::Image(Image)`, `GRAY` or `RGB` at depth 1, 8 or 16 | `Event::Page`, `Pixels::Raw`, converted as section 3's table says |
+| `Progress { bytes_read, bytes_expected }` | `set_total(bytes_expected, Unit::Bytes)` whenever it changes, and `set(bytes_read)` |
+| `Page::NoDocs` from a feeder, with `pages` 0; with pages before it | `ScanError::FeederEmpty`; `Done::FeederEmpty` |
+| `Error::Status { status, call }`, the other statuses | section 6's table |
+
+**What slice 4 needs of it** (`crates/scan-worker.md`'s protocol predates it; slice 4 writes its protocol from
+this):
+
+- every type plain data the worker can encode: a `serde` feature of `scan-device`, or wire types of the
+  worker's own (slice 4's choice);
+- a page's format, width and height before its bytes, so the client caps them before it reads them
+  (`plan.md`'s hostile-input rule), and `RawImage::new` refusing a length that doesn't match: a crashed
+  worker's half page is never a page;
+- a page delivered whole, once complete, never cut short (section 3); every size `u32`, the same in the 32-bit
+  worker;
+- `Stopped` the client's own (its watchdog's), never the worker's;
+- the protocol's consequences, which `crates/scan-worker.md`'s list (`list`, `caps`, `scan`, `cancel`,
+  `quit`; `device`, `caps`, `sheet`, `page`, `status`, `error`, `done`) predates: an `open` request, its answer
+  carrying `renamed_from`, before `caps` and `scan` (the two traits); an `applied` event (`Event::Applied`);
+  progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker; and a SANE worker that
+  opens a stored id started with that id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming the
+  backend `backend_of` gives, or none where it gives none: section 1), passed at the spawn.
+
+**What slice 9's `twain` backend meets** (slice 7's rows, as they are): its tiles and DIB assembled into a
+`RawImage` (section 3's table: rows flipped, padding dropped, tiles placed, the DIB's B, G, R swapped); a DIB's
+palette and `ICAP_PIXELFLAVOR` read into the polarity; `TWEI_PAGESIDE`, where a source fills it, as
+`SideKnown::Reported`, else `Inferred` (section 4); `TWCC_OPERATIONERROR` as `Driver { shown: true }` (section
+6); sizes per source, as `CAP_FEEDERENABLED` changes them (`SourceCaps`, section 2); `ShowUI` and
+`CAP_ENABLEDSUIONLY` as `Caps::settings_window` and `Device::settings_window` (section 9); a pending count of
+0xFFFF, a batch whose length isn't known, which the model never asks for (it has no batch length); and its STA
+thread given each batch's child progress and `Sender` clone, the cancel's wake-up its own to settle (section
+7).
+
 ## Changes from proposal 9's model
 
-1. Capabilities per source (section 2).
-2. `RawPage`'s pixels raw in one stated layout, or encoded with their kind; delivered whole; progress a
-   separate event (section 3).
-3. A page's side reported or inferred; drivers asked not to drop blank pages (sections 2 and 4).
+1. Capabilities per source, resolutions a list or a range (section 2).
+2. `RawPage`'s pixels raw in one stated layout (`RawImage`, checked as it's made), or encoded with their kind;
+   delivered whole (section 3). Revised by S0 slice 2: progress goes through `in-progress` (item 9), not an
+   event of its own.
+3. A page's side reported or inferred (`SideKnown`); drivers asked not to drop blank pages (sections 2 and 4).
 4. `FeederEmpty` as an error before any page, a `Done` after (section 5).
-5. `Driver` errors say whether the driver already showed its message; warming up stays inside the backends
-   (section 6).
-6. Cancel is "feed no more, finish the page in flight"; stopping at once is the watchdog's (section 7).
+5. `Driver` errors say whether the driver already showed its message; warming up waited on inside the
+   backends, and said as a `Status` event, never an error (section 6).
+6. Cancel is "feed no more, finish the sheet in flight", revised by S0 slice 2 from "the page in flight", so
+   in duplex a delivered front's back comes too; stopping at once is the watchdog's (section 7).
 7. The driver's own window as a capability (section 9); driver-reported metadata, later (section 10).
+
+Added by S0 slice 2 ("The model, for slice 3"):
+
+8. `Format`, the raw layout's five, is also what's asked for, in place of `Mode`, so 16-bit is asked for and
+   clamped like any setting; paper `Auto` or a `SizeMm` in `f32` millimetres, Letter, Legal and A4 its
+   constants (section 2).
+9. Cancel and progress through `in-progress`'s `Progress`, which `scan` takes: the caller's `Tracker`,
+   `check()` between sheets, each page's bytes (section 7).
+10. `ScanError::NotInstalled` for a system without its driver API, and `ScanError::BadId` for a stored id the
+    driver doesn't form (sections 1 and 6).
+11. Two traits, `Backend` (list, open) and `Device` (caps, scan, the settings window), and a device opened in
+    place of a stored id said (`Opened::renamed_from`; sections 1 and 8).
 
 ## Known unknowns
 
@@ -403,11 +708,12 @@ Each section's "To settle", gathered, with what settles it:
 | How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). Serving requests while a driver is busy, slices 8 and 9 |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
 | Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
-| The cancel handle and progress through `in-progress` (proposed) | S0 slice 3, for review |
+| The cancel handle and progress through `in-progress` | **Taken by S0 slice 2, for review** (section 7; "The model, for slice 3"); the TWAIN thread's wake-up on a cancel, S0 slice 9 |
 | Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S0 slice 12, the hand checks; the `ica` slice |
 | "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam) |
 | Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S0 slice 4's throughput gate; slice 9 |
-| The raw layout's 1-bit polarity and 16-bit byte order | S0 slice 3 |
+| The raw layout's 1-bit polarity and 16-bit byte order | **Settled, S0 slice 2, for review** (section 3): 0 the least intensity at every format, the leftmost pixel in the high bit, padding bits 0, 16-bit little-endian, rows top down and packed, R, G, B; held beside `scanimage`'s PNG |
 | The driver window's owner across processes | S0 slice 9 |
 | Every ICA name marked "to confirm"; its run loop in a worker | The `ica` slice (later) |
 | Where driver-reported patch codes go (FEAT-5) | Later |
+| What a duplex scanner gives after a cancel that lands after a front: its back, before the batch ends (the model's "sheet in flight") | S0 slice 6 (SANE, the fi-6130); S0 slice 12 (TWAIN) |

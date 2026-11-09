@@ -192,7 +192,8 @@ are at least 1, that `data` is `height` × the row's bytes exactly, and that a `
 (decision 6), so every `RawImage` holds the layout wherever it's made, the worker's client included. The
 length is worked out in `u64` with checked arithmetic, a size past what the platform can hold refused, never
 wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize`, and at `u32::MAX` by `u32::MAX` it overflows
-`u64` too (slice 7's `image` module works its sizes out in `u64` for the same reason).
+`u64` too, at two bytes a pixel or more (step 2: at `Bw1` and `Gray8` it fits, and the length refuses it)
+(slice 7's `image` module works its sizes out in `u64` for the same reason).
 
 ### The model, as slice 3 builds it
 
@@ -219,10 +220,12 @@ millimetres (decision 17). Names are the design's; slice 3 may rename and says s
   reserved); `Side { Front, Back }`, `SideKnown { Reported, Inferred }`.
 - **Events and outcomes:** `Event { Applied(Applied), Sheet(u32), Page(RawPage), Status(Status) }` on a
   `std::sync::mpsc::Sender<Event>`, which a push backend's own thread can hold a clone of; `Status` a typed note
-  for the user (`WarmingUp` first); `Done { FeederEmpty, OnePage, Cancelled }`; `ScanError { FeederEmpty,
-  Jammed, DoubleFeed, CoverOpen, Busy, Gone, Stopped, NotInstalled { what }, Driver { message, shown } }`:
-  `FeederEmpty` only before any page, `Stopped` the watchdog's alone, `NotInstalled` when the system's driver API
-  isn't there (no libsane, no `TWAINDSM.dll`: proposal 6's "Scanning on Linux needs SANE"), added here.
+  for the user (`WarmingUp` first); `Done { FeederEmpty, OnePage, Cancelled }`;
+  `ScanError { FeederEmpty, Jammed, DoubleFeed, CoverOpen, Busy, Gone, BadId, Stopped, NotInstalled { what },
+  Driver { message, shown } }`: `FeederEmpty` only before any page, `Stopped` the watchdog's alone,
+  `NotInstalled` when the system's driver API isn't there (no libsane, no `TWAINDSM.dll`: proposal 6's
+  "Scanning on Linux needs SANE"), added here, and `BadId` for a stored id the driver doesn't form (decision
+  25, added by step 2's repair).
 - **Traits** (decision 13): `Backend: Send` with `list(&mut self, deadline) -> Result<Vec<DeviceInfo>,
   ScanError>` and `open(&mut self, &DeviceId) -> Result<Opened, ScanError>`; `Opened { device: Box<dyn Device>,
   info, renamed_from: Option<DeviceId> }`; `Device: Send` with `caps(&mut self)`, `scan(&mut self, &Settings,
@@ -275,14 +278,15 @@ millimetres (decision 17). Names are the design's; slice 3 may rename and says s
   (the 16-bit conversion a function of the source's byte order, so its swap is unit-tested on CI's
   little-endian hosts), ids from Latin-1, the fallback on `INVAL` at open in a worker given the id's
   one-backend `ConfigDir` (`BeforeSystem`, naming none for an id with no backend: decisions 18 and 19; the fake
-  listing a device under a new name), decision 20's refusals before `sane_open`, and the feeder keeping its
-  sheets after a cancel. Slice 2's own entry says it's done on its branch (step 3).
+  listing a device under a new name), decision 20's refusals before `sane_open` (`BadId`), `INVAL` from a start
+  retried once and then `Gone` (both added by step 2's repair), and the feeder keeping its sheets after a
+  cancel. Slice 2's own entry says it's done on its branch (step 3).
 - **The backlog** (step 3): TEST-9 (slice 6's SANE questions: the fi-6130's name and what replugging does; a
   sheet pulled in before the page in flight ends; the back after a cancel after a front; its vendor and model
   strings); Q-4 (SANE's strings are Latin-1 by the standard: whether `sane-dl` gives vendor, model and kind as
   bytes too, where it now gives lossy UTF-8, settled by slice 5; written only as the study finds it, with what
-  backends are seen to send); decision 20's refusals, slice 5's; and whatever the probes find. The README's
-  counts recounted with `rg`, or left out.
+  backends are seen to send); decision 20's refusals (`BadId`, decision 25), slice 5's; and whatever the probes
+  find. The README's counts recounted with `rg`, or left out.
 - **Not changed:** `decisions.md` (the model's facts live in the note, this plan's decisions are for review),
   `crates/twain-dsm.md`, `plan.md` (slice 3 adds `in-progress` to its graph), `crates/scan-worker.md` (slice 4
   writes its protocol from the note's "What slice 4 needs", and the milestone's slice 4 points there), the PDF
@@ -352,8 +356,10 @@ timeout's, never a finding.
   probe, beside `scanimage --format=png` (and `--format=tiff`'s photometric tag) for gray 1, gray 8, gray 16,
   color 8 and color 16, so each format SANE gives in one pass is held to a third party; compared pixel for
   pixel, at a width not a multiple of 8, a 1-bit row's padding bits masked on `scanimage`'s side (it inverts
-  them) and checked 0 on the model's. 1-bit RGB stays L1's alone: `scanimage` writes it under an 8-bit PNM
-  header and inverts it for PNG, so it is no third party there. The PNG decoded with the `png` crate in the
+  them) and checked 0 on the model's. 1-bit RGB stays L1's alone: `scanimage` refuses it, its assertion that
+  an RGB frame is 8 or 16 bits deep stopping it before it writes a byte, in every format (corrected by step 2's
+  repair: this line said it wrote an 8-bit PNM header, which its PNM writer would, but the assertion comes
+  first), so it is no third party there. The PNG decoded with the `png` crate in the
   probe alone (image-rs's, MIT OR Apache-2.0, the decoder the pages crates will take): never a dependency of a
   crate here.
 - **M1, the model sketched** (step 2): a scratch crate, `model-sketch` (an empty `[workspace]`, `in-progress`
@@ -563,11 +569,44 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     others): `:0` opened `pnm:0` through a configuration naming `test` then `pnm` (the check's probe), the
     device of sane-dll(5)'s "default backend", which the id never named. In decision 19's directory it reaches
     that directory's backend or answers `INVAL` (the repair's probe: `:0` and the empty name through a directory
-    naming none), so the refusal gives a malformed id its own error, not `Gone`, and doesn't rest on which
-    directory a worker was given. No backend forms such a name through `dll`; an alias named with a leading `:`
-    is refused too, a limit. Slice 5's, its backlog item written in step 3. An empty name after the backend
-    (`fujitsu:`), or a backend's name alone (`fujitsu`), which opens the backend's first device, isn't refused:
-    it stays within the backend the id names, as the fallback does.
+    naming none), so the refusal gives a malformed id its own error (`ScanError::BadId`, decision 25), not
+    `Gone`, and doesn't rest on which directory a worker was given. No backend forms such a name through
+    `dll`; an alias named with a leading `:` is refused too, a limit. Slice 5's, its backlog item written in
+    step 3. An empty name after the backend (`fujitsu:`), or a backend's name alone (`fujitsu`), which opens
+    the backend's first device, isn't refused: it stays within the backend the id names, as the fallback does.
+21. **The model is written in the note as a Rust block** ("The model, for slice 3"), declarations only, which
+    probe M1 compiles and a check holds it to (the block, formatted, equals the sketch's), so slice 3 starts
+    from types that build (step 2). What the design left open, taken there: `Clamped` holds what was asked of
+    each setting the device changed, what it took being in `Applied::settings`; `Event::Sheet(n)` as sheet
+    `n` begins; `Backend::list` takes a `Duration`, as `sane-dl`'s `devices` does; `Driver::Ica` and
+    `fake:<name>` ids; `LayoutError` (`Empty`, `TooLarge`, `Length`, `Padding`) and `ScanError` derive
+    `thiserror::Error`, `Clone` and `Eq`, as plain data; `Opened` derives nothing, since it holds a `Box<dyn
+    Device>`. Slice 3 may rename and says so.
+22. **SANE's resolutions become whole dpi, and its automatic value isn't the app's** (step 2): a `FIXED` or
+    `INT` range or word list becomes `Resolutions` in whole dpi, and the app asks for a dpi, never the
+    automatic value; the model's `dpi: u32` is proposal 9's.
+23. **`LoadError::NotFound` is `NotInstalled`; the other `LoadError`s are `Driver`** (step 2): a library found
+    but unusable (a symbol missing, `sane_init` failing, a major version not 1, a second load) is the system's
+    SANE broken, not missing, and the message says which.
+24. **The note's model section says what slices 4, 5 and 9 meet** (step 2): beside "What slice 4 needs", a
+    table of what the `sane` backend maps from `sane-dl` and a paragraph of what the `twain` backend meets
+    from slice 7's rows, so the review can read each later slice against the types; the `StartInvalid` row
+    (set again, start once more, then `Gone`) is `crates/scan-device.md`'s `sane` bullet as it was, and since
+    step 2's repair section 6's table says the same (step 1 had put `INVAL` from `sane_start` under `Driver`,
+    so slice 5 had two answers). A re-read that failed (`reload`) is mapped as its own error is. The
+    alternative is `Driver` with `sane-dl`'s message, but a second `INVAL`, the settings set again from the
+    descriptors as read again, leaves the app nothing to change, and NAPS2 reads the status as offline (the
+    spec's `sane` bullet), so `Gone`, the spec's answer, for review.
+25. **`ScanError::BadId` for a stored id the backend refuses before its driver sees it** (step 2's repair):
+    decision 20's names, an id that isn't `sane:` and Latin-1 (a character past U+00FF), and a `NUL`
+    (`sane-dl`'s `NulInName`, where one reaches it) for SANE; for TWAIN, WIA and ICA what their backends
+    refuse, theirs to say (slices 9 and 10). Decision 20 gave such an id "its own error, not `Gone`" with no
+    variant to carry it, and the model had no row for it. Apart from `Gone` because they differ for the app: a
+    device gone may come back and its id is kept, while such an id never opens, wherever its worker runs, so
+    the app can drop it and offer the list. A unit variant: the caller holds the id it passed, and an untrusted
+    id isn't echoed into a message. The alternatives: `Gone` (the app keeps retrying an id that can't open) or
+    `Driver` (a message for the user about a stored setting the driver never saw). Probe M1 holds it (its
+    fourteenth test).
 
 ## For review (security)
 
@@ -577,7 +616,8 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
    the names a worker opens come from a listing or the user's stored id. Decision 18 makes "never across
    backends" hold by construction: the worker's SANE lists only the stored id's backend.
 2. **A stored id is untrusted input:** a character past U+00FF can't be Latin-1 and is refused, never cut; a `NUL`
-   is refused before SANE sees it (`sane-dl`'s `NulInName`).
+   is refused before SANE sees it (`sane-dl`'s `NulInName`); each is `ScanError::BadId`, which doesn't echo
+   the id (decision 25).
 3. **A page from a worker is untrusted:** its format and size read and capped before its bytes, `RawImage::new`
    refusing a length that doesn't match (slice 4's caps; `plan.md`'s hostile-input rule).
 4. **The probes load SANE only through private configuration directories,** and `pnm` reads only the files the
@@ -855,3 +895,137 @@ One commit, the one that carries this account. Docs only: `crates/scan-device-se
     and `6ca9a2d`; the TWAIN lines against `4624760`; the diff and message scanned. Left out: `just ci` and the
     test list (nothing outside `docs/pm/` changed since `4624760`; the check's list stands), the other probes
     (no claim of theirs changed).
+
+### Step 2: the model fixed for slice 3, and what follows (2026-11-09)
+
+One commit, the one that carries this account. Docs only: `crates/scan-device-seam.md`,
+`crates/scan-device.md`, `crates/sane-dl.md`, `milestones/s0-devices.md` and this plan.
+
+- **What it does:** in the note, the raw layout's table (section 3; its TWAIN cells read from slice 7's
+  record, the comparable form named as `twain-spike`'s `image` module, without a path) with probe L2's evidence
+  and `RawImage::new`'s checks; the new section "The model, for slice 3": the types and traits as a Rust
+  block (decision 21), what each claims (ids and opening, `RawImage`, a batch, cancel and progress, the
+  settings window), a table of what the `sane` backend maps from `sane-dl` (slice 5), what slice 4 needs of it
+  (plain data, sizes before bytes, whole pages, `u32` sizes, `Stopped` the client's, and the protocol's
+  consequences: `open` with `renamed_from`, `applied`, progress lines, `cancel` on the batch's tracker, the
+  one-backend `ConfigDir`, `Search::BeforeSystem`, at the spawn), and what slice 9's `twain` backend meets
+  (decision 24); every model paragraph the new section contradicted, sections 1 to 8 (section 1's id and
+  `renamed_from`; section 2's `Settings` with `duplex` and `format`, `SourceCaps`, `Resolutions`, `SizeMm`, its
+  "To settle"'s resolutions answered; section 3's `RawImage` and progress; section 4's `side_known` and
+  `first_sheet`; section 5's `Done::Cancelled` after the sheet and SANE's `NoDocs`; section 6's
+  `NotInstalled`, a table row and the model, and warming up as `Event::Status`; section 7's model, its "To
+  settle"'s question made the sheet's, and its `in-progress` paragraph made the model's; section 8's model
+  sentences); "Changes from proposal 9's model" (items 2 and 6 revised, 8 to 11 added); the unknowns (the raw
+  layout settled, the `in-progress` row taken for review, a row for the back after a cancel, slices 6 and
+  12, at the table's end); the revision paragraph, saying each change to what both backends share. Then
+  `crates/scan-device.md` (types, the two traits, `in-progress` and `thiserror` as dependencies, the `fake`
+  scripts, the `sane` bullet's ids and fallback, conversions and cancel, "The seam"'s eleven changes),
+  `crates/sane-dl.md`'s "For the seam" (what the seam takes of it, as built), and the milestone's slices 3 to
+  5 (slice 3's model, `in-progress` and tests; slice 4's protocol and the one-backend `ConfigDir` at the spawn;
+  slice 5's checks).
+- **Probe L2** (`scratch/work/s0-2/probes/`, `./run.sh L2`, its `README.md`): `seam-probe` gained a `layout`
+  scenario and the `png` crate (0.18.1, MIT OR Apache-2.0, the registry's copy, `--offline`; the probe's
+  alone). `test:0` at 50 dpi, 157 by 196, each format a process of its own beside `scanimage --format=png` of
+  the same settings: gray 1 (`Color pattern` and `Grid`), gray 8 and 16 and color 8 and 16 each `pixel for
+  pixel: 0 samples or pixels differ`, the model's data `height` × the row's bytes exactly; 16-bit compared after
+  the PNG's big-endian swap, the bytes unequal unswapped (29,223 of 30,772 gray samples with two different
+  bytes); at 1 bit the PNG's padding bits masked (set in 96 rows of 196 on `Color pattern`, 166 to 186 on
+  `Grid` across runs, so not steady) and the model's 0 in every row, SANE's bits uninverted differing in all
+  30,772 pixels (the control), and `scanimage`'s TIFF of the same page photometric 0. Every run rc 0, first
+  try.
+- **Probe M1** (`scratch/work/s0-2/probes/model-sketch/`, its `README.md` section): the note's block as
+  `rustfmt` formats it, `RawImage`'s methods, and 13 tests, built `--offline` against `in-progress` 0.1.0 and
+  `thiserror` 2: the traits `Send` and dyn-compatible, a boxed device moved to the thread that scans,
+  `renamed_from`, a pull backend cancelled from another thread as sheet 2's front begins delivering its back
+  and no sheet 3, a push backend's spawned thread with a `Sender` clone and `progress.child(..)` seeing a
+  cancel from a third thread at its next `check()`, a resident push thread taking each batch's clone and
+  child over a channel, and `RawImage::new`'s checks (an empty image, a wrong length, a set padding bit,
+  `u32::MAX` by `u32::MAX` at two bytes a pixel or more `TooLarge`, 65,536 by 65,536 `Rgb16` with no data,
+  which a wrapping 32-bit `usize` would take). All pass; clippy `-D warnings` clean. The layout tests also ran
+  on `wasm32-wasip1` (a 32-bit `usize`, through Node's WASI), taking their 32-bit branches: 7 passed. Every
+  test made to fail on a broken copy (`scratch/work/s0-2/step-2/make-fail.md`: eight cases), and
+  `check-block.sh` (the note's block, formatted, against the sketch's: equal) made to fail on a changed copy of
+  the note.
+- **`in-progress` 0.1.0, re-read from the registry's copy:** as "Dependencies, vetted" has it (MIT OR
+  Apache-2.0, edition 2024, `rust-version` 1.85, no dependencies, dev `rayon` and `loom` under `cfg(loom)`,
+  one source file, no `unsafe` in it or its examples, `Tracker` `Clone` and `Send + Sync`, a cooperative
+  cancel: "Nothing is interrupted"), its trait also holding `message` and `is_cancelled`; packaged from
+  commit `3949d79`.
+- **Departures from the plan, and why:**
+  - *The model is a Rust block in the note,* not prose alone: M1 compiles it and `check-block.sh` holds the
+    two together (decision 21).
+  - *The model section also maps slices 5 and 9,* beside slice 4's needs, so the review reads each later slice
+    against the types (decision 24).
+  - *The `u64` overflow is narrowed:* at `u32::MAX` by `u32::MAX`, `Bw1` and `Gray8` fit `u64` (2^64 − 2^33 + 1
+    bytes at most), and the length refuses them; the design's sentence says so now.
+  - *L2 adds a second 1-bit picture* (`Grid`, both bit values in quantity) and the uninverted control; *M1
+    adds a resident push thread* (a TWAIN thread per open source) and a 32-bit run, neither planned.
+  - *Section 6's table gains a `NotInstalled` row,* its TWAIN cell the DSM's file as `twain-dsm` loads it
+    (slice 8), WIA's and ICA's to confirm: a new row, no slice 7 row changed.
+  - *Section 7's "To settle"* (the first version's line) asks of the sheet now; slice 7's TWAIN text after it
+    is untouched.
+- **Decisions taken alone:** 21 to 24 above.
+- **`rg` over the note for the old model's words,** each hit revised or kept on purpose: `Backend::scan`,
+  "progress event", "separate handle", "not surfaced" and "(proposed" are gone; `mode` is SANE's option
+  (section 2's SANE row and the model's mapping) or `sane_set_io_mode`'s (section 3's SANE row); "page in
+  flight" is history (the revision paragraph's unknown, proposal 10's words as quoted, "Changes" item 6),
+  SANE's facts at the page (section 7's SANE row, the answer's heading and body, the unknowns' SANE row),
+  slice 7's TWAIN lines (section 7's "To settle", the unknowns' TWAIN row), or an error's page (section 6);
+  "proposed" is the `in-progress` paragraph's history.
+- **The TWAIN rows:** every line of the note at `4624760` that slice 7 wrote (`git blame`) is in the note
+  verbatim but the planned shared ones, section 7's `in-progress` paragraph and the unknowns' `in-progress`
+  row, both said in the revision paragraph; section 8's lines from "**TWAIN, by the spike:**" on are as they
+  were, the line that holds it untouched, the model's sentences before it rewritten in their own lines.
+- **Quick checks here:** `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets --
+  -D warnings` green (no crate touched); `git diff --stat` touching `docs/pm/` alone; the trial merge of a
+  commit of this tree with `origin/s0-8-twain-dsm` at `0f08bb0` and with `6ca9a2d`; every line of the edited
+  files at most 115 characters outside tables; the diff and this message scanned for local paths, the
+  username, the maintainer's name, sheaf, `scratch/` and pdf-lint's plan outside `docs/pm/`. The test list,
+  L2 and M1 run again and the other checks of the core are the checking agent's; `just ci` isn't run (no
+  file outside `docs/pm/` changed; Baselines).
+- **Its check** (at `0175f81`; record in `scratch/work/s0-2/flow/checks.md`, "Step 2 at 0175f81"): the test
+  list 245 tests, the same names as step 1's; nothing outside `docs/pm/` changed; `just ci` green once (34 s,
+  `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, no test skipped); the trial merge against
+  `0f08bb0` and `6ca9a2d` conflicting in the six known files alone; the message and added lines clean; every
+  cited path found and the facts traced; L2 run again, its six cases equal pixel for pixel; M1 built fresh, its
+  tests passing here, on `wasm32-wasip1` and on 1.89, `check-block.sh` equal and failing on a changed copy;
+  `in-progress` as vetted; slice 7's lines verbatim but the ten planned shared ones; slices 3, 4 and 9 read
+  against the types and holding. Two failures, docs only, and seven minor points for step 3 and the code
+  review.
+- **Repaired after its check** (amending this step's commit, docs only):
+  - *`StartInvalid` was mapped two ways.* Section 6's table put `INVAL` from `sane_start` under `Driver` (the
+    row's SANE cell, step 1's), while the model section's mapping (step 2) sets the settings again, starts once
+    more and says `Gone` if it repeats, as `crates/scan-device.md`'s `sane` bullet has it, so slice 5 had two
+    answers. *Cause:* step 2 wrote the mapping from the spec and left step 1's cell as it was. *Fixed:* one
+    answer, the spec's: the `Gone` row's SANE cell gains `INVAL` from `sane_start` twice running and the
+    `Driver` row's loses it; the mapping row says a re-read that failed (`reload`) is mapped as its own error
+    is; `crates/scan-device.md`'s bullet says set again, start once more, `Gone`; the milestone's slice 5
+    checks it through the fake's `at PAGE start INVAL`; decision 24 says so, with the alternative, for review.
+  - *A refused id had no error to carry it.* Decision 20 gave a malformed id "its own error, not `Gone`", but
+    `ScanError` had no variant for it, and no row covered it, `NulInName` or a character past U+00FF.
+    *Fixed:* `ScanError::BadId`, a unit variant (decision 25, for review; security item 2), in the note's
+    block, section 1's paragraph, section 6's table (a new row at its end, its TWAIN cell slice 9's to say, WIA's
+    and ICA's to confirm: no slice 7 row changed) and its model paragraph, the ids bullet, the mapping table and
+    "Changes" item 10 (still eleven); in `crates/scan-device.md`'s `ScanError` and its `sane` bullet; in the
+    milestone's slice 5; and in this plan's design. Probe M1's sketch gained the variant and a fourteenth test, a
+    backend refusing an id it doesn't form with `BadId`, apart from `Gone`.
+  - *Section 3 gave a wrong reason for 1-bit RGB's having no third party:* that `scanimage` writes it under an
+    8-bit PNM header. The installed `scanimage` aborts on it in PNG, TIFF and PNM alike (`scan_it: Assertion
+    '(parm.depth == 8) || (parm.depth == 16)' failed`, rc 134, no byte written: the check's run, and the
+    repair's, `scratch/work/s0-2/repair-2/rgb1/`), and master `a113b257`'s `frontend/scanimage.c` asserts it in
+    `scan_it`'s RGB case, before its PNM writer, whose P6 header with a maxval of 255 the claim was read from, is
+    reached. *Cause:* the plan read the header's writer, not the assertion before it. *Fixed:* the note's
+    parenthesis, and the plan's L2 design text, say `scanimage` refuses it; the conclusion stands.
+  - *Checks run again,* on the amended commit: `rg` for `StartInvalid`, `INVAL` from a start and `BadId`
+    across `docs/pm/`, each saying one thing; the 1-bit RGB `scanimage` runs, reproduced; M1 with the new
+    variant, its 14 tests passing, clippy `-D warnings` clean, `check-block.sh` equal, and made to fail twice
+    (the new test on a copy whose backend answers `Gone`; the block check against `0175f81`'s note, which
+    lacks the variant); section 6's TWAIN, WIA and ICA cells equal to `0175f81`'s, and the rows touched
+    blamed to the first version and step 1, none to slice 7; the trial merge against `0f08bb0` and `6ca9a2d`;
+    lines at most 115 characters outside tables; the diff and the message scanned. Left out: `just ci` and the
+    test list (nothing outside `docs/pm/` changed since the check's green run), L2 and the other probes (no
+    claim of theirs changed), M1's 32-bit and 1.89 runs (no layout test or dependency changed).
+  - *Left for step 3 and the code review,* as the check put them: the `NotInstalled` TWAIN cell and the app's
+    own DSM, the stored-id worker's current directory under `BeforeSystem`, the 10 s kill after a cancel against
+    the sheet in flight, a `serde` `RawImage` going through `new`, the settings window's protocol request, a
+    clause on the `test` backend's varying padding bits, and the `image` module's name after slice 8's merge.

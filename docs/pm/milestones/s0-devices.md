@@ -41,18 +41,35 @@ S1 back: S1 can start once the Linux slices are done.
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the
    unknowns TWAIN is to settle kept. Checked: reviewed before slice 3 starts, since it fixes slice 3's API.
-3. **scan-device, provisional:** the model, the `Backend` trait, settings clamped and said, the `fake`
-   backend and its scripts, as the seam note has them; 0.0.x, unpublished. Checked: the scripts (proposal 22)
-   on every runner.
-4. **scan-worker:** the protocol, `serve`, the client, the watchdog. Checked: the `fake` backend through a
-   real worker process: a hang killed with the pages kept, a crash with the pages kept and the exit said, a
-   cancel mid-page, a version mismatch, a page cut short; throughput of 300 dpi pages in color and black and
-   white at 2.3 a second (M5 slice 6's gate, its pipe's share), measured on every run.
-5. **scan-device's `sane` backend.** Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty;
+3. **scan-device, provisional:** the model as the seam note's "The model, for slice 3" has it (its types, the
+   `Backend` and `Device` traits, `RawImage`'s checked constructor, cancel and progress through `in-progress`,
+   taken here: vetted in slice 2's plan, the devices layer's gate holding it, and `plan.md`'s graph updated),
+   settings clamped and said, the `fake` backend and its scripts; 0.0.x, unpublished. Checked: the scripts
+   (proposal 22) on every runner, among them a cancel after a duplex front (its back still delivered) and a
+   stored id opened as a renamed device; `RawImage::new`'s checks unit-tested (the length, a 1-bit row's
+   padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped).
+4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What
+   slice 4 needs of it" has it: an `open` request answered with `renamed_from`, before `caps` and `scan`; an
+   `applied` event; progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker; a
+   page's format and size before its bytes; and a SANE worker that opens a stored id spawned with that id's
+   one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no backend). Checked: the
+   `fake` backend through a real worker process: a hang killed with the pages kept, a crash with the pages
+   kept and the exit said, a cancel mid-page (the sheet finished, none fed after), a version mismatch, a page
+   cut short; the raw layout across the pipe byte for byte; throughput of 300 dpi pages in color and black
+   and white at 2.3 a second (M5 slice 6's gate, its pipe's share), measured on every run.
+5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its
+   table in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty;
    gray, color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error:
-   a jam ends the scan); pages through the `pnm` backend, byte for byte; the fake libsane's feeder and duplex
-   names for each backend. Whatever the backend finds the model lacking goes into the seam note and the
-   model, said.
+   a jam ends the scan), 16-bit and 1-bit RGB in the model's raw layout (the 16-bit conversion a function of
+   the source's byte order, so its swap is unit-tested on CI's little-endian hosts); pages through the `pnm`
+   backend, its PBM compared after the inversion (PBM is 1 black, the model 0), PGM and PPM byte for byte; ids
+   from Latin-1, back to `sane_open` byte for byte; the fallback on `INVAL` at open in a worker given the id's
+   one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no backend), the fake listing a
+   device under a new name; `dll`'s testing prefixes, a leading `:`, the empty name and an id not Latin-1
+   refused before `sane_open` (`BadId`); `INVAL` from a start (the fake's `at PAGE start INVAL`) met by
+   setting the settings again and starting once more, and `Gone` when it repeats; the feeder keeping its
+   sheets after a cancel; the fake libsane's feeder and duplex names for
+   each backend. Whatever the backend finds the model lacking goes into the seam note and the model, said.
 6. **By hand on Linux:** an fi-6130 through SANE's fujitsu backend on a Linux laptop at the office (M5 ask
    12; SANE rates it complete): 50 mixed sheets duplex, a forced jam, an open cover, unplugged mid-scan, a
    cancel. A row per scanner and driver in the notes. Waits on the scanner; doesn't hold the rest back.
