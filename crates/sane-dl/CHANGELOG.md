@@ -22,8 +22,9 @@ macOS have no default library; and `Image`'s `Debug` gives its data's length rat
   run path built into the binary or shared library that holds the crate. That rests on two rules of the
   process's environment, which `Sane::load`'s docs give: every entry of the search path absolute, since an
   empty or relative one is looked for from the working directory, which the program may change; and
-  `LD_LIBRARY_PATH` never changed inside a process using SANE, since SANE's `dll` reads it each time it
-  loads a backend. Then `sane_init`, with no authorization callback, and a SANE other than version 1 refused
+  `LD_LIBRARY_PATH` (or `SHLIB_PATH`, `LIBPATH`) never changed inside a process using SANE, since SANE's
+  `dll` reads it each time it loads a backend, which is also why a set-id program runs SANE in a process of
+  its own. Then `sane_init`, with no authorization callback, and a SANE other than version 1 refused
   after its `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
   `UnsupportedVersion`, `AlreadyLoaded`, `SlotTaken`, `SlotRefused`. One `Sane` per process, and another once
   it has ended; a failed load leaves nothing behind; the library is never unloaded. Nothing links libsane;

@@ -36,7 +36,9 @@
 #   a caller reaches that item's associated functions through.
 # Raw pointers in public fields, and unions, are allowed: plain data, read
 # through or read only by the reader's own `unsafe`, as long as no public
-# function takes or gives one.
+# function takes or gives one. A method's `self` isn't followed (derived
+# impls name it `Self`), so a safe method of such a type over `self` alone
+# passes: a limit the list's reader keeps in mind.
 
 def kind: .inner | keys[0];
 

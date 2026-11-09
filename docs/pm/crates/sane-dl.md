@@ -31,12 +31,14 @@ SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md
     name does, kept to two rules `Sane::load`'s docs give its starter and the program. Every entry of the
     search path (and of a run path) absolute: glibc reads an empty entry as the working directory and looks a
     relative one up from it as the library loads, and `set_current_dir` is safe, so with one the program's own
-    code would choose (std's name lookups are open to it alike). And `LD_LIBRARY_PATH` never changed inside a
-    process using SANE: the system's loader reads it as the process starts, but SANE's `dll` reads it (or
-    `SHLIB_PATH`, `LIBPATH`) with `getenv` each time it loads a backend, at a listing or an open, before its
-    own directory, and `set_var` is safe before edition 2024. Said rather than made `unsafe`: a change after
-    `load` reaches `open` and `devices` too, and the Vulkan loader's variables, under ash's and wgpu's safe
-    entries, are the same case (the slice's decision 33, for review).
+    code would choose (std's name lookups are open to it alike). And `LD_LIBRARY_PATH` (or `SHLIB_PATH`,
+    `LIBPATH`) never changed inside a process using SANE: the system's loader reads it as the process starts,
+    but SANE's `dll` reads the first of the three that's set with `getenv` each time it loads a backend, at a
+    listing or an open, before its own directory, and `set_var` is safe before edition 2024. Said rather than
+    made `unsafe`: a change after `load` reaches `open` and `devices` too, and the Vulkan loader's variables,
+    under ash's and wgpu's safe entries, are the same case (the slice's decision 33, for review). In a set-id
+    process glibc clears `LD_LIBRARY_PATH` but not the other two, which `dll` then reads, so the docs tell a
+    set-id program to run SANE in a process it starts (UP-14, for sane-backends' `dll`).
   - **One SANE per process, across copies of the crate:** cargo refuses two versions in one build (the
     manifest's `links = "sane-dl"`, with a build script that builds nothing), but each shared library built
     with the crate holds a copy of its own. On Linux every copy takes one slot for the whole process before

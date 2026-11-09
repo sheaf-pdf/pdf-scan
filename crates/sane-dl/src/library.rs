@@ -1042,15 +1042,21 @@ impl Sane {
     ///   the program's own code may change its working directory, and so
     ///   would choose the library. The C library's own lookups, which std
     ///   uses, are open to such entries alike.
-    /// - **Nothing in the process changes `LD_LIBRARY_PATH` while SANE is
-    ///   in use.** The system's loader reads it as the process starts, so
-    ///   for SANE itself a change comes too late. But SANE's `dll`, the part
-    ///   of SANE that loads its backends, reads it (or, where it's unset,
-    ///   `SHLIB_PATH` or `LIBPATH`) each time it loads one, at a listing or
-    ///   an open, and looks there first for the backend's library: a value
-    ///   set inside the process would choose libraries that then run in it.
-    ///   So a program sets it, as it sets `SANE_CONFIG_DIR`, on a process it
-    ///   starts, never on its own.
+    /// - **Nothing in the process changes `LD_LIBRARY_PATH`, `SHLIB_PATH`
+    ///   or `LIBPATH` while SANE is in use.** The system's loader reads the
+    ///   first as the process starts, so for SANE itself a change comes too
+    ///   late. But SANE's `dll`, the part of SANE that loads its backends,
+    ///   reads the first of the three that's set each time it loads one, at
+    ///   a listing or an open, and looks there first for the backend's
+    ///   library: a value set inside the process would choose libraries
+    ///   that then run in it. So a program sets the loader's variable, as it
+    ///   sets `SANE_CONFIG_DIR`, on a process it starts, never on its own.
+    ///
+    /// In a set-id process, whose starter isn't trusted, the loader ignores
+    /// its variables and glibc clears `LD_LIBRARY_PATH`, but `dll` then
+    /// reads `SHLIB_PATH` and `LIBPATH`, which nothing clears: so a set-id
+    /// program runs SANE in a process it starts with an environment of its
+    /// own choosing, never in itself.
     pub fn load() -> Result<Sane, LoadError> {
         if Self::DEFAULT_LIBRARIES.is_empty() {
             return Err(LoadError::NoDefault);

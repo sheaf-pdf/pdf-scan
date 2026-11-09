@@ -122,11 +122,15 @@ keeps to two rules, its starter's and the program's:
   the variable was unset) means the working directory, and a relative entry is looked for from it, as the
   library loads; the program's own code may change its working directory, and so would choose the library.
   The C library's own lookups, which std uses, are open to such entries alike.
-- **Nothing in the process changes `LD_LIBRARY_PATH` while SANE is in use.** The system's loader reads it as
-  the process starts, so for SANE itself a change comes too late. But SANE's `dll`, the part of SANE that
-  loads its backends, reads it (or, where it's unset, `SHLIB_PATH` or `LIBPATH`) each time it loads one, at a
-  listing or an open, and looks there first for the backend's library: a value set inside the process would
-  choose libraries that then run in it.
+- **Nothing in the process changes `LD_LIBRARY_PATH`, `SHLIB_PATH` or `LIBPATH` while SANE is in use.** The
+  system's loader reads the first as the process starts, so for SANE itself a change comes too late. But
+  SANE's `dll`, the part of SANE that loads its backends, reads the first of the three that's set each time it
+  loads one, at a listing or an open, and looks there first for the backend's library: a value set inside the
+  process would choose libraries that then run in it.
+
+In a set-id process, whose starter isn't trusted, the loader ignores its variables and glibc clears
+`LD_LIBRARY_PATH`, but `dll` then reads `SHLIB_PATH` and `LIBPATH`, which nothing clears: so a set-id program
+runs SANE in a process it starts with an environment of its own choosing, never in itself.
 
 That holds across copies of this crate as far as each system lets it be seen. Its manifest's `links` key
 makes cargo refuse two versions of it in one build, but every shared library built with it holds a copy of
