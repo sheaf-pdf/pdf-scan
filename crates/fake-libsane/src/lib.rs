@@ -3,8 +3,9 @@
 //! A shared library that exports SANE's C API, loaded by its path in place of
 //! the system's `libsane`. It plays what SANE's own `test` and `pnm` backends
 //! can't: values no well-behaved backend returns, listings that take their
-//! time, and, as it grows, the feeder and duplex options of particular
-//! backends, a jam or an open cover at a given sheet, and reads that hang.
+//! time, the feeder and duplex options of particular backends and
+//! descriptors that change after a set, and, as it grows, a jam or an open
+//! cover at a given sheet, and reads that hang.
 //! Each is scripted by the test that loads it. It logs every call, and
 //! records a violation whenever its caller breaks SANE's calling rules.
 //!
@@ -50,9 +51,48 @@
 //! and any other name returns `INVAL`. A device list is overwritten with
 //! `#`s when it goes stale (at the next listing or `sane_exit`, as SANE
 //! has it), and kept, never freed, so a caller that reads it late reads the
-//! wrong names rather than freed memory. Options and scanning aren't played
-//! yet: those calls return `UNSUPPORTED` (`sane_get_option_descriptor`
-//! null).
+//! wrong names rather than freed memory. Scanning isn't played yet: those
+//! calls return `UNSUPPORTED`.
+//!
+//! ## Options
+//!
+//! Every handle has option 0, the count, then the script's options in
+//! order, each with its own value. An `option` line starts one; the lines
+//! after it, until the next, describe it. Any integer may be given where a
+//! name is taken, so a descriptor can hold what SANE doesn't allow.
+//!
+//! | Line | What it does |
+//! |---|---|
+//! | `option NAME TYPE SIZE CAPS` | An option: its name (`@null` allowed); its type (`BOOL`, `INT`, `FIXED`, `STRING`, `BUTTON`, `GROUP`); its size in bytes; its capabilities, `-` for none or names joined by `+` (`soft-select`, `hard-select`, `soft-detect`, `emulated`, `automatic`, `inactive`, `advanced`). Its title is its name, its description empty, its unit `NONE`, unconstrained, its value 0 or empty |
+//! | `title TEXT`, `desc TEXT` | Its title, its description |
+//! | `unit UNIT` | Its unit: `NONE`, `PIXEL`, `BIT`, `MM`, `DPI`, `PERCENT`, `MICROSECOND` |
+//! | `range MIN MAX QUANT` | A range constraint |
+//! | `words W...` | A word-list constraint |
+//! | `strings S...` | A string-list constraint |
+//! | `constraint TYPE` | Its constraint type alone (`NONE`, `RANGE`, `WORD_LIST`, `STRING_LIST`), whatever the constraint's pointer holds: without a `range`, `words` or `strings` line, the pointer is null |
+//! | `word-list-length N` | What the word list's first word claims, whatever it holds |
+//! | `strings-repeat N` | `N` more string-list entries, `s<index>` |
+//! | `value V...` | Its value: a string, or as many numbers as given, the last repeated to its size |
+//! | `auto V...` | The value `SET_AUTO` chooses (without one it keeps the value) |
+//! | `reload-params` | A set says `RELOAD_PARAMS` |
+//! | `when V CHANGE NAME [ARGS]` | Once the option is set to `V`, the named option changes: `activate`, `deactivate` (any number of names), `range NAME MIN MAX QUANT`, `words NAME W...`, `size NAME BYTES`, `null NAME` (its descriptor becomes null); and the set says `RELOAD_OPTIONS`, unless a `when V quiet` line says nothing is to be said |
+//! | `start-inactive NAME...` | Named options start inactive |
+//! | `option-null` | An option whose descriptor is null, though it's counted |
+//! | `option-count N` | Option 0's value, in place of the real count |
+//! | `control-status N STATUS` | `sane_control_option` on option `N` answers `STATUS`, doing nothing |
+//! | `profile NAME` | A backend's layout, its lines as above: `fujitsu` (`source` from `Flatbed`, `ADF Front`, `ADF Back`, `ADF Duplex`), `airscan` (`Flatbed`, `ADF`, `ADF Duplex`, fewer resolutions in duplex), `brother` (long `Automatic Document Feeder(left aligned,Duplex)` sources), `canon-dr` (a `ScanMode` of `Simplex` or `Duplex`), `lexmark` (a `BOOL` `scan-both-sides`), `epson` (an `adf-mode` of `Simplex` or `Duplex`), `kodak` (a `duplex` of `front`, `back` or `both`); each with `mode`, `resolution`, the scan area and a `page-width` and `page-height`, active only while a feeder is the source |
+//!
+//! A number for a `FIXED` option is decimal (`215.9`), rounded to the
+//! nearest 1/65536; for any other, an integer. A descriptor is given at the
+//! same address for as long as the process lives, rewritten in place when
+//! a rule changes it, and its strings and lists are never freed.
+//!
+//! `sane_control_option` reads a set's value as the option's descriptor
+//! sizes it (a string up to its `NUL`), writes a get's the same way (a
+//! string's `NUL` only if it fits, so a value as long as the size has
+//! none), and plays a backend's part: a string not in its list is `INVAL`,
+//! a number out of its range or word list is moved to the nearest it allows
+//! and said `INEXACT`, and the rules fire.
 //!
 //! # The log
 //!
@@ -67,6 +107,10 @@
 //! return t2 sane_get_devices status=GOOD devices=1
 //! call t1 sane_open name="fake:0"
 //! return t1 sane_open status=GOOD handle=0x5a00
+//! call t1 sane_get_option_descriptor handle=0x5a00 option=0
+//! return t1 sane_get_option_descriptor descriptor
+//! call t1 sane_control_option handle=0x5a00 option=2 action=SET value="ADF"
+//! return t1 sane_control_option status=GOOD info=0x2
 //! violation t3 sane_exit came with handles open: 0x5a00
 //! note t1 script-error the script doesn't parse: line 2: "frob" isn't a keyword
 //! ```
@@ -84,10 +128,23 @@
 //! - a call comes before `sane_init` or after `sane_exit`, or `sane_init`
 //!   twice without `sane_exit` between;
 //! - a pointer SANE must write through is null (`sane_get_devices`'s list,
-//!   `sane_open`'s handle), or `sane_open`'s device name is: the call is
-//!   answered `INVAL`, and nothing is listed or opened. (`sane_init`'s
+//!   `sane_open`'s handle, `sane_control_option`'s value but for
+//!   `SET_AUTO`), or `sane_open`'s device name is: the call is answered
+//!   `INVAL`, and nothing is listed or opened. (`sane_init`'s
 //!   `version_code` may be null, as the standard allows: no version is
 //!   given, and the log's `return` line says `version_code=null`.)
+//!
+//! And, for options, what a careful caller refuses before the backend sees
+//! it (`sane-dl` promises these), each answered `INVAL` with nothing done:
+//! `sane_control_option` on an option that doesn't exist, whose descriptor
+//! is null or holds what SANE doesn't allow (an unknown type, a size that
+//! doesn't fit its type, a constraint that doesn't fit it), or that is
+//! inactive; a get of a group or a button, or of an option software can't
+//! read; a set or `SET_AUTO` of one software can't set; `SET_AUTO` of one
+//! that can't choose; a `BOOL` set as anything but a word of 0 or 1; a
+//! string with no `NUL` within the option's size; an action SANE doesn't
+//! define; and, after a set that said `RELOAD_OPTIONS`, a call on any
+//! option but 0 before every descriptor has been read again.
 //!
 //! A test asserts its log has no `violation` line.
 
@@ -101,4 +158,5 @@ mod fake;
 #[allow(dead_code)]
 #[path = "../../sane-dl/src/ffi.rs"]
 mod ffi;
+mod options;
 mod script;

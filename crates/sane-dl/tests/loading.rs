@@ -119,7 +119,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_open",
@@ -168,7 +168,7 @@ fn a_refused_version_is_exited_and_a_later_load_succeeds() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         ["sane_init", "sane_exit", "sane_init", "sane_exit"]
     );
 }
@@ -192,7 +192,10 @@ fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    assert_eq!(log.calls(), ["sane_init", "sane_init", "sane_exit"]);
+    assert_eq!(
+        log.calls_but_options(),
+        ["sane_init", "sane_init", "sane_exit"]
+    );
 }
 
 #[test]

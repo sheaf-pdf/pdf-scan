@@ -59,7 +59,7 @@ fn devices_are_copied_as_sane_lists_them() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_get_devices",
@@ -111,7 +111,7 @@ fn the_last_drop_after_a_listing_in_time_ends_sane_at_once() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    let calls = log.calls();
+    let calls = log.calls_but_options();
     assert_eq!(calls.len(), ROUNDS * 5);
     for round in calls.chunks(5) {
         assert_eq!(
@@ -198,7 +198,7 @@ fn a_listing_past_its_deadline_says_so_and_holds_the_library() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_get_devices",
@@ -241,7 +241,10 @@ fn waiting_for_another_call_counts_against_the_deadline() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    assert_eq!(log.calls(), ["sane_init", "sane_get_devices", "sane_exit"]);
+    assert_eq!(
+        log.calls_but_options(),
+        ["sane_init", "sane_get_devices", "sane_exit"]
+    );
     assert_eq!(
         log.nth("call", "sane_exit", 0).1.thread,
         log.nth("call", "sane_init", 0).1.thread
@@ -277,7 +280,7 @@ fn a_handle_dropped_during_a_late_listing_is_closed_by_the_listing() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_open",
@@ -344,7 +347,7 @@ fn the_sane_dropped_during_a_late_listing_is_ended_by_the_listing() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_open",
@@ -548,7 +551,7 @@ fn a_device_opens_by_name_without_a_list() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         [
             "sane_init",
             "sane_open",
@@ -590,7 +593,7 @@ fn a_name_sane_doesnt_know_is_sane_opens_status() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         ["sane_init", "sane_open", "sane_open", "sane_exit"]
     );
 }
@@ -611,7 +614,10 @@ fn a_good_open_with_a_null_handle_is_refused() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    assert_eq!(log.calls(), ["sane_init", "sane_open", "sane_exit"]);
+    assert_eq!(
+        log.calls_but_options(),
+        ["sane_init", "sane_open", "sane_exit"]
+    );
 }
 
 #[test]
@@ -633,7 +639,7 @@ fn a_name_holding_a_nul_never_reaches_sane() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    assert_eq!(log.calls(), ["sane_init", "sane_exit"]);
+    assert_eq!(log.calls_but_options(), ["sane_init", "sane_exit"]);
 }
 
 #[test]
@@ -653,7 +659,7 @@ fn status_messages_are_sanes_words() {
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(
-        log.calls(),
+        log.calls_but_options(),
         ["sane_init", "sane_strstatus", "sane_strstatus", "sane_exit"]
     );
 }

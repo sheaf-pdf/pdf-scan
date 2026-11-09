@@ -383,6 +383,40 @@ impl FakeLog {
             .collect()
     }
 
+    /// The functions called, in order, but the option calls (opening a
+    /// device reads its descriptors).
+    pub fn calls_but_options(&self) -> Vec<&str> {
+        self.calls()
+            .into_iter()
+            .filter(|function| {
+                !matches!(
+                    *function,
+                    "sane_get_option_descriptor" | "sane_control_option"
+                )
+            })
+            .collect()
+    }
+
+    /// The calls of `sane_control_option`, each as the log has its details:
+    /// `handle=… option=N action=GET|SET|AUTO`, then `value=…` for a set.
+    pub fn controls(&self) -> Vec<&str> {
+        self.lines
+            .iter()
+            .filter(|line| line.kind == "call" && line.function == "sane_control_option")
+            .map(|line| line.rest.as_str())
+            .collect()
+    }
+
+    /// The calls of `sane_control_option` on option `option`, as
+    /// [`controls`](Self::controls) gives them.
+    pub fn controls_of(&self, option: usize) -> Vec<&str> {
+        let wanted = format!(" option={option} ");
+        self.controls()
+            .into_iter()
+            .filter(|rest| rest.contains(&wanted))
+            .collect()
+    }
+
     /// Where the `n`th line of a kind for a function is, and the line.
     pub fn nth(&self, kind: &str, function: &str, n: usize) -> (usize, &LogLine) {
         self.lines
@@ -404,13 +438,27 @@ impl FakeLog {
 /// system's, written by the parent as the child is spawned; a skip a
 /// failure where `SANE_DL_REQUIRE_LIBSANE=1`.
 pub fn real_child(test: &str, backends: &[&str]) -> Child {
+    real_child_with(test, backends, &[])
+}
+
+/// A child as [`real_child`] makes, its configuration directory holding
+/// `files` too (a backend's own configuration, such as `test.conf`), each a
+/// name and its text.
+pub fn real_child_with(test: &str, backends: &[&str], files: &[(&str, &str)]) -> Child {
     let dir = test_dir(test);
     let backends: Vec<String> = backends.iter().map(|&name| name.to_owned()).collect();
+    let files: Vec<(String, String)> = files
+        .iter()
+        .map(|&(name, text)| (name.to_owned(), text.to_owned()))
+        .collect();
     Child::new()
         .prepare(move |command| {
             fresh_dir(&dir);
             let config = dir.join("config");
             fs::create_dir(&config).expect("couldn't make the configuration directory");
+            for (name, text) in &files {
+                fs::write(config.join(name), text).expect("couldn't write a configuration file");
+            }
             let config = ConfigDir::write(&config, &backends, Search::Isolated)
                 .expect("couldn't write the configuration");
             command.env(CONFIG_DIR_VARIABLE, config.value());

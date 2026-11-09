@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use crate::ffi;
+use crate::options::{Builder, Layout};
 
 /// A string the fake hands to C: null, or bytes (a `NUL` added when given).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +47,8 @@ pub struct Script {
     pub opens: Vec<(Vec<u8>, OpenAnswer)>,
     /// Whether `sane_strstatus` returns null.
     pub strstatus_null: bool,
+    /// The options every handle has, after option 0.
+    pub layout: Layout,
 }
 
 impl Default for Script {
@@ -61,6 +64,7 @@ impl Default for Script {
             listing_delays: vec![Duration::ZERO],
             opens: Vec::new(),
             strstatus_null: false,
+            layout: Layout::default(),
         }
     }
 }
@@ -98,8 +102,10 @@ impl Script {
         let mut script = Script::default();
         let mut inits = Vec::new();
         let mut delays = Vec::new();
+        let mut options = Builder::default();
         for (number, line) in text.lines().enumerate() {
             let at = |error: String| format!("line {}: {error}", number + 1);
+            options.place = format!("line {}", number + 1);
             let words = split(line).map_err(at)?;
             let Some((keyword, args)) = words.split_first() else {
                 continue;
@@ -197,9 +203,14 @@ impl Script {
                     want(0)?;
                     script.strstatus_null = true;
                 }
-                other => return Err(at(format!("{other:?} isn't a keyword"))),
+                other => {
+                    if !options.line(other, args).map_err(at)? {
+                        return Err(at(format!("{other:?} isn't a keyword")));
+                    }
+                }
             }
         }
+        script.layout = options.finish()?;
         if !inits.is_empty() {
             script.inits = inits;
         }
@@ -211,7 +222,7 @@ impl Script {
 }
 
 /// A word that must be text: not `@null`.
-fn word(text: &Text) -> Result<String, String> {
+pub(crate) fn word(text: &Text) -> Result<String, String> {
     match text {
         Text::Null => Err("@null where a word is needed".to_owned()),
         Text::Bytes(bytes) => {
@@ -288,7 +299,7 @@ fn version(word: &str) -> Result<i32, String> {
 /// Splits a line into words: bare, or quoted with `"` (`\"`, `\\` and `\xHH`
 /// escapes inside), `@null` for a null pointer and `@long:N` for `N` bytes
 /// of `x`; `#` starts a comment.
-fn split(line: &str) -> Result<Vec<Text>, String> {
+pub(crate) fn split(line: &str) -> Result<Vec<Text>, String> {
     let mut words = Vec::new();
     let mut chars = line.chars().peekable();
     while let Some(&c) = chars.peek() {

@@ -15,7 +15,11 @@
 //! for device in sane.devices(false, Duration::from_secs(30))? {
 //!     println!("{} ({} {})", device.name, device.vendor, device.model);
 //! }
-//! let handle = sane.open("test:0")?;
+//! let mut handle = sane.open("test:0")?;
+//! if let Some(resolution) = handle.find_option("resolution") {
+//!     let resolution = resolution.index;
+//!     println!("resolution: {:?}", handle.get(resolution)?);
+//! }
 //! handle.close();
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -35,17 +39,25 @@
 //!   loads only that device's backend ([`backend_of`]), for the process
 //!   that loads SANE to be given as `SANE_CONFIG_DIR`, and [`Sane::open`]
 //!   opens a device by its name without a list.
+//! - **Options, typed:** a device's options are read as it opens
+//!   ([`Handle::options`]): each descriptor's types, unit, size,
+//!   capabilities and constraint ([`OptionDescriptor`]), and read again
+//!   whenever SANE says they changed. [`Handle::get`], [`Handle::set`] and
+//!   [`Handle::set_auto`] take and give a [`Value`], and refuse a call
+//!   SANE's rules don't allow before the backend sees it.
 //! - **What crosses from C is checked:** statuses and frame formats are
 //!   integers ([`Status`], [`FrameFormat`]) that keep codes SANE doesn't
 //!   define; null pointers, lists and strings are refused or capped
-//!   ([`Limits`]) before they become values.
+//!   ([`Limits`]) before they become values; a descriptor holding what SANE
+//!   doesn't allow makes its option unusable, and a constraint is read only
+//!   as the member its type allows.
 //!
 //! **Run SANE in a process of its own.** Backends are C code running in the
 //! process that loads them; some corrupt memory and some crash, and nothing
 //! this crate checks can stop that.
 //!
-//! Planned: typed options; frames assembled into images; a cancel token any
-//! thread can use.
+//! Planned: frames assembled into images; a cancel token any thread can
+//! use.
 
 // Only the module that loads and calls the library may hold unsafe code.
 #![deny(unsafe_code)]
@@ -55,12 +67,16 @@ mod device;
 mod error;
 pub mod ffi;
 mod library;
+mod options;
 mod status;
 
 pub use config::{CONFIG_DIR_VARIABLE, ConfigDir, ConfigError, Search, backend_of};
 pub use device::{Device, DeviceName};
 pub use error::{Call, Error, LoadError};
 pub use library::{Handle, Sane};
+pub use options::{
+    Capabilities, Constraint, Fixed, OptionDescriptor, SaneString, SetInfo, Unit, Value, ValueType,
+};
 pub use status::{FrameFormat, Status, Version};
 
 /// Caps on what this crate accepts from SANE, each checked before the work
@@ -76,8 +92,15 @@ pub struct Limits {
     /// Devices in a list (default 1,024).
     pub devices: usize,
     /// Bytes in a string SANE gives, before its `NUL`: a device's name,
-    /// vendor, model and type, a status's words (default 64 KiB).
+    /// vendor, model and type, a status's words, an option's name, title and
+    /// description, an entry of a string list (default 64 KiB).
     pub string_bytes: usize,
+    /// Options a device has, option 0 included (default 4,096).
+    pub options: usize,
+    /// Entries in an option's word list or string list (default 65,536).
+    pub list_entries: usize,
+    /// Bytes in an option's value, as its size gives them (default 1 MiB).
+    pub option_bytes: usize,
 }
 
 impl Default for Limits {
@@ -85,6 +108,9 @@ impl Default for Limits {
         Limits {
             devices: 1024,
             string_bytes: 64 * 1024,
+            options: 4096,
+            list_entries: 65_536,
+            option_bytes: 1024 * 1024,
         }
     }
 }

@@ -590,6 +590,38 @@ else the steps find.
     (step 2's repair).
 31. **`open` takes any bytes** (step 2): `impl AsRef<[u8]>`, so a `&str`, a `DeviceName` or stored bytes;
     `DeviceName` itself is unchecked, and a `NUL` inside is `NulInName` at `open`, before SANE sees it.
+32. **An option's descriptor is read again before every call on it** (step 3): its type, size and
+    capabilities compared with the copy, and every descriptor read again if any differ, then the request
+    checked again; so a buffer is always sized from the descriptor as SANE gives it now, even from a backend
+    that changes one without saying `RELOAD_OPTIONS`. One more `sane_get_option_descriptor` per call.
+33. **A get needs `SANE_CAP_SOFT_DETECT`** (step 3; `NotReadable`, beyond the design's refusals): the
+    standard says such a value can't be read by software. The `test` backend's `bool-hard-select` answers
+    all the same (`scanimage -A` shows its `yes`); `sane-dl` doesn't ask.
+34. **`set_auto` needs `SANE_CAP_SOFT_SELECT` as well as `SANE_CAP_AUTOMATIC`, and passes a buffer** (step
+    3): zeroed, of the option's full size, not null, in case a backend writes the value it chose there. A
+    button is pressed with the word 1 (`SANE_TRUE`).
+35. **What makes a device's options unreadable, and what makes one option unusable** (step 3).
+    `BadDescriptor`, failing `open` or the re-read: what can't stand for an option or for the set (option 0
+    not an `INT` of one word, a count below 1 or past `Limits::options`, a null descriptor below the count,
+    a name past `Limits::string_bytes`). Unusable, the option kept and never called (`unusable` says why,
+    `Unusable` refuses): an unknown type, a size that doesn't fit the type or is past `Limits::option_bytes`,
+    an unknown constraint type, a constraint the type can't have, a null constraint pointer, a list past
+    `Limits::list_entries` or holding an entry past the string cap. A title or description past the cap is
+    cut there (text for people, as status words are); a name is refused, as device names are (26).
+36. **A group's name, unit, size, capabilities and constraint aren't read** (step 3): the standard says only
+    its title, description and type mean anything, so its pointers may be anything.
+37. **A failed re-read leaves no descriptors** (step 3): every option call is then `NoSuchOption` until
+    `reload_options` succeeds, never sized from descriptors that may be stale.
+38. **`Fixed::from_f64` rounds to the nearest word** (step 3; `SANE_FIX` truncates), `None` for NaN, the
+    infinities, and anything outside a word's range.
+39. **Values aren't checked against their constraints, nor names against the standard's spelling** (step
+    3): whether a value fits is the backend's to answer (`INVAL`, or rounded with `INEXACT`); Canon DR's
+    `ScanMode` has capitals the standard doesn't allow, and is read as it is.
+40. **The fake checks the refusals `sane-dl` promises** (step 3): a `sane_control_option` that a careful
+    caller refuses (an inactive option, one software can't read or set, a group, an unusable descriptor, a
+    `BOOL` word other than 0 or 1, a string with no `NUL`, a call before every descriptor is read again
+    after `RELOAD_OPTIONS`) is a violation in its log, beyond SANE's own rules, so every test that uses
+    options holds `sane-dl` to them.
 
 ## For Greg (security)
 
@@ -1005,3 +1037,100 @@ Commit: the one that carries this account.
     loops) ran the tests' nested `cargo build` of the fake without the run's own cargo home, so cargo
     updated its last-use cache in the user's (`.global-cache`; nothing downloaded or added there). A
     test binary run outside `cargo test` needs `CARGO_HOME` set too, since the tests run cargo.
+
+### Step 3: options, typed (2026-11-08)
+
+Commit: the one that carries this account.
+
+- **What it does:**
+  - `sane-dl`'s options module (safe code): `OptionDescriptor` (index, name, title, description,
+    `ValueType`, `Unit`, size, `Capabilities`, `Constraint`, and `unusable`, the reason it can't be used),
+    `ValueType` and `Unit` (`Unknown(i32)` and `Other(i32)` for codes SANE doesn't define;
+    `#[non_exhaustive]`), `Capabilities` (the bits as they came, with a method per bit), `Constraint`
+    (`None`, `Range { min, max, quant }`, `WordList`, `StringList`; words as they came, read as `Fixed`
+    for a `FIXED` option), `SaneString` (bytes, as `DeviceName`), `Fixed` (`to_f64`, a checked
+    `from_f64`), `Value` (`Bool`, `Int(Vec<i32>)`, `Fixed(Vec<Fixed>)`, `String(SaneString)`, `Button`),
+    `SetInfo`. What a copied descriptor means (`decode`), which constraint member its types allow, the
+    refusals, the buffer a call passes and the value read back are all decided here, from owned copies,
+    and unit-tested without a library.
+  - In the one unsafe module: each descriptor copied (its constraint read only as the member its types
+    allow; a word list's length checked against the cap before any entry is read; a string list walked no
+    further than the cap; a group's name and constraint never read); `open` reading every descriptor, the
+    count from option 0's value, and closing the device again if they can't be read; `Handle::options`,
+    `find_option`, `get`, `set`, `set_auto`, `reload_options`, each under the call token. A call reads
+    its option's descriptor again first (decision 32); a set or `set_auto` answering `RELOAD_OPTIONS`
+    reads every descriptor again before it returns. `Limits` gains `options` (4,096), `list_entries`
+    (65,536) and `option_bytes` (1 MiB). `Error` gains `BadDescriptor`, `BadValue`, `NoSuchOption`,
+    `NoValue`, `Inactive`, `NotReadable`, `NotSettable`, `NotAutomatic`, `WrongType`, `WrongLength`,
+    `StringTooLong`, `NulInString`, `Unusable`.
+  - The fake: every handle has option 0 and the script's options, each with its value; descriptors given
+    from leaked memory at one address for good, rewritten in place when a rule changes them. Script lines
+    (in its crate docs): `option`, `title`, `desc`, `unit`, `range`, `words`, `strings`, `constraint`,
+    `word-list-length`, `strings-repeat`, `value`, `auto`, `reload-params`, `when V activate|deactivate|
+    range|words|size|null NAME`, `when V quiet`, `start-inactive`, `option-null`, `option-count`,
+    `control-status`, `profile`. The profiles, written as script lines: `fujitsu`, `airscan`, `brother`,
+    `canon-dr`, `lexmark`, `epson`, `kodak`, each with `source`, its duplex as that backend names it,
+    `mode`, `resolution`, the scan area and a `page-width` and `page-height` active only for the feeder;
+    `airscan`'s resolutions change in duplex. `sane_control_option` plays a backend's part (a string not in
+    its list `INVAL`, a number moved into its range or onto its word list and said `INEXACT`, the rules
+    fired) and checks the refusals (decision 40). Duplex pages marked in their pixels wait for step 4.
+  - Tests, 128 here (71 before, all kept): `sane-dl` 27 unit (17 new), `tests/options_real.rs` 6 (the
+    `test` backend with `enable-test-options`, through a `test.conf` in the isolated directory: every value
+    type, constraint and unit, the groups in order, the gamma tables as 256-word arrays and a table set and
+    read back, arrays, `int-inexact` answering `INEXACT` and its value changed, the hard-select,
+    soft-detect, emulated and automatic options, the button, `mode` set to `Color` making `three-pass`
+    active through `RELOAD_OPTIONS`, the type, length and size refusals; `pnm`'s `filename` set and read
+    back, its `resolution` word list set to auto, `set_auto` refused for `brightness`, its read-only
+    option), `tests/options_fake.rs` 23 (what `open` calls; each profile read as typed with its feeder and
+    duplex set and its page size active only for the feeder; a constraint that changes; 20 refusals with
+    no call on their options in the log and the values that fit seen as the backend gets them, a `BOOL`
+    as the word 1; 22 hostile descriptors, each unusable or a `BadValue` as expected; 6 that fail `open`
+    with `BadDescriptor`, the device closed; each cap at its limit and one past; a descriptor changed
+    without `RELOAD_OPTIONS`, read before the call that sizes from it; a re-read that fails; a count the
+    backend won't give; a value the backend refuses; option calls during a late listing); `fake-libsane`
+    31 unit (11 new). The step 2 tests that compare call sequences now leave the option calls `open`
+    makes out (`FakeLog::calls_but_options`).
+- **Checked here:** `cargo fmt --check`; `cargo clippy --locked --workspace --all-targets -D warnings`;
+  `cargo test --locked --workspace` with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, all
+  128 passing, none skipped; `cargo doc -D warnings` (the recipe's); `cargo check --all-targets` for
+  `x86_64-pc-windows-gnu` and `x86_64-apple-darwin` (no code behind `cfg` was added, so their clippy and
+  docs are left out, as the step says).
+  - **Make-fails** (`scratch/work/s0-1/step-3/make-fail.md`, on a worktree under `step-3/`, the step's
+    files copied in; removed after, branch and stash unchanged): 33 breaks, each failing its test. The
+    reading: a string list read on an `INT`; a word list's length uncapped (the child dies by `SIGSEGV`
+    reading 2³¹ − 1 words); a string list uncapped; the count uncapped; the size uncapped, not a word's
+    multiple, a `BOOL`'s unchecked; a `BOOL` word read by cast; a string with no `NUL` taken whole; a null
+    descriptor below the count taken as the end; a name past the cap cut; the option and list caps off
+    by one. The refusals: inactive, `SOFT_SELECT`, `SOFT_DETECT`, `AUTOMATIC`, another length, a string
+    filling the size, a `NUL` inside, a `BOOL` set as -1 (the fake catches each reaching it). The
+    re-reads: none on `RELOAD_OPTIONS` (against the fake and the `test` backend), none before a call,
+    stale descriptors kept after a failed re-read, a device left open after bad descriptors. `Fixed`
+    unchecked; `INEXACT` from the wrong bit. And the fake's own checks off one at a time (inactive, the
+    re-read, the `BOOL` word, a malformed descriptor, a descriptor rewritten at its address).
+  - **The descriptors beside `scanimage -A`** (`scratch/work/s0-1/step-3/listing/compare.md`; a probe
+    crate there printing `sane-dl`'s view in `scanimage`'s layout, through the same private configuration
+    with the test options on): for `test:0`, 57 options in 8 groups, every title, name, constraint (with
+    units, steps and fixed-point bounds), array, value and inactive flag agrees, but `bool-hard-select`,
+    which `scanimage` reads (`[yes]`) and `sane-dl` refuses as not readable (decision 33), and the
+    descriptions of `-x` and `-y`, which `scanimage` replaces with its own. For `pnm:0` everything agrees
+    but a separator `scanimage` prints after `auto|`.
+- **What it learned of SANE** (for slice 2, and slice 5's `sane` backend): nothing new on the seam's
+  two unknowns (names, and stopping after the page in flight). For slice 5: the `test` backend's
+  `resolution` is `FIXED` and `pnm`'s an `INT` word list that can be automatic, so a backend reads the
+  type from the descriptor; the `test` backend's `source` is `Flatbed` or `Automatic Document Feeder`,
+  and `mode` set to `Color` says `RELOAD_OPTIONS`; `int-inexact` changes the value it's given and says
+  `INEXACT`.
+- **Departures from the plan, and why:**
+  - *`BadValue` carries a reason, not a word:* a string with no `NUL` within its size has no word to
+    carry.
+  - *Added beyond the design's lists:* `NoValue` (a get of a button or group), `NotReadable` (decision
+    33), `NulInString` (a `NUL` would end the string early); `Capabilities`, `Value::value_type`,
+    `OptionDescriptor::word_count` and `is_group`, `Handle::find_option` and `reload_options`.
+  - *The option calls take `&mut self`:* any of them may read the descriptors again.
+  - *Each call reads its descriptor again first* (decision 32), which the design didn't ask for.
+  - *The fake's extra lines* (`control-status`, `option-null`, `option-count`, `when … size`, `null`,
+    `quiet`, `start-inactive`) are for the hostile cases; its option checks (decision 40) are beyond the
+    design's rules, as decision 30's were.
+  - *Crate READMEs and changelogs* wait for step 5, as in steps 1 and 2.
+- **Decisions taken alone:** 32 to 40 above.
+- **No new check records** to carry: step 2's check and its repair are in step 2's account above.

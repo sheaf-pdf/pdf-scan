@@ -31,7 +31,14 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::{Call, Device, DeviceName, Error, Limits, LoadError, Status, Version, ffi};
+use crate::options::{
+    self, Buffer, Member, RawConstraint, RawDescriptor, Request, check_count_option,
+    constraint_member, option_count, prepare, read_value, still_current, word_list_length,
+};
+use crate::{
+    Call, Device, DeviceName, Error, Limits, LoadError, OptionDescriptor, SetInfo, Status, Value,
+    Version, ffi,
+};
 
 /// SANE's 14 functions, looked up in a library that's never unloaded, so
 /// each pointer stays valid for the rest of the process.
@@ -43,12 +50,10 @@ struct Api {
     open: ffi::SaneOpenFn,
     close: ffi::SaneCloseFn,
     strstatus: ffi::SaneStrstatusFn,
-    // Looked up with the rest, so a library without them is refused when
-    // it's loaded; called by the option and scanning calls.
-    #[allow(dead_code)]
     get_option_descriptor: ffi::SaneGetOptionDescriptorFn,
-    #[allow(dead_code)]
     control_option: ffi::SaneControlOptionFn,
+    // Looked up with the rest, so a library without them is refused when
+    // it's loaded; called by the scanning calls.
     #[allow(dead_code)]
     get_parameters: ffi::SaneGetParametersFn,
     #[allow(dead_code)]
@@ -386,7 +391,8 @@ impl Drop for ListingGuard {
 }
 
 /// A C string SANE gave, read no further than its `NUL` or a cap.
-enum CText {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CText {
     Null,
     Text(Vec<u8>),
     /// The first `cap` bytes, with no `NUL` among them.
@@ -476,6 +482,257 @@ unsafe fn copy_device_list(
             model: lossy(string(device.model, "model", false)?),
             kind: lossy(string(device.r#type, "type", false)?),
         });
+    }
+}
+
+/// Copies an option's descriptor: its integers as they are, its strings no
+/// further than the cap, and its constraint read only as the member its
+/// types allow ([`constraint_member`]), each list no further than its cap.
+/// A group's name and constraint aren't read: the standard says only its
+/// title, description and type mean anything, so they may be anything.
+///
+/// # Safety
+///
+/// `descriptor` points to a valid `SANE_Option_Descriptor`, unchanged for
+/// the call, as `sane_get_option_descriptor` gives one: its title and
+/// description null or `NUL`-terminated, and unless it's a group, its name
+/// too, and its constraint pointer, read as the member `constraint_type`
+/// names, null or pointing to what that member says (a range; a word list
+/// whose first word is how many follow; strings ended by a null pointer),
+/// all valid for the call.
+unsafe fn copy_descriptor(
+    descriptor: *const ffi::SANE_Option_Descriptor,
+    limits: Limits,
+) -> RawDescriptor {
+    // SAFETY: valid for the call (the caller's contract), and copied as
+    // plain integers, pointers and a union of pointers.
+    let copied = unsafe { *descriptor };
+    let string = |text: *const c_char| {
+        // SAFETY: each string read here is null or `NUL`-terminated and valid
+        // for the call (the caller's contract): a group's name is never read.
+        unsafe { copy_c_string(text, limits.string_bytes) }
+    };
+    let group = copied.r#type == ffi::SANE_TYPE_GROUP;
+    let constraint = if group {
+        RawConstraint::None
+    } else {
+        match constraint_member(copied.r#type, copied.constraint_type) {
+            Err(reason) => RawConstraint::Unread(reason),
+            Ok(Member::None) => RawConstraint::None,
+            Ok(Member::Range) => {
+                // SAFETY: `constraint_type` names the range member, which is
+                // the one read.
+                let range = unsafe { copied.constraint.range };
+                if range.is_null() {
+                    RawConstraint::Unread("its range is null".to_owned())
+                } else {
+                    // SAFETY: not null, so a valid range (the caller's
+                    // contract).
+                    RawConstraint::Range(unsafe { *range })
+                }
+            }
+            Ok(Member::WordList) => {
+                // SAFETY: `constraint_type` names the word list member, which
+                // is the one read; the list is null or as the caller's
+                // contract says.
+                unsafe { copy_word_list(copied.constraint.word_list, limits) }
+            }
+            Ok(Member::StringList) => {
+                // SAFETY: `constraint_type` names the string list member,
+                // which is the one read; the list is null or as the caller's
+                // contract says.
+                unsafe { copy_string_list(copied.constraint.string_list, limits) }
+            }
+        }
+    };
+    RawDescriptor {
+        name: if group {
+            CText::Null
+        } else {
+            string(copied.name)
+        },
+        title: string(copied.title),
+        desc: string(copied.desc),
+        value_type: copied.r#type,
+        unit: copied.unit,
+        size: copied.size,
+        cap: copied.cap,
+        constraint,
+    }
+}
+
+/// Copies a word list, its length checked against the cap before any entry
+/// is read.
+///
+/// # Safety
+///
+/// `list` is null, or points to a word giving how many words follow it, and
+/// those words, all valid for the call.
+unsafe fn copy_word_list(list: *const ffi::SANE_Word, limits: Limits) -> RawConstraint {
+    if list.is_null() {
+        return RawConstraint::Unread("its word list is null".to_owned());
+    }
+    // SAFETY: not null, so its first word is valid (the caller's contract).
+    let claimed = unsafe { *list };
+    let length = match word_list_length(claimed, limits) {
+        Ok(length) => length,
+        Err(reason) => return RawConstraint::Unread(reason),
+    };
+    // SAFETY: the list holds `claimed` words after the first (the caller's
+    // contract), and `length` is that count, checked not negative and within
+    // the cap; `list.add(1)` is aligned and not null, as `list` is.
+    let words = unsafe { std::slice::from_raw_parts(list.add(1), length) };
+    RawConstraint::WordList(words.to_vec())
+}
+
+/// Copies a string list, reading no more entries than the cap and no entry
+/// further than the string cap.
+///
+/// # Safety
+///
+/// `list` is null, or points to an array of `NUL`-terminated strings ended
+/// by a null pointer, all valid for the call.
+unsafe fn copy_string_list(list: *const ffi::SANE_String_Const, limits: Limits) -> RawConstraint {
+    if list.is_null() {
+        return RawConstraint::Unread("its string list is null".to_owned());
+    }
+    let mut strings = Vec::new();
+    loop {
+        let index = strings.len();
+        // SAFETY: the array ends with a null pointer, and the entries before
+        // `index` were all found not null, so the array has at least
+        // `index + 1` entries: this read is inside it.
+        let entry = unsafe { *list.add(index) };
+        if entry.is_null() {
+            return RawConstraint::StringList(strings);
+        }
+        if index == limits.list_entries {
+            return RawConstraint::Unread(format!(
+                "its string list has more than {} entries",
+                limits.list_entries
+            ));
+        }
+        // SAFETY: a non-null entry is a `NUL`-terminated string valid for the
+        // call (the caller's contract).
+        match unsafe { copy_c_string(entry, limits.string_bytes) } {
+            CText::Text(bytes) => strings.push(bytes),
+            CText::Null | CText::TooLong(_) => {
+                return RawConstraint::Unread(format!(
+                    "entry {index} of its string list is longer than {} bytes",
+                    limits.string_bytes
+                ));
+            }
+        }
+    }
+}
+
+/// Option `index`'s descriptor, copied and decoded; a null one is
+/// [`Error::BadDescriptor`], since every option below the count has one.
+///
+/// # Safety
+///
+/// The caller holds the call token, SANE is initialised, and `raw` is a
+/// handle `sane_open` gave and nothing has closed.
+unsafe fn read_descriptor(
+    api: &Api,
+    raw: RawHandle,
+    index: usize,
+    limits: Limits,
+) -> Result<OptionDescriptor, Error> {
+    let number = option_number(index);
+    // SAFETY: the caller's contract: no other SANE call runs, SANE is
+    // initialised, and the handle is open.
+    let descriptor = unsafe { (api.get_option_descriptor)(raw.0, number) };
+    if descriptor.is_null() {
+        return Err(Error::BadDescriptor {
+            option: index,
+            reason: if index == 0 {
+                "sane_get_option_descriptor gave none for option 0, which every device has"
+                    .to_owned()
+            } else {
+                "sane_get_option_descriptor gave none, though option 0 counts it".to_owned()
+            },
+        });
+    }
+    // SAFETY: not null, so a descriptor SANE keeps valid, at this address,
+    // until the device is closed; nothing changes it while this caller holds
+    // the call token.
+    let copied = unsafe { copy_descriptor(descriptor, limits) };
+    options::decode(index, copied, limits)
+}
+
+/// An option's number as SANE takes it. Every option looked up is below the
+/// count, which came from a word, so it fits one.
+fn option_number(index: usize) -> ffi::SANE_Int {
+    ffi::SANE_Int::try_from(index).unwrap_or(ffi::SANE_Int::MAX)
+}
+
+/// Reads every option's descriptor, the count from option 0's value, each
+/// checked before the work it sizes.
+///
+/// # Safety
+///
+/// As for [`read_descriptor`].
+unsafe fn read_descriptors(
+    api: &Api,
+    raw: RawHandle,
+    limits: Limits,
+) -> Result<Vec<OptionDescriptor>, Error> {
+    // SAFETY: the caller's contract.
+    let zero = unsafe { read_descriptor(api, raw, 0, limits) }?;
+    check_count_option(&zero)?;
+    let mut count: ffi::SANE_Word = 0;
+    let mut info: ffi::SANE_Int = 0;
+    // SAFETY: the caller's contract, and option 0 was just checked to be an
+    // INT of one word, so `count`, one word, is the whole of its value;
+    // `info` is valid for SANE's write.
+    let status = Status(unsafe {
+        (api.control_option)(
+            raw.0,
+            0,
+            ffi::SANE_ACTION_GET_VALUE,
+            ptr::from_mut(&mut count).cast(),
+            &mut info,
+        )
+    });
+    if !status.is_good() {
+        return Err(Error::Status {
+            status,
+            call: Call::ControlOption,
+        });
+    }
+    let count = option_count(count, limits)?;
+    let mut descriptors = Vec::with_capacity(count);
+    descriptors.push(zero);
+    for index in 1..count {
+        // SAFETY: the caller's contract.
+        descriptors.push(unsafe { read_descriptor(api, raw, index, limits) }?);
+    }
+    Ok(descriptors)
+}
+
+/// Reads every descriptor into `options`, or empties it if they can't be
+/// read, so no call is sized from descriptors that may be stale.
+///
+/// # Safety
+///
+/// As for [`read_descriptor`].
+unsafe fn reload(
+    api: &Api,
+    raw: RawHandle,
+    limits: Limits,
+    options: &mut Vec<OptionDescriptor>,
+) -> Result<(), Error> {
+    // SAFETY: the caller's contract.
+    match unsafe { read_descriptors(api, raw, limits) } {
+        Ok(read) => {
+            *options = read;
+            Ok(())
+        }
+        Err(error) => {
+            options.clear();
+            Err(error)
+        }
     }
 }
 
@@ -684,10 +941,14 @@ impl Sane {
 
     /// Opens the device named, as [`Device::name`] gives it, or as kept from
     /// an earlier listing: SANE opens a device by its name without a list.
+    /// Its options' descriptors are read before this returns
+    /// ([`Handle::options`]).
     ///
     /// A name SANE doesn't know is `sane_open`'s [`Status::INVAL`], in
     /// [`Error::Status`]; a name holding a `NUL` byte is
-    /// [`Error::NulInName`], refused before SANE sees it.
+    /// [`Error::NulInName`], refused before SANE sees it. Descriptors that
+    /// can't be read ([`Error::BadDescriptor`], or a status from reading
+    /// option 0's count) close the device again and are returned.
     pub fn open(&self, name: impl AsRef<[u8]>) -> Result<Handle, Error> {
         let name = name.as_ref();
         let c_name = CString::new(name).map_err(|_| Error::NulInName)?;
@@ -698,7 +959,6 @@ impl Sane {
         // is a `NUL`-terminated string that outlives the call, and `raw` is
         // valid for SANE's write.
         let status = Status(unsafe { (self.shared.api.open)(c_name.as_ptr(), &mut raw) });
-        drop(guard);
         if !status.is_good() {
             return Err(Error::Status {
                 status,
@@ -708,11 +968,24 @@ impl Sane {
         if raw.is_null() {
             return Err(Error::BadHandle);
         }
-        Ok(Handle {
-            shared: Arc::clone(&self.shared),
-            raw: RawHandle(raw),
-            name: DeviceName::from(name),
-        })
+        let raw = RawHandle(raw);
+        // SAFETY: this caller still holds the call token; SANE is
+        // initialised; `raw` was just opened, and nothing else has it.
+        match unsafe { read_descriptors(&self.shared.api, raw, guard.limits) } {
+            Ok(options) => Ok(Handle {
+                shared: Arc::clone(&self.shared),
+                raw,
+                name: DeviceName::from(name),
+                options,
+            }),
+            Err(error) => {
+                // SAFETY: this caller still holds the call token; `raw` came
+                // from `sane_open` just now and no `Handle` was made of it,
+                // so this is its one close, and it isn't used after.
+                unsafe { (self.shared.api.close)(raw.0) };
+                Err(error)
+            }
+        }
     }
 
     /// A status in words, as `sane_strstatus` gives them (no longer than
@@ -752,10 +1025,28 @@ impl fmt::Debug for Sane {
 /// [`close`](Self::close)d. If a device listing past its deadline holds the
 /// library then, the close is left to the listing's thread, so dropping a
 /// handle never blocks on a backend that hangs.
+///
+/// **Options.** A device's settings are its options, each described by a
+/// descriptor ([`OptionDescriptor`]): its name, how its value is read, its
+/// unit, size and capabilities, and the values it may take. They're read
+/// when the device opens and kept ([`options`](Self::options)), and read
+/// again whenever SANE says they changed: a set answering
+/// `RELOAD_OPTIONS` ([`SetInfo::reload_options`]), and before any call on an
+/// option whose type, size or capabilities SANE now gives differently than
+/// the copy, so a buffer is always sized from the descriptor as it stands.
+/// [`get`](Self::get), [`set`](Self::set) and [`set_auto`](Self::set_auto)
+/// refuse, before SANE sees it, a call SANE's rules don't allow or that some
+/// backends crash on: an option that doesn't exist, is unusable or inactive,
+/// has no value, can't be read or set by software, or can't choose its own
+/// value, and a value of another type or length, or a string too long for
+/// the option's size. Whether a value fits the option's constraint is the
+/// backend's to say.
 pub struct Handle {
     shared: Arc<Shared>,
     raw: RawHandle,
     name: DeviceName,
+    /// The descriptors as last read; empty if a re-read failed.
+    options: Vec<OptionDescriptor>,
 }
 
 impl Handle {
@@ -764,8 +1055,142 @@ impl Handle {
         &self.name
     }
 
+    /// The options' descriptors, indexed by option number (option 0 is the
+    /// count of options), as last read. Empty if they couldn't be read
+    /// again after SANE said they changed: then every option call answers
+    /// [`Error::NoSuchOption`] until [`reload_options`](Self::reload_options)
+    /// succeeds.
+    pub fn options(&self) -> &[OptionDescriptor] {
+        &self.options
+    }
+
+    /// The option with this name, if any (groups' headings, which have no
+    /// name, aren't looked at).
+    pub fn find_option(&self, name: &str) -> Option<&OptionDescriptor> {
+        self.options
+            .iter()
+            .find(|descriptor| !descriptor.is_group() && descriptor.name == name)
+    }
+
+    /// Reads every descriptor again.
+    ///
+    /// For when something the device did may have changed them; a set that
+    /// changes them reads them again itself.
+    pub fn reload_options(&mut self) -> Result<(), Error> {
+        let guard = self.shared.acquire(None)?;
+        // SAFETY: this caller holds the call token; SANE is initialised
+        // (this handle keeps `Shared` alive); `raw` is open, since a handle
+        // is closed only when it goes.
+        unsafe { reload(&self.shared.api, self.raw, guard.limits, &mut self.options) }
+    }
+
+    /// Reads an option's value.
+    ///
+    /// Refused before SANE sees it, unless the option exists, is usable and
+    /// active, has a value, and can be read by software; a `BOOL` word that
+    /// isn't 0 or 1, or a string with no `NUL` in the option's size, is
+    /// [`Error::BadValue`]. Values are as SANE gives them, unchecked against
+    /// the option's constraint.
+    pub fn get(&mut self, option: usize) -> Result<Value, Error> {
+        let (buffer, _) = self.control(option, Request::Get)?;
+        read_value(&self.options[option], buffer)
+    }
+
+    /// Sets an option's value: a button is pressed with [`Value::Button`].
+    ///
+    /// Refused before SANE sees it, unless the option exists, is usable and
+    /// active, and can be set by software, and the value is of its type and
+    /// length (a string with its `NUL` within its size, and no `NUL`
+    /// inside). The backend may answer `INVAL` for a value outside the
+    /// constraint, or choose a value near it ([`SetInfo::inexact`]); if
+    /// other options changed, every descriptor is read again before this
+    /// returns ([`SetInfo::reload_options`]).
+    pub fn set(&mut self, option: usize, value: &Value) -> Result<SetInfo, Error> {
+        self.control(option, Request::Set(value))
+            .map(|(_, info)| info)
+    }
+
+    /// Lets the backend choose an option's value itself, as it does until the
+    /// option is set again.
+    ///
+    /// As [`set`](Self::set), and refused too unless the option can choose
+    /// (`SANE_CAP_AUTOMATIC`).
+    pub fn set_auto(&mut self, option: usize) -> Result<SetInfo, Error> {
+        self.control(option, Request::Auto).map(|(_, info)| info)
+    }
+
+    /// One `sane_control_option`, under the call token: refused if the
+    /// copy's descriptor refuses it; the descriptor read again first, and
+    /// every descriptor if it changed, and the request checked again; the
+    /// descriptors read again after a set that says they changed.
+    fn control(&mut self, option: usize, request: Request<'_>) -> Result<(Buffer, SetInfo), Error> {
+        let shared = &*self.shared;
+        let guard = shared.acquire(None)?;
+        let limits = guard.limits;
+        let mut buffer = prepare(&self.options, option, request)?;
+        // SAFETY: this caller holds the call token; SANE is initialised
+        // (this handle keeps `Shared` alive); `raw` is open, since a handle
+        // is closed only when it goes.
+        let now = unsafe { descriptor_shape(&shared.api, self.raw, option) };
+        let current = now.is_some_and(|(value_type, size, cap)| {
+            still_current(&self.options[option], value_type, size, cap)
+        });
+        if !current {
+            // SAFETY: as above.
+            unsafe { reload(&shared.api, self.raw, limits, &mut self.options) }?;
+            buffer = prepare(&self.options, option, request)?;
+        }
+        let mut info: ffi::SANE_Int = 0;
+        // SAFETY: as above; `buffer` is the option's value in full, sized
+        // from its descriptor as SANE gives it now, and stays put for the
+        // call; `info` is valid for SANE's write.
+        let status = Status(unsafe {
+            (shared.api.control_option)(
+                self.raw.0,
+                option_number(option),
+                request.action(),
+                buffer.as_mut_ptr(),
+                &mut info,
+            )
+        });
+        if !status.is_good() {
+            return Err(Error::Status {
+                status,
+                call: Call::ControlOption,
+            });
+        }
+        if matches!(request, Request::Get) {
+            return Ok((buffer, SetInfo::default()));
+        }
+        let info = SetInfo::from_word(info);
+        if info.reload_options {
+            // SAFETY: as above.
+            unsafe { reload(&shared.api, self.raw, limits, &mut self.options) }?;
+        }
+        drop(guard);
+        Ok((buffer, info))
+    }
+
     /// Closes the device, as dropping the handle does.
     pub fn close(self) {}
+}
+
+/// The type, size and capabilities option `index`'s descriptor has now, or
+/// `None` if SANE gives none.
+///
+/// # Safety
+///
+/// As for [`read_descriptor`].
+unsafe fn descriptor_shape(api: &Api, raw: RawHandle, index: usize) -> Option<(i32, i32, i32)> {
+    // SAFETY: the caller's contract.
+    let descriptor = unsafe { (api.get_option_descriptor)(raw.0, option_number(index)) };
+    if descriptor.is_null() {
+        return None;
+    }
+    // SAFETY: not null, so a descriptor SANE keeps valid until the device
+    // is closed; only its integers are read.
+    let copied = unsafe { *descriptor };
+    Some((copied.r#type, copied.size, copied.cap))
 }
 
 impl Drop for Handle {
@@ -778,6 +1203,7 @@ impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Handle")
             .field("name", &self.name)
+            .field("options", &self.options.len())
             .finish_non_exhaustive()
     }
 }

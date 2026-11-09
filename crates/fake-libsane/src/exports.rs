@@ -11,8 +11,11 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::fake::{Fake, Log};
+use std::collections::BTreeMap;
+
+use crate::fake::{Fake, Given, Log, show};
 use crate::ffi;
+use crate::options::{ConstraintSpec, Descriptor, RawValue};
 use crate::script::{Script, Text};
 
 /// The fake, made at the first call from the script and log the
@@ -337,11 +340,111 @@ pub unsafe extern "C" fn sane_close(handle: ffi::SANE_Handle) {
 }
 const _: ffi::SaneCloseFn = sane_close;
 
-/// No options yet: always null.
+/// A leaked string, `NUL`-terminated, or null.
+fn leak_text(text: &Text) -> *const c_char {
+    match text {
+        Text::Null => ptr::null(),
+        Text::Bytes(bytes) => {
+            let mut owned = bytes.clone();
+            owned.push(0);
+            Box::leak(owned.into_boxed_slice()).as_ptr().cast()
+        }
+    }
+}
+
+/// A descriptor as C has it, its strings, range and lists in leaked memory
+/// that's never freed.
+fn build_descriptor(descriptor: &Descriptor) -> ffi::SANE_Option_Descriptor {
+    let constraint = match &descriptor.constraint {
+        ConstraintSpec::None => ffi::SANE_Constraint { range: ptr::null() },
+        ConstraintSpec::Range(min, max, quant) => ffi::SANE_Constraint {
+            range: Box::leak(Box::new(ffi::SANE_Range {
+                min: *min,
+                max: *max,
+                quant: *quant,
+            })),
+        },
+        ConstraintSpec::Words(words, claimed) => {
+            let length = claimed.unwrap_or_else(|| i32::try_from(words.len()).unwrap_or(i32::MAX));
+            let list: Vec<ffi::SANE_Word> = std::iter::once(length)
+                .chain(words.iter().copied())
+                .collect();
+            ffi::SANE_Constraint {
+                word_list: Box::leak(list.into_boxed_slice()).as_ptr(),
+            }
+        }
+        ConstraintSpec::Strings(strings) => {
+            let list: Vec<ffi::SANE_String_Const> = strings
+                .iter()
+                .map(leak_text)
+                .chain(std::iter::once(ptr::null()))
+                .collect();
+            ffi::SANE_Constraint {
+                string_list: Box::leak(list.into_boxed_slice()).as_ptr(),
+            }
+        }
+    };
+    ffi::SANE_Option_Descriptor {
+        name: leak_text(&descriptor.name),
+        title: leak_text(&descriptor.title),
+        desc: leak_text(&descriptor.desc),
+        r#type: descriptor.value_type,
+        unit: descriptor.unit,
+        size: descriptor.size,
+        cap: descriptor.cap,
+        constraint_type: descriptor.constraint_type,
+        constraint,
+    }
+}
+
+/// A descriptor given out, leaked and never freed, so it stays valid at its
+/// address for good, as SANE requires until the device is closed.
+struct Built(*mut ffi::SANE_Option_Descriptor);
+
+// SAFETY: the pointer is to a leaked allocation this module made and writes
+// only while holding `DESCRIPTORS`; nothing about it is tied to a thread.
+unsafe impl Send for Built {}
+
+/// The descriptors given out, by handle and option, with the version of the
+/// option's descriptor each was built from.
+static DESCRIPTORS: Mutex<BTreeMap<(usize, i32), (u64, Built)>> = Mutex::new(BTreeMap::new());
+
+/// The descriptor of a handle's option: the one given before if it hasn't
+/// changed, rewritten in place at the same address if it has, or a new one.
+fn descriptor_pointer(
+    id: usize,
+    option: i32,
+    version: u64,
+    descriptor: &Descriptor,
+) -> *const ffi::SANE_Option_Descriptor {
+    let mut built = DESCRIPTORS.lock().unwrap_or_else(PoisonError::into_inner);
+    match built.get_mut(&(id, option)) {
+        Some((given, pointer)) => {
+            if *given != version {
+                // SAFETY: `pointer` is a leaked descriptor this module made,
+                // never freed, written only here and only while holding
+                // `DESCRIPTORS`; its old strings and lists stay leaked, so a
+                // copy of the old descriptor still points to valid memory.
+                unsafe { pointer.0.write(build_descriptor(descriptor)) };
+                *given = version;
+            }
+            pointer.0
+        }
+        None => {
+            let pointer = Box::leak(Box::new(build_descriptor(descriptor)));
+            built.insert((id, option), (version, Built(pointer)));
+            pointer
+        }
+    }
+}
+
+/// An option's descriptor, as the script has it now, or null for an option
+/// that doesn't exist or that the script makes null.
 ///
 /// # Safety
 ///
-/// None beyond SANE's own rules, which the fake checks.
+/// None beyond SANE's own rules, which the fake checks: the handle is only
+/// compared, never followed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_get_option_descriptor(
     handle: ffi::SANE_Handle,
@@ -349,44 +452,146 @@ pub unsafe extern "C" fn sane_get_option_descriptor(
 ) -> *const ffi::SANE_Option_Descriptor {
     let thread = thread();
     let id = handle_id(handle);
-    with_fake(|fake| {
+    let found = with_fake(|fake| {
         fake.enter(
             &thread,
             "sane_get_option_descriptor",
             Some(id),
             &format!("handle={id:#x} option={option}"),
         );
+        let found = fake.descriptor(id, option);
         fake.leave(
             &thread,
             "sane_get_option_descriptor",
             Some(id),
             None,
-            "descriptor=null",
+            if found.is_some() {
+                "descriptor"
+            } else {
+                "descriptor=null"
+            },
         );
+        found
     });
-    ptr::null()
+    match found {
+        None => ptr::null(),
+        Some((descriptor, version)) => descriptor_pointer(id, option, version, &descriptor),
+    }
 }
 const _: ffi::SaneGetOptionDescriptorFn = sane_get_option_descriptor;
 
-/// No options yet: always `UNSUPPORTED`.
+/// Reads what a set gives: a string up to its `NUL` within `size` bytes,
+/// or `size / 4` words (one for a button).
 ///
 /// # Safety
 ///
-/// None beyond SANE's own rules, which the fake checks: no pointer is
-/// followed.
+/// `value` is valid for reads of `size` bytes (one word for a button), and
+/// `size` is positive for anything but a button.
+unsafe fn read_given(value: *const c_void, value_type: i32, size: i32) -> Given {
+    let size = usize::try_from(size).unwrap_or(0);
+    if value_type == ffi::SANE_TYPE_STRING {
+        // SAFETY: valid for `size` bytes (the caller's contract).
+        let bytes = unsafe { std::slice::from_raw_parts(value.cast::<u8>(), size) };
+        return match bytes.iter().position(|&byte| byte == 0) {
+            Some(end) => Given::Value(RawValue::Bytes(bytes[..end].to_vec())),
+            None => Given::Unterminated(size),
+        };
+    }
+    let count = if value_type == ffi::SANE_TYPE_BUTTON {
+        1
+    } else {
+        size / 4
+    };
+    // SAFETY: valid for `count` words (the caller's contract), and a
+    // caller's word buffer is aligned for words.
+    let words = unsafe { std::slice::from_raw_parts(value.cast::<ffi::SANE_Word>(), count) };
+    Given::Value(RawValue::Words(words.to_vec()))
+}
+
+/// Reads, sets or lets the backend choose an option's value, as the script
+/// has it, checking first that the call is one a caller should make.
+///
+/// # Safety
+///
+/// `value` is null or valid for the option's whole value, as its
+/// descriptor sizes it (one word for a button); `info` is null or valid for
+/// a write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_control_option(
     handle: ffi::SANE_Handle,
     option: ffi::SANE_Int,
     action: ffi::SANE_Action,
-    _value: *mut c_void,
-    _info: *mut ffi::SANE_Int,
+    value: *mut c_void,
+    info: *mut ffi::SANE_Int,
 ) -> ffi::SANE_Status {
-    unsupported(
-        handle,
-        "sane_control_option",
-        &format!("option={option} action={action}"),
-    )
+    let thread = thread();
+    let id = handle_id(handle);
+    let action_name = match action {
+        ffi::SANE_ACTION_GET_VALUE => "GET".to_owned(),
+        ffi::SANE_ACTION_SET_VALUE => "SET".to_owned(),
+        ffi::SANE_ACTION_SET_AUTO => "AUTO".to_owned(),
+        other => other.to_string(),
+    };
+    let shape = with_fake(|fake| fake.shape(id, option));
+    let given = match shape {
+        Some((value_type, size)) if action == ffi::SANE_ACTION_SET_VALUE && !value.is_null() => {
+            // SAFETY: not null, and valid for the option's whole value (the
+            // caller's contract); `shape` gives only options of a size the
+            // standard allows for their type.
+            unsafe { read_given(value, value_type, size) }
+        }
+        _ => Given::Nothing,
+    };
+    let shown = match &given {
+        Given::Value(given) => format!(" value={}", show(given)),
+        Given::Unterminated(size) => format!(" value=unterminated:{size}"),
+        Given::Nothing => String::new(),
+    };
+    let answer = with_fake(|fake| {
+        fake.enter(
+            &thread,
+            "sane_control_option",
+            Some(id),
+            &format!("handle={id:#x} option={option} action={action_name}{shown}"),
+        );
+        let answer = fake.control(&thread, id, option, action, value.is_null(), given);
+        let written = answer
+            .write
+            .as_ref()
+            .map(|written| format!(" value={}", show(written)))
+            .unwrap_or_default();
+        fake.leave(
+            &thread,
+            "sane_control_option",
+            Some(id),
+            Some(answer.status),
+            &format!("info={:#x}{written}", answer.info),
+        );
+        answer
+    });
+    if let Some(written) = &answer.write
+        && !value.is_null()
+    {
+        match written {
+            RawValue::Words(words) => {
+                // SAFETY: not null, and valid for the option's whole value,
+                // which `words` is (the fake sizes it from the descriptor);
+                // a caller's word buffer is aligned for words.
+                unsafe { ptr::copy_nonoverlapping(words.as_ptr(), value.cast(), words.len()) };
+            }
+            RawValue::Bytes(bytes) => {
+                // SAFETY: not null, and valid for the option's whole value,
+                // which `bytes` doesn't pass (the fake sizes it from the
+                // descriptor).
+                unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), value.cast(), bytes.len()) };
+            }
+        }
+    }
+    if !info.is_null() {
+        // SAFETY: not null, and valid for a write (the caller's contract).
+        unsafe { info.write(answer.info) };
+    }
+    answer.status
 }
 const _: ffi::SaneControlOptionFn = sane_control_option;
 
@@ -607,5 +812,50 @@ mod tests {
             "{:?}",
             fake.log.lines
         );
+    }
+
+    #[test]
+    fn a_descriptor_that_changes_stays_at_its_address() {
+        let _serial = serial();
+        let script = Script::parse(
+            "device fake:0 a b c\noption s STRING 8 soft-select+soft-detect\nwhen x size t 8\noption t INT 4 soft-select+soft-detect\n",
+        )
+        .unwrap();
+        *fake() = Some(Fake::new(script, Log::memory()));
+        let mut handle: ffi::SANE_Handle = ptr::null_mut();
+        let mut info: ffi::SANE_Int = 0;
+        let mut value = *b"x\0\0\0\0\0\0\0";
+        // SAFETY: every pointer is valid for what the call does with it: the
+        // handle and info for a write, the name a `NUL`-terminated string,
+        // the value the option's whole 8 bytes.
+        let (first, second, size) = unsafe {
+            sane_init(ptr::null_mut(), None);
+            sane_open(c"fake:0".as_ptr(), &mut handle);
+            let first = sane_get_option_descriptor(handle, 2);
+            let size = (*first).size;
+            sane_control_option(
+                handle,
+                1,
+                ffi::SANE_ACTION_SET_VALUE,
+                value.as_mut_ptr().cast(),
+                &mut info,
+            );
+            for option in 0..3 {
+                sane_get_option_descriptor(handle, option);
+            }
+            let second = sane_get_option_descriptor(handle, 2);
+            (first, second, size)
+        };
+        assert_eq!(first, second);
+        assert_eq!(size, 4);
+        // SAFETY: the descriptor is leaked and never freed.
+        assert_eq!(unsafe { (*second).size }, 8);
+        assert_eq!(info, ffi::SANE_INFO_RELOAD_OPTIONS);
+        // SAFETY: SANE was started above; the handle is open, and closed once.
+        unsafe {
+            sane_close(handle);
+            sane_exit();
+        }
+        assert_eq!(fake().take().unwrap().violations, Vec::<String>::new());
     }
 }
