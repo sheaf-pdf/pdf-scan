@@ -8,11 +8,12 @@ use core::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::codes::{ReturnCode, Triplet};
-use crate::container::{ContainerError, ItemType};
+use crate::container::{Container, ContainerError, ItemType};
 use crate::dsm::{self, Dsm};
 use crate::error::{Error, LoadError, Refused};
 use crate::ffi::{self, TW_IDENTITY, TW_STR32};
 use crate::thread::Twain;
+use crate::window;
 
 /// Which DSM to load.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +25,41 @@ pub enum Load {
 }
 
 impl<T> Twain<T> {
+    /// A triplet the DSM refused itself: its code.
+    fn dsm_failure(&self, dsm: &Dsm, triplet: Triplet, rc: ReturnCode) -> Error {
+        Error::Failed {
+            triplet,
+            rc,
+            by_source: None,
+            by_dsm: dsm.dsm_condition(&self.app),
+        }
+    }
+
+    /// A triplet to `dest` that failed: the DSM's code first (it refuses some
+    /// itself, a source it doesn't have open among them), then the source's,
+    /// if `dest` is the source open.
+    pub(crate) fn source_failure(
+        &self,
+        dsm: &Dsm,
+        dest: &core::cell::Cell<TW_IDENTITY>,
+        triplet: Triplet,
+        rc: ReturnCode,
+    ) -> Error {
+        let by_dsm = dsm.dsm_condition(&self.app);
+        let open = self.source_open.get().is_some() && core::ptr::eq(dest, &*self.source);
+        let by_source = if open {
+            dsm.status(&self.app, Some(dest))
+        } else {
+            None
+        };
+        Error::Failed {
+            triplet,
+            rc,
+            by_source,
+            by_dsm,
+        }
+    }
+
     /// Loads the DSM (state 1 to 2): its file held against change, its
     /// machine, Authenticode signature and signer (the TWAIN Working Group)
     /// checked before any of its code runs, then loaded by its full path, and
@@ -91,12 +127,7 @@ impl<'t, T> Loaded<'t, T> {
     }
 
     fn dsm_failure(&self, triplet: Triplet, rc: ReturnCode) -> Error {
-        Error::Failed {
-            triplet,
-            rc,
-            by_source: None,
-            by_dsm: self.dsm.dsm_condition(&self.twain.app),
-        }
+        self.twain.dsm_failure(self.dsm, triplet, rc)
     }
 }
 
@@ -130,11 +161,11 @@ impl<'t, T> Opened<'t, T> {
         }
     }
 
-    fn twain(&self) -> &'t Twain<T> {
+    pub(crate) fn twain(&self) -> &'t Twain<T> {
         self.loaded().twain
     }
 
-    fn dsm(&self) -> &'static Dsm {
+    pub(crate) fn dsm(&self) -> &'static Dsm {
         self.loaded().dsm
     }
 
@@ -182,6 +213,59 @@ impl<'t, T> Opened<'t, T> {
         }
     }
 
+    /// Opens `source` (`MSG_OPENDS`, state 3 to 4), its messages to come by
+    /// `delivery`, which stays the source's until it's closed: TWAIN has no
+    /// way to take a callback back, and the DSM keeps one across closing and
+    /// opening the source again, so [`Delivery::Events`] registers none to
+    /// clear any. [`Delivery::Callback`] is refused for a source of TWAIN 1.x,
+    /// before it's opened.
+    pub fn open_source(
+        self,
+        source: &SourceId,
+        delivery: Delivery,
+    ) -> Result<Source<'t, T>, Refused<Self>> {
+        if let Err(error) = check_delivery(source, delivery) {
+            return Err(Refused { state: self, error });
+        }
+        let twain = self.twain();
+        let dsm = self.dsm();
+        twain.source.set(source.identity);
+        let (triplet, rc) = dsm.source(&twain.app, &twain.source, true);
+        if rc != ReturnCode::SUCCESS {
+            let error = twain.dsm_failure(dsm, triplet, rc);
+            return Err(Refused { state: self, error });
+        }
+        twain.source_open.set(Some(delivery));
+        let opened = Source {
+            opened: Some(self),
+            delivery,
+        };
+        let proc = match delivery {
+            Delivery::Events => None,
+            Delivery::Callback => {
+                let generation = twain.generation.get().wrapping_add(1);
+                twain.generation.set(generation);
+                window::arm_callback(twain.window.handle(), generation);
+                Some(window::source_callback as crate::ffi::TwainCallbackProc)
+            }
+        };
+        let (triplet, rc) = dsm.register_callback(&twain.app, &twain.source, proc);
+        if rc != ReturnCode::SUCCESS {
+            let error = twain.source_failure(dsm, &twain.source, triplet, rc);
+            return match opened.close() {
+                Ok(opened) => Err(Refused {
+                    state: opened,
+                    error,
+                }),
+                Err(refused) => Err(Refused {
+                    state: refused.into_state().into_opened_unclosed(),
+                    error,
+                }),
+            };
+        }
+        Ok(opened)
+    }
+
     /// Closes the connection (`MSG_CLOSEDSM`, state 3 to 2).
     pub fn close(self) -> Result<Loaded<'t, T>, Refused<Self>> {
         match self.twain().close_connection() {
@@ -213,6 +297,235 @@ impl<T> fmt::Debug for Opened<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let id = self.app().Id;
         f.debug_struct("Opened").field("app_id", &id).finish()
+    }
+}
+
+/// How an open source's messages come (`MSG_XFERREADY`, `MSG_CLOSEDSREQ` and
+/// the rest).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Through the window's messages: each one the loop takes, while the
+    /// source is enabled, is offered to it (`MSG_PROCESSEVENT`). Every source
+    /// can.
+    Events,
+    /// Through a callback the DSM calls (`DAT_CALLBACK2`): TWAIN 2 sources
+    /// only.
+    Callback,
+}
+
+/// Refused unless the source can deliver so.
+pub(crate) fn check_delivery(source: &SourceId, delivery: Delivery) -> Result<(), Error> {
+    if delivery == Delivery::Callback && !source.is_twain2() {
+        return Err(Error::CallbackUnsupported);
+    }
+    Ok(())
+}
+
+/// What a capability's `MSG_SET` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetOutcome {
+    /// Set as asked (`TWRC_SUCCESS`).
+    Exact,
+    /// Set to the nearest the source could (`TWRC_CHECKSTATUS`): its current
+    /// value says what.
+    Adjusted,
+}
+
+/// State 4: a source open.
+pub struct Source<'t, T> {
+    /// `None` once stepped down, so `Drop` doesn't do it again.
+    opened: Option<Opened<'t, T>>,
+    delivery: Delivery,
+}
+
+impl<'t, T> Source<'t, T> {
+    fn opened(&self) -> &Opened<'t, T> {
+        match &self.opened {
+            Some(opened) => opened,
+            // Only `close` and `into_opened_unclosed` take it, consuming self.
+            None => unreachable!("a Source without its Opened"),
+        }
+    }
+
+    fn twain(&self) -> &'t Twain<T> {
+        self.opened().twain()
+    }
+
+    fn dsm(&self) -> &'static Dsm {
+        self.opened().dsm()
+    }
+
+    /// The source's identity as the DSM filled it in when it opened it.
+    pub fn id(&self) -> SourceId {
+        SourceId {
+            identity: self.twain().source.get(),
+        }
+    }
+
+    /// How its messages come.
+    pub fn delivery(&self) -> Delivery {
+        self.delivery
+    }
+
+    /// The capability's values (`MSG_GET`): its current one and the others it
+    /// may take, in whichever container the source chooses.
+    pub fn get(&self, cap: u16) -> Result<Container, Error> {
+        capability_read(
+            self.twain(),
+            self.dsm(),
+            &self.twain().source,
+            ffi::MSG_GET,
+            cap,
+        )
+    }
+
+    /// Its current value (`MSG_GETCURRENT`).
+    pub fn get_current(&self, cap: u16) -> Result<Container, Error> {
+        capability_read(
+            self.twain(),
+            self.dsm(),
+            &self.twain().source,
+            ffi::MSG_GETCURRENT,
+            cap,
+        )
+    }
+
+    /// Its default (`MSG_GETDEFAULT`).
+    pub fn get_default(&self, cap: u16) -> Result<Container, Error> {
+        capability_read(
+            self.twain(),
+            self.dsm(),
+            &self.twain().source,
+            ffi::MSG_GETDEFAULT,
+            cap,
+        )
+    }
+
+    /// Reset to its default (`MSG_RESET`), which comes back.
+    pub fn reset(&self, cap: u16) -> Result<Container, Error> {
+        capability_read(
+            self.twain(),
+            self.dsm(),
+            &self.twain().source,
+            ffi::MSG_RESET,
+            cap,
+        )
+    }
+
+    /// Which messages the source takes for it (`MSG_QUERYSUPPORT`): `TWQC_`
+    /// bits.
+    pub fn query_support(&self, cap: u16) -> Result<u32, Error> {
+        let container = capability_read(
+            self.twain(),
+            self.dsm(),
+            &self.twain().source,
+            ffi::MSG_QUERYSUPPORT,
+            cap,
+        )?;
+        match container {
+            Container::One(item) => match item.as_i64() {
+                Some(bits) => Ok(bits as u32),
+                None => Err(ContainerError::MixedTypes {
+                    expected: ItemType::Int32,
+                    found: item.item_type(),
+                }
+                .into()),
+            },
+            other => Err(ContainerError::UnknownContainer(other.con_type()).into()),
+        }
+    }
+
+    /// Sets it (`MSG_SET`): a value, or a container to constrain it to.
+    pub fn set(&self, cap: u16, value: impl Into<Container>) -> Result<SetOutcome, Error> {
+        let container = value.into();
+        let bytes = container.encode()?;
+        let twain = self.twain();
+        let dsm = self.dsm();
+        let Some((triplet, rc)) = dsm.capability_write(
+            &twain.app,
+            &twain.source,
+            ffi::MSG_SET,
+            cap,
+            container.con_type(),
+            &bytes,
+        ) else {
+            return Err(Error::Allocation { size: bytes.len() });
+        };
+        match rc {
+            ReturnCode::SUCCESS => Ok(SetOutcome::Exact),
+            ReturnCode::CHECKSTATUS => Ok(SetOutcome::Adjusted),
+            rc => Err(twain.source_failure(dsm, &twain.source, triplet, rc)),
+        }
+    }
+
+    /// Closes it (`MSG_CLOSEDS`, state 4 to 3).
+    pub fn close(self) -> Result<Opened<'t, T>, Refused<Self>> {
+        match self.twain().close_source() {
+            Ok(()) => Ok(self.into_opened_unclosed()),
+            Err(error) => Err(Refused { state: self, error }),
+        }
+    }
+
+    /// The `Opened` beneath, the source left as the record has it.
+    fn into_opened_unclosed(mut self) -> Opened<'t, T> {
+        match self.opened.take() {
+            Some(opened) => opened,
+            None => unreachable!("a Source without its Opened"),
+        }
+    }
+}
+
+impl<T> Drop for Source<'_, T> {
+    fn drop(&mut self) {
+        if let Some(opened) = &self.opened {
+            // If the source won't close, the record keeps it open, and the
+            // connection's close takes it with it.
+            let _ = opened.twain().close_source();
+        }
+    }
+}
+
+impl<T> fmt::Debug for Source<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Source")
+            .field("id", &self.id())
+            .field("delivery", &self.delivery)
+            .finish()
+    }
+}
+
+impl<T> Twain<T> {
+    /// `MSG_CLOSEDS` of the source the record says is open, the record
+    /// updated. The end of `run` does it before closing the connection: the
+    /// DSM's own closing of sources left open (`apps.cpp`, `RemoveApp`)
+    /// stops before the last source it lists, so it never closes a source
+    /// installed alone.
+    pub(crate) fn close_source(&self) -> Result<(), Error> {
+        let (Some(dsm), Some(_)) = (self.dsm.get(), self.source_open.get()) else {
+            return Ok(());
+        };
+        let (triplet, rc) = dsm.source(&self.app, &self.source, false);
+        if rc != ReturnCode::SUCCESS {
+            return Err(self.dsm_failure(dsm, triplet, rc));
+        }
+        self.source_open.set(None);
+        self.events.borrow_mut().clear();
+        Ok(())
+    }
+}
+
+/// A capability message whose answer is a container, sent to `dest`.
+pub(crate) fn capability_read<T>(
+    twain: &Twain<T>,
+    dsm: &Dsm,
+    dest: &core::cell::Cell<TW_IDENTITY>,
+    msg: u16,
+    cap: u16,
+) -> Result<Container, Error> {
+    let (triplet, rc, answer) = dsm.capability_read(&twain.app, dest, msg, cap);
+    match answer {
+        Some((con_type, bytes)) => Ok(Container::decode(con_type, &bytes)?),
+        None => Err(twain.source_failure(dsm, dest, triplet, rc)),
     }
 }
 
@@ -341,5 +654,91 @@ impl fmt::Debug for SourceId {
             .field("id", &self.id())
             .field("product_name", &self.product_name())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{self, Outcome};
+
+    fn source(groups: u32) -> SourceId {
+        SourceId {
+            identity: TW_IDENTITY {
+                SupportedGroups: groups,
+                ..TW_IDENTITY::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_callback_is_refused_for_a_twain_1_source() {
+        let old = source(ffi::DG_CONTROL | ffi::DG_IMAGE);
+        assert!(matches!(
+            check_delivery(&old, Delivery::Callback),
+            Err(Error::CallbackUnsupported)
+        ));
+        assert!(check_delivery(&old, Delivery::Events).is_ok());
+        let new = source(ffi::DG_CONTROL | ffi::DG_IMAGE | ffi::DF_DS2);
+        assert!(check_delivery(&new, Delivery::Callback).is_ok());
+    }
+
+    /// A capability asked of a source the DSM lists but hasn't open: the DSM
+    /// refuses it itself, with its own code for this application, and the
+    /// source isn't asked.
+    #[test]
+    fn a_triplet_to_a_source_not_open_is_the_dsms_refusal() {
+        test_support::fork(
+            rusty_fork::rusty_fork_test_name!(a_triplet_to_a_source_not_open_is_the_dsms_refusal),
+            rusty_fork::rusty_fork_id!(),
+            || {
+                crate::run::<(), _>(|twain| {
+                    let loaded = match twain.load(Load::System) {
+                        Ok(loaded) => loaded,
+                        Err(LoadError::NotFound { .. }) => {
+                            return Outcome::Skip("no DSM installed".into());
+                        }
+                        Err(e) => panic!("the system's DSM: {e}"),
+                    };
+                    let app = App::new("pdf-scan", "twain-dsm tests", "unit").expect("fits");
+                    let opened = loaded
+                        .open(app)
+                        .map_err(Refused::into_error)
+                        .expect("opens");
+                    let sources = opened.sources().expect("listed");
+                    let Some(first) = sources.first() else {
+                        return Outcome::Skip("no source installed".into());
+                    };
+                    let never_opened = core::cell::Cell::new(first.identity());
+                    let refused = capability_read(
+                        twain,
+                        opened.dsm(),
+                        &never_opened,
+                        ffi::MSG_GETCURRENT,
+                        ffi::ICAP_XFERMECH,
+                    );
+                    match refused {
+                        Err(Error::Failed {
+                            rc,
+                            by_source,
+                            by_dsm,
+                            triplet,
+                        }) => {
+                            assert_eq!(rc, ReturnCode::FAILURE);
+                            assert_eq!(
+                                triplet.to_string(),
+                                "DG_CONTROL/DAT_CAPABILITY/MSG_GETCURRENT"
+                            );
+                            assert_eq!(by_dsm, Some(crate::ConditionCode::OPERATIONERROR));
+                            assert_eq!(by_source, None);
+                        }
+                        other => panic!("a source not open: {other:?}"),
+                    }
+                    Outcome::Done
+                })
+                .expect("TWAIN runs")
+                .value
+            },
+        );
     }
 }

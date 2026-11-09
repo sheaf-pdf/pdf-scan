@@ -31,6 +31,13 @@ pub enum Error {
     /// No source of that identity.
     #[error("no such source")]
     NoSuchSource,
+    /// Callback delivery asked of a source that can't call back: one of
+    /// TWAIN 1.x, without `DF_DS2`, signals only through `MSG_PROCESSEVENT`.
+    #[error("the source isn't a TWAIN 2 source, and can't call back")]
+    CallbackUnsupported,
+    /// A block for the DSM couldn't be allocated.
+    #[error("a block of {size} bytes couldn't be allocated")]
+    Allocation { size: usize },
 }
 
 fn by(label: &str, code: &Option<ConditionCode>) -> String {

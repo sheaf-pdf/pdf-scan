@@ -61,6 +61,8 @@ mod window;
 
 #[cfg(all(test, windows))]
 mod header_contract;
+#[cfg(all(test, windows))]
+mod test_support;
 
 pub use codes::{ConditionCode, ReturnCode, Triplet};
 pub use container::{
@@ -69,6 +71,6 @@ pub use container::{
 #[cfg(windows)]
 pub use error::{Error, Gone, LoadError, Refused, RunError};
 #[cfg(windows)]
-pub use states::{App, Load, Loaded, Opened, SourceId};
+pub use states::{App, Delivery, Load, Loaded, Opened, SetOutcome, Source, SourceId};
 #[cfg(windows)]
 pub use thread::{Remote, RunReport, Twain, Wake, run};

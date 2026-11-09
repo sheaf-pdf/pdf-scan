@@ -1,7 +1,8 @@
 //! The TWAIN thread: the caller's, for the length of [`run`].
 
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use core::fmt;
+use std::collections::VecDeque;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -11,7 +12,8 @@ use crate::codes::ReturnCode;
 use crate::dsm::Dsm;
 use crate::error::{Error, Gone, RunError};
 use crate::ffi::TW_IDENTITY;
-use crate::window::{self, Apartment, WM_REQUEST, Window};
+use crate::states::Delivery;
+use crate::window::{self, Apartment, WM_REQUEST, WM_SOURCE, Window};
 
 /// Whether a `run` is going on in this process.
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -113,20 +115,26 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
         window,
         requests,
         app: Box::new(Cell::new(TW_IDENTITY::default())),
+        source: Box::new(Cell::new(TW_IDENTITY::default())),
         dsm: Cell::new(None),
         loaded: Cell::new(false),
         connected: Cell::new(false),
+        source_open: Cell::new(None),
+        generation: Cell::new(0),
+        events: RefCell::new(VecDeque::new()),
     };
 
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| f(&twain)));
 
-    // What the closure left open, closed. The DSM closes a source still open
-    // itself when its application closes the connection.
+    // What the closure left open, closed: the source first (the DSM doesn't
+    // close every source left open itself), then the connection.
+    let source_left = twain.close_source().err();
     let stranded = twain.close_connection().err();
     let Twain {
         window,
         shared,
         app,
+        source,
         ..
     } = twain;
     // No post reaches the window after this, nor a window that reuses its
@@ -137,14 +145,20 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
         // given and the apartment stay (the window isn't destroyed, the
         // apartment isn't left), and so does the flag.
         Box::leak(app);
+        Box::leak(source);
         core::mem::forget(running);
     } else {
+        window::disarm_callback();
         window.destroy();
         apartment.leave();
         drop(running);
     }
     match outcome {
-        Ok(value) => Ok(RunReport { value, stranded }),
+        Ok(value) => Ok(RunReport {
+            value,
+            source_left,
+            stranded,
+        }),
         Err(payload) => panic::resume_unwind(payload),
     }
 }
@@ -156,6 +170,11 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
 pub struct RunReport<R> {
     /// The closure's value.
     pub value: R,
+    /// `Some` if a source left open by the closure wouldn't close at the end:
+    /// the connection's close was still tried, but the driver may still
+    /// count the connection (a later `MSG_OPENDS` of it can fail
+    /// `TWCC_MAXCONNECTIONS` until the process ends).
+    pub source_left: Option<Error>,
     /// `Some` if the DSM refused to close the connection at the end: then the
     /// application's identity, the window and the apartment are left as they
     /// were (the DSM may still use them), and no `run` can follow in this
@@ -173,14 +192,21 @@ pub struct Twain<T> {
     pub(crate) window: Window,
     requests: mpsc::Receiver<T>,
     shared: Arc<Shared<T>>,
-    /// The application's identity, at an address that doesn't move while
-    /// the DSM has it.
+    /// The application's identity, and the open source's, at addresses that
+    /// don't move while the DSM has them.
     pub(crate) app: Box<Cell<TW_IDENTITY>>,
+    pub(crate) source: Box<Cell<TW_IDENTITY>>,
     /// The record, kept apart from the states: what's open, whatever became
     /// of the state that opened it.
     pub(crate) dsm: Cell<Option<&'static Dsm>>,
     pub(crate) loaded: Cell<bool>,
     pub(crate) connected: Cell<bool>,
+    /// The open source's delivery, if one is open.
+    pub(crate) source_open: Cell<Option<Delivery>>,
+    /// The callback's posts carry this; a post of another is stale.
+    pub(crate) generation: Cell<usize>,
+    /// Messages from the source, as they came, not yet handed over.
+    pub(crate) events: RefCell<VecDeque<u16>>,
 }
 
 struct Shared<T> {
@@ -232,6 +258,10 @@ impl<T> Twain<T> {
                     // The request itself is in the channel.
                     continue;
                 }
+                if msg.hwnd() == self.window.handle() && msg.message() == WM_SOURCE {
+                    self.callback_posted(&msg);
+                    continue;
+                }
                 msg.dispatch();
             }
             if let Some(request) = self.take_request() {
@@ -242,6 +272,14 @@ impl<T> Twain<T> {
                 return Wake::Timeout;
             }
             window::wait_for_message(deadline - now);
+        }
+    }
+
+    /// A message the callback posted, kept if it's this source's.
+    fn callback_posted(&self, msg: &window::Message) {
+        let current = msg.lparam() as usize == self.generation.get();
+        if current && self.source_open.get() == Some(Delivery::Callback) {
+            self.events.borrow_mut().push_back(msg.wparam() as u16);
         }
     }
 
@@ -257,6 +295,7 @@ impl<T> Twain<T> {
         let (triplet, rc) = dsm.parent(&self.app, false, self.window.hwnd());
         if rc == ReturnCode::SUCCESS {
             self.connected.set(false);
+            self.source_open.set(None);
             return Ok(());
         }
         Err(Error::Failed {
@@ -308,7 +347,7 @@ impl<T> Remote<T> {
         self.shared.sender.send(request).map_err(|e| Gone(e.0))?;
         // Under the lock, so the window is alive. If the post fails (a full
         // queue), the request waits in the channel for the loop's next turn.
-        window::post(handle, WM_REQUEST);
+        window::post(handle, WM_REQUEST, 0, 0);
         Ok(())
     }
 }

@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError, HANDLE,
-    HMODULE, HWND, INVALID_HANDLE_VALUE, TRUST_E_NOSIGNATURE, TRUST_E_PROVIDER_UNKNOWN,
-    TRUST_E_SUBJECT_FORM_UNKNOWN,
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_READ, GetLastError,
+    GlobalFree, HANDLE, HMODULE, HWND, INVALID_HANDLE_VALUE, TRUST_E_NOSIGNATURE,
+    TRUST_E_PROVIDER_UNKNOWN, TRUST_E_SUBJECT_FORM_UNKNOWN,
 };
 use windows_sys::Win32::Security::Cryptography::{
     CERT_NAME_ATTR_TYPE, CertGetNameStringW, szOID_ORGANIZATION_NAME,
@@ -37,13 +37,14 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
+use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
 use crate::codes::{ConditionCode, ReturnCode, Triplet};
 use crate::error::LoadError;
 use crate::ffi::{
-    self, DsmEntryProc, DsmMemAllocate, DsmMemFree, DsmMemLock, DsmMemUnlock, TW_ENTRYPOINT,
-    TW_IDENTITY, TW_STATUS,
+    self, DsmEntryProc, DsmMemAllocate, DsmMemFree, DsmMemLock, DsmMemUnlock, TW_CALLBACK2,
+    TW_CAPABILITY, TW_ENTRYPOINT, TW_IDENTITY, TW_STATUS, TwainCallbackProc,
 };
 use crate::pe;
 
@@ -60,7 +61,6 @@ pub(crate) struct Dsm {
 
 /// The DSM's memory functions, from `DAT_ENTRYPOINT`.
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // the containers' blocks are allocated with them
 pub(crate) struct Memory {
     pub(crate) allocate: DsmMemAllocate,
     pub(crate) free: DsmMemFree,
@@ -308,6 +308,99 @@ fn signer(state: HANDLE) -> Option<String> {
     (n > 1).then(|| String::from_utf16_lossy(&buf[..n.min(buf.len()) - 1]))
 }
 
+/// A block of memory TWAIN passes by handle: allocated, locked and freed
+/// with the DSM's functions when it gave them, else with `GlobalAlloc` and
+/// its kin (what Windows' DSM uses underneath), and measured with
+/// `GlobalSize`, which knows either. Freed when dropped.
+struct Block {
+    handle: *mut c_void,
+    memory: Option<Memory>,
+}
+
+impl Block {
+    /// A block holding `bytes`, unlocked; `None` if it couldn't be
+    /// allocated or written.
+    fn allocate(memory: Option<Memory>, bytes: &[u8]) -> Option<Block> {
+        let size = u32::try_from(bytes.len()).ok()?;
+        let handle = match memory {
+            // SAFETY: the DSM's allocator, as DAT_ENTRYPOINT gave it, in a DSM
+            // never unloaded: it takes a size and returns a handle or null.
+            Some(m) => unsafe { (m.allocate)(size) },
+            // SAFETY: GlobalAlloc takes flags and a size and returns a handle
+            // or null.
+            None => unsafe { GlobalAlloc(GHND, bytes.len()) },
+        };
+        if handle.is_null() {
+            return None;
+        }
+        let block = Block { handle, memory };
+        let at = block.lock();
+        if at.is_null() {
+            return None;
+        }
+        // SAFETY: the block was just allocated `bytes.len()` bytes (at least)
+        // and is locked, `at` its start; the two don't overlap.
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), at.cast::<u8>(), bytes.len()) };
+        block.unlock();
+        Some(block)
+    }
+
+    fn lock(&self) -> *mut c_void {
+        match self.memory {
+            // SAFETY: `handle` is a live block of this allocator.
+            Some(m) => unsafe { (m.lock)(self.handle) },
+            // SAFETY: `handle` is a live global block.
+            None => unsafe { GlobalLock(self.handle) },
+        }
+    }
+
+    fn unlock(&self) {
+        match self.memory {
+            // SAFETY: `handle` is a live block of this allocator, locked.
+            Some(m) => unsafe { (m.unlock)(self.handle) },
+            // SAFETY: `handle` is a live global block, locked.
+            None => unsafe {
+                GlobalUnlock(self.handle);
+            },
+        }
+    }
+
+    /// Its bytes, as many as `GlobalSize` measures, copied out: empty if it
+    /// can't be measured or locked.
+    fn read(&self) -> Vec<u8> {
+        // SAFETY: `handle` is a live block; both allocators' blocks are
+        // GlobalAlloc's, which GlobalSize measures (0 if it can't).
+        let size = unsafe { GlobalSize(self.handle) };
+        if size == 0 {
+            return Vec::new();
+        }
+        let at = self.lock();
+        if at.is_null() {
+            return Vec::new();
+        }
+        // SAFETY: locked, the block's `size` bytes are readable from `at` until
+        // it's unlocked below; they're copied out first.
+        let bytes = unsafe { core::slice::from_raw_parts(at.cast::<u8>(), size) }.to_vec();
+        self.unlock();
+        bytes
+    }
+}
+
+impl Drop for Block {
+    fn drop(&mut self) {
+        match self.memory {
+            // SAFETY: `handle` is a live, unlocked block of this allocator,
+            // freed once, here.
+            Some(m) => unsafe { (m.free)(self.handle) },
+            // SAFETY: `handle` is a live, unlocked global block, freed once,
+            // here.
+            None => unsafe {
+                GlobalFree(self.handle);
+            },
+        }
+    }
+}
+
 /// A file held open for reading, others kept from writing or deleting it.
 struct File(HANDLE);
 
@@ -535,9 +628,120 @@ impl Dsm {
     }
 
     /// The memory functions, once `DAT_ENTRYPOINT` gave them.
-    #[allow(dead_code)] // the containers' blocks are allocated with them
-    pub(crate) fn memory(&self) -> Option<Memory> {
+    fn memory(&self) -> Option<Memory> {
         self.memory.get().copied().flatten()
+    }
+
+    /// `DG_CONTROL/DAT_IDENTITY/MSG_OPENDS` or `MSG_CLOSEDS`: the source whose
+    /// identity is in `source` opened (the DSM fills in the rest) or closed.
+    pub(crate) fn source(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        open: bool,
+    ) -> (Triplet, ReturnCode) {
+        let msg = if open {
+            ffi::MSG_OPENDS
+        } else {
+            ffi::MSG_CLOSEDS
+        };
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_IDENTITY, msg);
+        // SAFETY: MSG_OPENDS and MSG_CLOSEDS, sent to the DSM, take the
+        // source's TW_IDENTITY, which the DSM may write (its Id): a Cell the
+        // caller holds for the call.
+        (triplet, unsafe {
+            self.call(app, None, triplet, source.as_ptr().cast())
+        })
+    }
+
+    /// `DAT_CALLBACK2/MSG_REGISTER_CALLBACK` for the open source: `proc`, or
+    /// none, which clears one registered before (the DSM keeps a registration
+    /// for a source's id across closing and opening it again).
+    pub(crate) fn register_callback(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        proc: Option<TwainCallbackProc>,
+    ) -> (Triplet, ReturnCode) {
+        let triplet = Triplet::new(
+            ffi::DG_CONTROL,
+            ffi::DAT_CALLBACK2,
+            ffi::MSG_REGISTER_CALLBACK,
+        );
+        let mut callback = TW_CALLBACK2 {
+            CallBackProc: proc,
+            RefCon: 0,
+            Message: 0,
+        };
+        // SAFETY: MSG_REGISTER_CALLBACK takes a TW_CALLBACK2, which the DSM
+        // copies; `callback` is on this frame for the call. The procedure, if
+        // any, is `window::source_callback`, a function with
+        // TWAINCALLBACKPROC's signature that lives as long as the program.
+        (triplet, unsafe {
+            self.call(app, Some(source), triplet, (&raw mut callback).cast())
+        })
+    }
+
+    /// A `DAT_CAPABILITY` message whose answer is a container the source
+    /// allocates (`MSG_GET`, `MSG_GETCURRENT`, `MSG_GETDEFAULT`, `MSG_RESET`,
+    /// `MSG_QUERYSUPPORT`): its type and its bytes, copied out, the block
+    /// freed. The bytes are `None` unless the source succeeded.
+    pub(crate) fn capability_read(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: u16,
+        cap: u16,
+    ) -> (Triplet, ReturnCode, Option<(u16, Vec<u8>)>) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_CAPABILITY, msg);
+        let mut capability = TW_CAPABILITY {
+            Cap: cap,
+            ConType: ffi::TWON_DONTCARE16,
+            hContainer: null_mut(),
+        };
+        // SAFETY: DAT_CAPABILITY takes a TW_CAPABILITY, on this frame for the
+        // call; for these messages the source writes a container's type and
+        // the handle of a block it allocated into it.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut capability).cast()) };
+        let handle = capability.hContainer;
+        if rc != ReturnCode::SUCCESS || handle.is_null() {
+            // A source that failed allocated nothing to free; one that
+            // succeeded without a block answered nothing.
+            let bytes = (rc == ReturnCode::SUCCESS).then(|| (capability.ConType, Vec::new()));
+            return (triplet, rc, bytes);
+        }
+        let block = Block {
+            handle,
+            memory: self.memory(),
+        };
+        (triplet, rc, Some((capability.ConType, block.read())))
+    }
+
+    /// `MSG_SET` (or another message that takes a container) with `bytes`,
+    /// a container of `con_type`, in a block allocated for the call and freed
+    /// after it. `None` if the block couldn't be allocated.
+    pub(crate) fn capability_write(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: u16,
+        cap: u16,
+        con_type: u16,
+        bytes: &[u8],
+    ) -> Option<(Triplet, ReturnCode)> {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_CAPABILITY, msg);
+        let block = Block::allocate(self.memory(), bytes)?;
+        let mut capability = TW_CAPABILITY {
+            Cap: cap,
+            ConType: con_type,
+            hContainer: block.handle,
+        };
+        // SAFETY: DAT_CAPABILITY takes a TW_CAPABILITY, on this frame for the
+        // call, its container the block allocated above, unlocked, which the
+        // application owns and frees (`block`, after the call).
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut capability).cast()) };
+        drop(block);
+        Some((triplet, rc))
     }
 
     /// `DG_CONTROL/DAT_IDENTITY/msg` to the DSM: `MSG_GETFIRST`,

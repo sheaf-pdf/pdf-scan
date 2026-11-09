@@ -443,3 +443,32 @@ in state 7; a `Dib` is `Send`.
   reader, random input among them.
 - **The check:** as step 1's; 34 tests in each bitness with the sample and the header required; clippy for
   i686 and Linux; `cargo +1.89 test`; nightly's doctests; the graph adds `windows-sys` and `windows-link`.
+
+**Step 3, sources and capabilities** (2026-11-08; reports in `scratch/work/s0-8/step-3/`):
+- **The DSM doesn't close every source left open.** A `Source` forgotten, the connection closed cleanly at
+  the end, the next `run` couldn't open the sample: `TWCC_MAXCONNECTIONS` (`forgotten-source-before-fix.txt`).
+  `RemoveApp` (`apps.cpp`) closes sources left open in a loop from 1 to `NumFiles - 1`, while sources take ids
+  1 to `NumFiles` as they're listed, so the last listed is never closed, and a source installed alone never
+  is. The plan's teardown leaned on that loop, and the review's "checked and sound" list had it. Now the end
+  of `run` closes the source itself from the record first (`MSG_CLOSEDS`; the states above it with steps 4
+  and 5), then the connection; a source that won't close is `RunReport::source_left`. The same test passes
+  now, twice in one process.
+- **A triplet to a source not open** is the DSM's `TWCC_OPERATIONERROR` for the application ("Unable to find
+  driver", `dsm.cpp`), not `TWCC_SEQERROR` as the plan had it (that one is for an application whose
+  connection isn't open); the in-crate test asserts it, the source not asked.
+- **The callback:** `window::source_callback`, a safe `extern "system" fn` with `TWAINCALLBACKPROC`'s
+  signature, posts `WM_SOURCE` (the message in `wParam`, a generation in `lParam`) to the window in a
+  process-wide atomic, and returns `TWRC_SUCCESS`; the loop keeps a post of the current generation while the
+  source open delivers by callback. `RefCon` is 0. The window is cleared at the end of `run` unless it's left.
+- **Containers through the DSM:** `capability_read` and `capability_write` keep every handle inside `dsm.rs`:
+  the source's block measured with `GlobalSize`, copied out, freed; ours allocated with the DSM's
+  `DSM_MemAllocate`, freed after the call. `Source::set` takes `impl Into<Container>`, so an `Item` is a
+  `TW_ONEVALUE`; `TWRC_CHECKSTATUS` is `SetOutcome::Adjusted`. `query_support` gives the `TWQC_` bits.
+  `Error::Allocation` and `Error::CallbackUnsupported` joined.
+- **Tests:** the sample through `Callback`, `Events`, then `Callback` again on the source reopened (the
+  delivery switch, which step 5 was to add): the spike's capability answers, an enumeration (`MSG_GET` of a
+  pixel type, and of a boolean), an array (`CAP_SUPPORTEDCAPS`), a range (`ICAP_THRESHOLD`, 0 to 255, set to
+  100 and reset to 128), `MSG_QUERYSUPPORT`, the source's refusals with its `TWCC_CAPUNSUPPORTED` and no code
+  of the DSM's, a string too long refused before it's sent; a source forgotten and closed at the end, twice;
+  the delivery check for a TWAIN 1 source (a unit test, the sample being TWAIN 2).
+- **The check:** as step 2's; 38 tests in each bitness.

@@ -5,9 +5,11 @@
 //! window procedure is `DefWindowProcW` itself, so no Rust code runs inside
 //! one; what the crate does with a message happens in the loop that took it.
 
+use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::ptr::{null, null_mut};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
@@ -22,10 +24,52 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::error::RunError;
+use crate::ffi::{TW_IDENTITY, TWRC_SUCCESS};
 
+/// Posted by the callback: a message from the source in `wParam`, the
+/// generation it was armed with in `lParam`.
+pub(crate) const WM_SOURCE: u32 = WM_APP + 1;
 /// Posted by another thread's [`Remote`](crate::Remote): a request is in the
 /// channel.
 pub(crate) const WM_REQUEST: u32 = WM_APP + 2;
+
+/// The window the callback posts to (0: none), and the generation it posts
+/// with: process-wide, as the callback has no context of its own that could
+/// dangle (one `run` at a time, one source open in it).
+static CALLBACK_WINDOW: AtomicUsize = AtomicUsize::new(0);
+static CALLBACK_GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+/// Points the callback at `window`, its posts marked with `generation`.
+pub(crate) fn arm_callback(window: usize, generation: usize) {
+    CALLBACK_GENERATION.store(generation, Ordering::Release);
+    CALLBACK_WINDOW.store(window, Ordering::Release);
+}
+
+/// The callback posts nowhere.
+pub(crate) fn disarm_callback() {
+    CALLBACK_WINDOW.store(0, Ordering::Release);
+}
+
+/// The procedure registered with `DAT_CALLBACK2`: the DSM calls it, on the
+/// TWAIN thread, when a source has a message for the application. It posts
+/// the message to the window and returns, touching nothing else: no lock, no
+/// allocation, nothing that can panic. The loop that takes the post does the
+/// rest. Its signature is `TWAINCALLBACKPROC`'s.
+pub(crate) extern "system" fn source_callback(
+    _origin: *mut TW_IDENTITY,
+    _dest: *mut TW_IDENTITY,
+    _dg: u32,
+    _dat: u16,
+    msg: u16,
+    _data: *mut c_void,
+) -> u16 {
+    let window = CALLBACK_WINDOW.load(Ordering::Acquire);
+    if window != 0 {
+        let generation = CALLBACK_GENERATION.load(Ordering::Acquire);
+        post(window, WM_SOURCE, usize::from(msg), generation as isize);
+    }
+    TWRC_SUCCESS
+}
 
 /// NUL-terminated UTF-16.
 pub(crate) fn wide(text: &str) -> Vec<u16> {
@@ -169,6 +213,10 @@ impl Message {
         self.0.wParam
     }
 
+    pub(crate) fn lparam(&self) -> isize {
+        self.0.lParam
+    }
+
     /// Translated and sent to its window's procedure.
     pub(crate) fn dispatch(&self) {
         // SAFETY: the message came from PeekMessageW on this thread (`Message`
@@ -207,11 +255,11 @@ pub(crate) fn wait_for_message(timeout: Duration) {
 
 /// Posts `message` to the window `handle`, from any thread. False if it
 /// couldn't be posted.
-pub(crate) fn post(handle: usize, message: u32) -> bool {
+pub(crate) fn post(handle: usize, message: u32, wparam: usize, lparam: isize) -> bool {
     // SAFETY: posting copies its arguments into the queue of the window's
     // thread and touches no memory of ours. A window that's gone makes it
     // fail; one whose handle was reused would get it, so callers post only
     // while the window lives (`Remote` holds the handle under a lock that the
     // teardown takes to clear it before the window goes).
-    unsafe { PostMessageW(handle as HWND, message, 0, 0) != 0 }
+    unsafe { PostMessageW(handle as HWND, message, wparam, lparam) != 0 }
 }
