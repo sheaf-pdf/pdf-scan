@@ -34,7 +34,7 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 `ScanError` gains `SettingsRefused`, `AccessDenied`, `TimedOut` and `Unsupported`.
 
 **Revised 2026-11-08 and 09 by S0 slice 8, `twain-dsm`, on the Windows machine beside slice 2, merged after it**
-(`slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
+(`archive/slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
 these changes), in sections 3, 8 and the unknowns, where building the crate changed what the spike had:
 `twain-dsm` serves requests in every state (another thread's `Remote<T>`, the caller's own request type;
 `Twain::wait`, `Enabled::next_event`, `take_request` between buffers), and hands the source's messages over

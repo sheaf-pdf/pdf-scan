@@ -1,8 +1,7 @@
 # S0 slice 8: twain-dsm
 
-Status: done on its branch, `s0-8-twain-dsm`, from 2026-11-08: planned, reviewed, its six steps built and
-pushed, code-reviewed and fixed, rebased onto `master` after pull requests #2 and #3; CI on pull request #4 and
-approval close it. Milestone:
+Status: done, 2026-11-09: merged as pull request #4 (squashed, `3f33be5`), CI green on it (the branch
+`s0-8-twain-dsm`), and moved here. Milestone:
 `milestones/s0-devices.md`, slice 8. Run on the Windows machine, the same way as slice 7
 (`archive/slices/s0-7-twain-spike.md`): this plan, an adversarial review (below), the steps (each committed and
 pushed), parallel code reviews, a fix stage.
@@ -639,3 +638,9 @@ backlog's counts hold it. The seam note's revisions stand newest first, slice 8'
 - **The check:** `just fmt`, `clippy`, `test` (296 passed) and `doc`; `twain-dsm-test` in both bitnesses, the
   sample and the header required, 78 each, none skipped; `twain-dsm-clippy` for i686; `just msrv` (1.89);
   `twain-bindings --check`; the name gate.
+
+**Closed** (2026-11-09): CI's run of pull request #4 (42617750221, at `5d77c8c`) green on all nine jobs: the
+`twain-dsm` job on `windows-latest`, the sample source installed and `twain.h` fetched, both required, so its
+tests ran in both bitnesses with none skipped, with `twain-bindings --check` and the i686 lints; `twain-dsm` on
+1.89; the compile-fail examples' error codes on nightly; and the Rust checks on Ubuntu, macOS and Windows, the
+gates, and `sane-dl`'s. The plan's "here and in CI" (step 5's check) is met. Squash-merged as `3f33be5`.

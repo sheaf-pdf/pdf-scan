@@ -3,7 +3,7 @@
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`; the code's from the repository's root with a
 leading `/`.
 
-**As built by S0 slice 8** (`slices/s0-8-twain-dsm.md`, its "So far" the record), from what the TWAIN spike (S0
+**As built by S0 slice 8** (`archive/slices/s0-8-twain-dsm.md`, its "So far" the record), from what the TWAIN spike (S0
 slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working Group's sample source, and
 revised by the slice's code review and fixes.
 
@@ -152,8 +152,8 @@ revised by the slice's code review and fixes.
   both bitnesses; and the TWAIN Working Group's sample data source (`Twain_DS_sample01`, BSD-3; it reads its
   images from disk, its page count from a `CAP_XFERCOUNT` environment variable), installed silently by
   `/scripts/twain-sample.ps1` (the DSM 2.5.0 with it, both bitnesses), through the crate's API in child
-  processes, in both bitnesses, here (CI's `twain-dsm` job runs them on `windows-latest` once the branch has a
-  pull request; none has yet): listing, the signature cases, capabilities in all four containers, transfers
+  processes, in both bitnesses, here and in CI's `twain-dsm` job on `windows-latest` (green from pull request
+  #4's run, 42617750221): listing, the signature cases, capabilities in all four containers, transfers
   both ways and both deliveries with their pending counts, native and memory pixels equal, states dropped and
   forgotten anywhere, cancels, requests (each timed, so a post that doesn't wake the loop fails), another
   message loop on the thread, a stale transfer ready, the buffer rules, and a stranded teardown; inside the
