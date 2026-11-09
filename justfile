@@ -90,6 +90,12 @@ twain-spike-test target:
 twain-dsm-test target:
     cargo test --locked -p twain-dsm --target {{ target }}
 
+# twain-dsm's doctests on nightly, whose rustdoc checks that each
+# `compile_fail` example fails with the error code it names (stable's checks
+# only that it fails). Needs `rustup toolchain install nightly`.
+twain-dsm-doc-codes:
+    cargo +nightly test --locked -p twain-dsm --doc
+
 # twain-dsm's constants generated again from TWAINH.cs and checked against
 # twain.h, both fetched at their pinned commits; `just twain-bindings --check`
 # changes nothing, and fails if the file differs from what it would write.

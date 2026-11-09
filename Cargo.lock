@@ -199,7 +199,9 @@ name = "twain-dsm"
 version = "0.0.0"
 dependencies = [
  "find-msvc-tools",
+ "rusty-fork",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

@@ -405,3 +405,41 @@ in state 7; a `Dib` is `Send`.
 - **The check:** `just fmt clippy test doc`; clippy for i686 and Linux, docs for Linux; 20 tests in each
   bitness with the header; `cargo +1.89 test`; no `unsafe` in a public signature (the five function-pointer
   types are `pub(crate)`); the name gate; `~/.cargo` unchanged.
+
+**Step 2, the thread, loading, states 1 to 3** (2026-11-08; reports in `scratch/work/s0-8/step-2/`):
+- **The thread:** `run` takes the process's flag (`compare_exchange`, released by a guard), enters the
+  apartment, makes the window (its class registered once per process, never unregistered), runs the closure
+  under `catch_unwind`, then closes the connection if the record says it's open; a panic is resumed after.
+  The record is `Twain`'s own (`dsm`, `loaded`, `connected`, the application's identity in a
+  `Box<Cell<TW_IDENTITY>>`, so the DSM can write its `Id` through a pointer that doesn't move). If the DSM
+  refuses `MSG_CLOSEDSM`, the identity is leaked and the window, the apartment and the flag stay:
+  `RunReport { value, stranded: Option<Error> }`. `Wake` is `Request`, `Timeout` or `Quit` (a `WM_QUIT`
+  taken from the queue is handed to the caller rather than lost).
+- **Loading** as planned, two things learned. A 32-bit process reaches SysWOW64 by the System32 path and may
+  be told either name, so files are compared by identity (volume and file index), never by path: the module
+  of the same name already loaded, the module after loading, a later `load`. And `WinVerifyTrust` verifies a
+  catalog-signed file through its catalog: `kernel32.dll` is Microsoft's (`WrongSigner`), not `Unsigned` as
+  the review had it. So the test makes its own cases from the installed DSM: a copy with its certificate table
+  emptied is `Unsigned`, a copy with one byte changed is `BadSignature` (`TRUST_E_BAD_DIGEST`); with
+  `concrt140.dll` (signed in the file, by Microsoft) each is refused before it's loaded, the test checking
+  that no module of its name is. `LoadError` gained `Open`, `BadSignature`, `Loader` and `NotTheFileChecked`;
+  `AlreadyLoaded` holds while a connection is open as well as while a `Loaded` lives.
+- **Condition codes, corrected:** the DSM clears its code for no application whenever an application reads
+  its own (`apps.cpp`, `AppGetConditionCode`), so the plan's order (the application's, then the global one)
+  would always read success second. The DSM's code is asked for no application first (an identity whose `Id`
+  is out of range, which takes the read path that checks it), then the application's, which wins if it has
+  one.
+- **The compile-time checks:** stable rustdoc checks that a `compile_fail` example fails, not why (one named
+  E0599 instead of E0521 passed); nightly's checks the code. So a `twain-dsm-doc-codes` job runs the doctests
+  on nightly. A state kept outside the closure is E0521, sent to a thread E0277; returned from the closure,
+  rustc says "lifetime may not live long enough", which has no code, so that example is a bare
+  `compile_fail` beside its twin. Each has a twin that compiles.
+- **Renamed from the plan:** `Error::Container` for a container or block that doesn't hold up (`Refused` is
+  the state handed back); `Timeout` and `CallbackUnsupported` come with the steps that need them.
+  `rusty-fork` joined `[workspace.dependencies]`, `sane-dl`'s line with it.
+- **Tests:** 7 in child processes (the sample listed, the signature cases, one `run` at a time on this thread
+  and another, one `Loaded` at a time, requests in states 1 and 3, `Gone`, a connection forgotten with
+  `mem::forget` closed at the end and a second `run` after it, twice); 5 doctests; 2 unit tests of the PE
+  reader, random input among them.
+- **The check:** as step 1's; 34 tests in each bitness with the sample and the header required; clippy for
+  i686 and Linux; `cargo +1.89 test`; nightly's doctests; the graph adds `windows-sys` and `windows-link`.

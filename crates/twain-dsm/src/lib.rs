@@ -32,8 +32,7 @@
 //! > consequential, as a result of the reproduction, modification,
 //! > distribution or other use of the TWAIN Toolkit.
 
-// Only the modules that call Windows or the DSM may hold unsafe code, and so
-// far none does.
+// Only the modules that call Windows or the DSM may hold unsafe code.
 #![deny(unsafe_code)]
 
 mod codes;
@@ -44,6 +43,21 @@ mod container;
 #[cfg_attr(not(test), allow(dead_code))]
 mod ext_info;
 pub mod ffi;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod pe;
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod dsm;
+#[cfg(windows)]
+mod error;
+#[cfg(windows)]
+mod states;
+#[cfg(windows)]
+mod thread;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod window;
 
 #[cfg(all(test, windows))]
 mod header_contract;
@@ -52,3 +66,9 @@ pub use codes::{ConditionCode, ReturnCode, Triplet};
 pub use container::{
     Container, ContainerError, Enumeration, Fix32, Frame, Item, ItemType, Items, Range,
 };
+#[cfg(windows)]
+pub use error::{Error, Gone, LoadError, Refused, RunError};
+#[cfg(windows)]
+pub use states::{App, Load, Loaded, Opened, SourceId};
+#[cfg(windows)]
+pub use thread::{Remote, RunReport, Twain, Wake, run};

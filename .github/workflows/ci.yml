@@ -151,6 +151,21 @@ jobs:
       - name: Test
         run: just sane-dl-msrv
 
+  # twain-dsm's compile_fail doctests, which show what the compiler refuses
+  # (a TWAIN state kept past its run, or sent to another thread), with their
+  # error codes checked: nightly's rustdoc checks them, stable's doesn't.
+  twain-dsm-doc-codes:
+    name: twain-dsm's compile-fail examples, their error codes checked
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: extractions/setup-just@v4
+      - name: Doctests on nightly
+        run: just twain-dsm-doc-codes
+
   # On Windows, where all of it builds; its tests that need the DSM or
   # twain.h say they skipped.
   twain-dsm-msrv:

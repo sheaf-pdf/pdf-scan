@@ -13,6 +13,7 @@ members = [
 # one version for the workspace. A dependency joins once a second member
 # takes it.
 [workspace.dependencies]
+rusty-fork = { version = "0.3", default-features = false, features = ["timeout"] }
 thiserror = "2"
 
 # The rules for unsafe code, which the members that call or export a C API
