@@ -502,6 +502,14 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
     another crate's item fails, since the gate can't read it.
 18. **Backlog IDs as `origin/master` has them when step 4 starts** (the plan review): slice 3, beside, plans to
     take the same next ones; the second to merge renumbers its own. Crate code and docs cite none.
+19. **A fake child's `SANE_CONFIG_DIR` is its test's own directory** (step 1), which holds no `dll.conf`: a child
+    that reached the system's libsane by mistake, as the guard's make-fail makes one, reads none of the system's
+    configuration before `load_fake` fails it, as the real tests never read `/etc/sane.d`.
+20. **`Api::look_up` is a private `unsafe fn` too** (step 1), its contract that the library's functions by SANE's
+    names have `sane.h`'s types, as `Api::load`'s contract makes them; its `SAFETY:` comment had leaned on
+    `load_from`'s caller.
+21. **The `MissingSymbol` unit test exists only where the system library it opens is known** (step 1): Linux with
+    glibc (`libc.so.6`; musl's isn't that), macOS and Windows, by `cfg` rather than a skip at run time.
 
 ## For review (security)
 
@@ -651,3 +659,56 @@ code, the sources or a probe before it was acted on. The plan as the planner lef
    target directory under the slice's work directory once the crate is ready; the core's runs under `target/`.
 
 ## So far
+
+### Step 1: the milestone's slice 1a; the tests load the fake through `Sane::load()` (2026-11-09)
+
+One commit, this one, which holds this record.
+
+- **The milestone:** slice 1a in `milestones/s0-devices.md`, after slice 1: what it builds, what it's checked by,
+  the plan's path. A paragraph of its own (`**1a. …**`), since Markdown has no `1a.` list marker: slice 1's list
+  ends there and slice 2's starts again at 2.
+- **The private loader:** `Sane::start` and `Api::load` are private `unsafe fn`s, each with its `# Safety`: every
+  name the system's SANE found by the loader's search under SANE's name, a library already in the process with
+  none of SANE's names or a path where nothing is, or (until step 2) a library `load_from`'s caller promised.
+  `Api::look_up` too (decision 20). `load()`'s call and `load_from`'s each carry a `SAFETY:` naming their case;
+  the `SAFETY:` comments of `Api::load` and `look_up` no longer lean on `load_from`'s caller directly, but on the
+  contracts.
+- **The tests' route:** `fake_library()` builds the fake as before, then copies it as SANE's leaf name (the file
+  name of `Sane::DEFAULT_LIBRARIES[0]`, `libsane.so.1` here) into `CARGO_TARGET_TMPDIR/fake-libsane/as-sane/
+  <binary>/`, written as `.libsane.so.1.<pid>.tmp` and renamed, and returns that directory. `Fake::child` puts it
+  first on `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS, by `cfg`), ahead of the parent's value, and sets the
+  child's `SANE_CONFIG_DIR` (decision 19). `load_fake()` and a new `try_load_fake()` (for the tests that expect a
+  load of the fake to fail: `AlreadyLoaded`, `UnsupportedVersion`, `Init`; it was `load_from(fake_path())`) call
+  `Sane::load()`, then fail unless the fake's log is there, naming what was loaded. `load_real()` is
+  `Sane::load()` alone. `SANE_DL_LIBSANE`, `common::load_from`, `fake_path` and `SANE_DL_TEST_FAKE` are gone, and
+  `tests/real.rs`'s module doc says the loader's variable instead.
+- **Windows:** the 98 tests that load the fake (59 `#[test]` attributes, three of them in the test-making macros
+  of `options_fake.rs` and `scan_fake.rs`) carry `#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name:
+  none on Windows")]`, a reason short enough that rustfmt keeps each attribute on one line.
+- **The two path tests** moved into `library.rs`'s unit tests, their names kept:
+  `library::tests::a_missing_library_is_not_found_with_what_was_tried` (an absolute path in a fresh `tempfile`
+  directory: `NotFound` with the path in `tried`, then again) and
+  `library::tests::a_library_without_sanes_functions_is_refused` (`libc.so.6`, `/usr/lib/libSystem.B.dylib`,
+  `kernel32.dll`: `MissingSymbol` for `sane_init`, then again), each under one lock, calling the private loader
+  in the unit tests' own process (decision 21).
+- **Docs:** `fake-libsane`'s crate docs and manifest comment, and the gate's comment in `/justfile`, say tests
+  load the fake as SANE through the loader's search path. `sane-dl`'s README, crate docs and changelog are
+  unchanged: its public API is, until step 2 rewrites them.
+
+**Departed from the plan:** the "Done when"'s `rg 'load_from|SANE_DL_LIBSANE' /crates` finds, besides
+`Sane::load_from` and its docs in `/crates/sane-dl/src/`, `load_from`'s lines in `/crates/sane-dl/README.md` and
+`CHANGELOG.md`: they describe the public API as it stands until step 2 removes the function and rewrites both.
+No test or helper names either.
+
+**Checked here** (records in `scratch/work/s0-1a/step-1/`): `cargo fmt --check`; `cargo clippy --workspace
+--all-targets -D warnings`; `cargo clippy -p sane-dl --all-targets -D warnings` for `x86_64-pc-windows-gnu` and
+`x86_64-apple-darwin`; `cargo doc -D warnings` of both crates touched; `sane-dl`'s and `fake-libsane`'s tests with
+`SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, 221 passed, as at the base. The test list, recorded at
+the base (`b47f6e3`, no code changed since `3f33be5`) and after: 246 on Linux each, the two path tests moved as
+above, none lost. After a run each `as-sane/<binary>/` (`cancel`, `fake`, `loading`, `options_fake`,
+`scan_fake`) holds `libsane.so.1` alone. Make-fails, on a worktree removed after (the branch unchanged): the
+loader's variable left off a fake child, and every one of the 98 fake tests fails at `try_load_fake`'s check,
+having loaded the system's libsane (its version 1.2.1, not the fake's 1.0.0); the marking's condition flipped to
+`unix` with `fake_library()` made to panic, and the run has no failure (80 passed, 98 ignored), while one test's
+marking taken off fails it. Left to the step's checking agent: `just ci` whole (gates, MSRV, the package), the
+`SAFETY:` comments read against their calls.

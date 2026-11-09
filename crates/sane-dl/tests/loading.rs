@@ -1,86 +1,28 @@
-//! Loading SANE: what's tried, what's refused, and that a failed load leaves
-//! nothing behind. Each test runs in a child process of its own.
+//! Loading SANE: what's refused, and that a failed load leaves nothing
+//! behind. Each test runs in a child process of its own. What needs a path
+//! of its own (a library missing SANE's functions, a path where nothing is)
+//! is tested inside the crate, over its private loader.
 
 #[macro_use]
 mod common;
 
-use std::path::Path;
-
-use common::{Child, Fake};
+use common::Fake;
 use sane_dl::{LoadError, Version};
-
-#[test]
-fn a_missing_library_is_not_found_with_what_was_tried() {
-    let missing = Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-such-libsane");
-    in_child!(
-        a_missing_library_is_not_found_with_what_was_tried,
-        Child::new(),
-        || {
-            match common::load_from(&missing) {
-                Err(LoadError::NotFound { tried, .. }) => assert_eq!(tried, vec![missing.clone()]),
-                other => panic!("expected NotFound, got {other:?}"),
-            }
-            // Nothing was left behind: a later load gets as far as the loader.
-            assert!(matches!(
-                common::load_from(&missing),
-                Err(LoadError::NotFound { .. })
-            ));
-        }
-    );
-}
 
 #[cfg(windows)]
 #[test]
 fn there_is_no_default_library_on_windows() {
-    in_child!(there_is_no_default_library_on_windows, Child::new(), || {
-        assert!(matches!(sane_dl::Sane::load(), Err(LoadError::NoDefault)));
-    });
-}
-
-/// The system's C library, by its name on each system: a library that
-/// loads, and has none of SANE's functions.
-fn c_library() -> Option<&'static str> {
-    if cfg!(target_os = "linux") {
-        Some("libc.so.6")
-    } else if cfg!(target_os = "macos") {
-        Some("/usr/lib/libSystem.B.dylib")
-    } else if cfg!(windows) {
-        Some("msvcrt.dll")
-    } else {
-        None
-    }
-}
-
-#[test]
-fn a_library_without_sanes_functions_is_refused() {
-    let Some(library) = c_library() else {
-        common::report_skip(
-            "a_library_without_sanes_functions_is_refused",
-            "no C library is known here",
-            None,
-        );
-        return;
-    };
     in_child!(
-        a_library_without_sanes_functions_is_refused,
-        Child::new(),
+        there_is_no_default_library_on_windows,
+        common::Child::new(),
         || {
-            match common::load_from(library) {
-                Err(LoadError::MissingSymbol { name, .. }) => assert_eq!(name, "sane_init"),
-                other => panic!("expected MissingSymbol, got {other:?}"),
-            }
-            assert!(
-                matches!(
-                    common::load_from(library),
-                    Err(LoadError::MissingSymbol { .. })
-                ),
-                "the slot was freed"
-            );
+            assert!(matches!(sane_dl::Sane::load(), Err(LoadError::NoDefault)));
         }
     );
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn one_sane_per_process_until_it_and_its_handles_are_gone() {
     let fake = Fake::new(
         "one_sane_per_process_until_it_and_its_handles_are_gone",
@@ -92,7 +34,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
         || {
             let sane = common::load_fake();
             assert!(matches!(
-                common::load_from(common::fake_path()),
+                common::try_load_fake(),
                 Err(LoadError::AlreadyLoaded)
             ));
             let clone = sane.clone();
@@ -101,7 +43,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
             drop(clone);
             // The handle keeps SANE started.
             assert!(matches!(
-                common::load_from(common::fake_path()),
+                common::try_load_fake(),
                 Err(LoadError::AlreadyLoaded)
             ));
             drop(handle);
@@ -132,6 +74,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_refused_version_is_exited_and_a_later_load_succeeds() {
     let fake = Fake::new(
         "a_refused_version_is_exited_and_a_later_load_succeeds",
@@ -141,7 +84,7 @@ fn a_refused_version_is_exited_and_a_later_load_succeeds() {
         a_refused_version_is_exited_and_a_later_load_succeeds,
         fake.child(),
         || {
-            match common::load_from(common::fake_path()) {
+            match common::try_load_fake() {
                 Err(LoadError::UnsupportedVersion(version)) => {
                     assert_eq!(
                         version,
@@ -174,6 +117,7 @@ fn a_refused_version_is_exited_and_a_later_load_succeeds() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
     let fake = Fake::new(
         "a_failed_init_isnt_exited_and_a_later_load_succeeds",
@@ -183,7 +127,7 @@ fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
         a_failed_init_isnt_exited_and_a_later_load_succeeds,
         fake.child(),
         || {
-            match common::load_from(common::fake_path()) {
+            match common::try_load_fake() {
                 Err(LoadError::Init(status)) => assert_eq!(status, sane_dl::Status::IO_ERROR),
                 other => panic!("expected Init, got {other:?}"),
             }
@@ -199,10 +143,11 @@ fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn an_unknown_init_status_is_kept() {
     let fake = Fake::new("an_unknown_init_status_is_kept", "init 42\n");
     in_child!(an_unknown_init_status_is_kept, fake.child(), || {
-        match common::load_from(common::fake_path()) {
+        match common::try_load_fake() {
             Err(LoadError::Init(status)) => assert_eq!(status, sane_dl::Status(42)),
             other => panic!("expected Init, got {other:?}"),
         }

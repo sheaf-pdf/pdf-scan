@@ -2,10 +2,11 @@
 //! in a child process whose configuration is a private, isolated directory
 //! naming them, never the system's.
 //!
-//! The library is the system's (`Sane::load`), or the one `SANE_DL_LIBSANE`
-//! names. Where there's none (Windows, macOS, a Linux without it) each test
-//! says it skipped, and passes; with `SANE_DL_REQUIRE_LIBSANE=1` it fails
-//! instead.
+//! The library is the system's (`Sane::load`), as the system loader finds
+//! it: to test another libsane, put its directory first on the loader's
+//! search path for the run (`LD_LIBRARY_PATH`), which every child inherits.
+//! Where there's none (Windows, macOS, a Linux without it) each test says it
+//! skipped, and passes; with `SANE_DL_REQUIRE_LIBSANE=1` it fails instead.
 
 #[macro_use]
 mod common;

@@ -37,6 +37,24 @@ S1 back: S1 can start once the Linux slices are done.
    empty build script, `LimitExceeded`, `ReloadAfterSet`, `options_generation`, `SetInfo` non-exhaustive,
    `clear_cancel`); then the merge of its pull request. CI's run on the three systems is green (pull request
    #2, run 42582929367, 2026-11-09), which closed TEST-2 and TEST-8.
+
+**1a. sane-dl's public API made safe.** A follow-up to slice 1, asked for on 2026-11-09 ("i think that we
+should try to define safe apis where possible"), which confirms `decisions.md`'s ruling of 2026-11-08, "Public
+APIs are safe Rust; `unsafe` contracts stay inside a crate", recorded by slice 8 after slice 1's code review had
+made `Sane::load_from` an `unsafe fn`. Every public item of `sane-dl` whose contract a caller keeps given a safe
+shape, the API's shapes weighed in the plan before one is taken, or named as an exception with why: the library
+chosen by the system's loader alone (`Sane::load_from` removed; another SANE loaded through the loader's own
+search path, set as the process starts); the tests loading `fake-libsane` through `Sane::load` itself, the loader
+pointed at it by each child's environment, and what needs a path of its own tested inside the crate; `ffi`'s
+function-pointer types inside the crate; one SANE per process whatever copies of the crate it holds (on Linux a
+process-wide slot); BUG-7 (`Image`'s derived `Debug` printing every byte); and a gate over every public item,
+read from rustdoc's JSON on a pinned nightly. `sane-dl` stays 0.1.0-alpha.1, unpublished, its changelog saying
+what changed. Checked: `just ci`; the soundness review (the code review's soundness lens: every `unsafe` block
+and `SAFETY:` comment, the private loader's contract and its call sites, each public item's docs); the gate over
+the public API (no `unsafe` function, method or trait, and no raw or unsafe function pointer in a public
+signature), made to fail on violations made for the check; the publish dry run. Plan:
+`slices/s0-1a-sane-dl-safe-api.md`.
+
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the

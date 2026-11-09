@@ -185,7 +185,8 @@ gates:
     [[ $read_count -gt 0 ]] || fail "no binary was read for libsane"
     echo "gates: $read_count binaries read for libsane"
     # fake-libsane: never published, and no crate takes it as a dependency
-    # of any kind: tests build it and load it by its path.
+    # of any kind: tests build it and load it as SANE, through the system
+    # loader's search path.
     members=$(cargo metadata --locked --format-version 1 --no-deps)
     publish=$(jq -c '.packages[] | select(.name == "fake-libsane") | .publish' <<< "$members")
     [[ $publish == '[]' ]] || fail "fake-libsane could be published (publish: ${publish:-not a member})"

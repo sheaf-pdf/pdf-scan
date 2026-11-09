@@ -16,6 +16,14 @@
 //! parent's alone: a [`Child`] carries that work as its preparation, which
 //! runs as the child is spawned, in the parent only, and the helpers that
 //! do it refuse to run in a child.
+//!
+//! Every library is loaded through [`Sane::load`], the crate's one loader.
+//! The fake is found there as SANE is: its parent copies it under SANE's
+//! own file name into a directory of its own ([`fake_library`]), and spawns
+//! the child with the system loader's search path naming that directory
+//! first (`LD_LIBRARY_PATH`; `DYLD_LIBRARY_PATH` on macOS). Windows has no
+//! default library, so no route to the fake: each test that loads it is
+//! ignored there, saying why.
 
 // Each test binary uses some of these.
 #![allow(dead_code)]
@@ -31,6 +39,13 @@ use std::time::Duration;
 
 use sane_dl::{CONFIG_DIR_VARIABLE, ConfigDir, LoadError, Sane, Search};
 
+/// The variable naming the directories the system loader searches first for
+/// a library loaded by name, read as the process starts.
+#[cfg(target_os = "macos")]
+const LOADER_PATH: &str = "DYLD_LIBRARY_PATH";
+#[cfg(not(target_os = "macos"))]
+const LOADER_PATH: &str = "LD_LIBRARY_PATH";
+
 /// The exit code of a child that can't run here.
 pub const SKIP: i32 = 77;
 
@@ -44,9 +59,6 @@ pub const REQUIRE_LIBSANE: &str = "SANE_DL_REQUIRE_LIBSANE";
 /// The variable whose `1` makes the header contract fail rather than skip
 /// where `sane.h` or a C compiler isn't there.
 pub const REQUIRE_HEADER: &str = "SANE_DL_REQUIRE_HEADER";
-
-/// The variable that hands the fake's path to the child.
-const FAKE_PATH: &str = "SANE_DL_TEST_FAKE";
 
 /// The variable set in every child, so the parent's work can refuse to run
 /// there.
@@ -278,10 +290,18 @@ pub fn fresh_dir(dir: &Path) {
     fs::create_dir_all(dir).expect("couldn't make the test's directory");
 }
 
-/// The fake libsane, built once per test binary by the cargo that built the
+/// The directory the fake libsane is loaded from as SANE, holding a copy of
+/// it under SANE's own file name alone, one directory per test binary.
+///
+/// The fake is built once per test binary by the cargo that built the
 /// tests, into a target directory of its own, without the flags or target
-/// of the run that built them (a sanitizer's or a cross build's). In the
-/// parent only, as a child's preparation: the child is given the path.
+/// of the run that built them (a sanitizer's or a cross build's). Then it's
+/// copied as the file name of [`Sane::DEFAULT_LIBRARIES`]' first entry
+/// (`libsane.so.1`; `libsane.1.dylib` on macOS), written under a temporary
+/// name holding this process's id and renamed into place, so no child maps
+/// half a copy, and a copy a running child maps is replaced, never written
+/// over. A child whose loader searches this directory first loads the fake
+/// from [`Sane::load`]. In the parent only, as a child's preparation.
 pub fn fake_library() -> &'static Path {
     parent_only("building the fake libsane");
     static FAKE: OnceLock<PathBuf> = OnceLock::new();
@@ -315,14 +335,47 @@ pub fn fake_library() -> &'static Path {
             std::env::consts::DLL_PREFIX,
             std::env::consts::DLL_SUFFIX
         );
-        let path = target.join("debug").join(name);
+        let built = target.join("debug").join(name);
         assert!(
-            path.is_file(),
+            built.is_file(),
             "the fake libsane isn't at {}",
-            path.display()
+            built.display()
         );
-        path
+        let sanes_name = Sane::DEFAULT_LIBRARIES
+            .first()
+            .and_then(|default| Path::new(default).file_name())
+            .expect("this system has no default library to stand in for");
+        let dir = target.join("as-sane").join(env!("CARGO_CRATE_NAME"));
+        fs::create_dir_all(&dir).expect("couldn't make the fake's directory");
+        let mut temporary = OsString::from(".");
+        temporary.push(sanes_name);
+        temporary.push(format!(".{}.tmp", std::process::id()));
+        let temporary = dir.join(temporary);
+        if let Err(error) = fs::copy(&built, &temporary) {
+            let _ = fs::remove_file(&temporary);
+            panic!(
+                "couldn't copy the fake libsane to {}: {error}",
+                temporary.display()
+            );
+        }
+        let copy = dir.join(sanes_name);
+        if let Err(error) = fs::rename(&temporary, &copy) {
+            let _ = fs::remove_file(&temporary);
+            panic!(
+                "couldn't rename the fake's copy to {}: {error}",
+                copy.display()
+            );
+        }
+        dir
     })
+}
+
+/// The loader's search path for a child that loads the fake: `dir` first,
+/// then whatever this process was given.
+fn loader_path(dir: &Path) -> OsString {
+    let given = std::env::var_os(LOADER_PATH).unwrap_or_default();
+    std::env::join_paths(std::iter::once(dir.to_owned()).chain(std::env::split_paths(&given)))
+        .expect("the fake's directory can't be put on the loader's search path")
 }
 
 /// One test's run of the fake: its script and log, in the test's directory.
@@ -348,15 +401,22 @@ impl Fake {
 
     /// A child that loads the fake with this script and log; as it's
     /// spawned, the parent makes the test's directory afresh, writes the
-    /// script there and builds the fake, if it hasn't yet.
+    /// script there, builds and copies the fake, if it hasn't yet, and puts
+    /// the fake's directory first on the child's loader search path.
+    ///
+    /// The child's `SANE_CONFIG_DIR` is the test's directory too, which
+    /// names no backend, so a load that reached the system's libsane by
+    /// mistake would read none of the system's configuration before
+    /// [`load_fake`] fails it.
     pub fn child(&self) -> Child {
         let (dir, script, text) = (self.dir.clone(), self.script.clone(), self.text.clone());
         Child::new()
             .prepare(move |command| {
                 fresh_dir(&dir);
                 fs::write(&script, text).expect("couldn't write the fake's script");
-                command.env(FAKE_PATH, fake_library());
+                command.env(LOADER_PATH, loader_path(fake_library()));
             })
+            .env(CONFIG_DIR_VARIABLE, &self.dir)
             .env("FAKE_LIBSANE_SCRIPT", &self.script)
             .env("FAKE_LIBSANE_LOG", &self.log)
     }
@@ -381,32 +441,31 @@ impl Fake {
     }
 }
 
-/// In the child: the path of the fake its parent built.
-pub fn fake_path() -> PathBuf {
-    std::env::var_os(FAKE_PATH)
-        .expect("the parent names the fake libsane")
-        .into()
+/// In the child: [`Sane::load`], in a child [`Fake::child`] made, where the
+/// loader finds the fake as SANE; then fails the test unless the fake's log
+/// is there, which its first call writes, so a test that loaded the
+/// system's libsane by mistake fails rather than passing on it.
+pub fn try_load_fake() -> Result<Sane, LoadError> {
+    let loaded = Sane::load();
+    let log = std::env::var_os("FAKE_LIBSANE_LOG").expect("the parent names the fake's log");
+    if !Path::new(&log).is_file() {
+        let what = match &loaded {
+            Ok(sane) => format!("loaded {sane:?}"),
+            Err(error) => chain(error),
+        };
+        panic!(
+            "the fake's log isn't at {}, so what `Sane::load` reached wasn't the fake ({what}): \
+             is the fake's directory first on {LOADER_PATH}?",
+            Path::new(&log).display()
+        );
+    }
+    loaded
 }
 
-/// Loads the library at `path` as SANE: [`Sane::load_from`], for the
-/// libraries the tests load.
-///
-/// Each is one a test may run and call as SANE: the fake its parent built,
-/// whose exports are checked at compile time to have the bindings' types;
-/// the system's libsane, or the one `SANE_DL_LIBSANE` names; the system's C
-/// library, which a test loads to see it refused for lacking SANE's
-/// functions, none of which it exports; or a path where nothing is.
-pub fn load_from(path: impl AsRef<Path>) -> Result<Sane, LoadError> {
-    // SAFETY: as above: each library is one this process may run, and
-    // exports SANE's functions with `sane.h`'s types, or none of them.
-    unsafe { Sane::load_from(path) }
-}
-
-/// In the child: loads the fake its parent built, failing the test if it
-/// can't.
+/// In the child: loads the fake its parent built ([`try_load_fake`]),
+/// failing the test if it can't.
 pub fn load_fake() -> Sane {
-    load_from(fake_path())
-        .unwrap_or_else(|error| panic!("couldn't load the fake: {}", chain(&error)))
+    try_load_fake().unwrap_or_else(|error| panic!("couldn't load the fake: {}", chain(&error)))
 }
 
 /// A line of the fake's log.
@@ -531,14 +590,12 @@ pub fn real_child_with(test: &str, backends: &[&str], files: &[(&str, &str)]) ->
         .require(REQUIRE_LIBSANE)
 }
 
-/// In the child: the system's libsane, or the one `SANE_DL_LIBSANE` names;
-/// skips where it isn't there, and fails on any other error.
+/// In the child: the system's libsane ([`Sane::load`]); skips where it
+/// isn't there, and fails on any other error. Another libsane is tested by
+/// setting the loader's search path for the run, which every child
+/// inherits.
 pub fn load_real() -> Sane {
-    let loaded = match std::env::var_os("SANE_DL_LIBSANE") {
-        Some(path) => load_from(path),
-        None => Sane::load(),
-    };
-    match loaded {
+    match Sane::load() {
         Ok(sane) => sane,
         Err(error @ (LoadError::NotFound { .. } | LoadError::NoDefault)) => skip(format!(
             "there's no libsane to load here ({})",

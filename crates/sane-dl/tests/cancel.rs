@@ -33,6 +33,7 @@ fn wait_for_log(needle: &str) {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_cancel_during_a_blocked_read_returns_cancelled() {
     let fake = Fake::new(
         "a_cancel_during_a_blocked_read_returns_cancelled",
@@ -82,6 +83,7 @@ fn a_cancel_during_a_blocked_read_returns_cancelled() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_cancel_between_pages_stops_the_next_one() {
     let fake = Fake::new("a_cancel_between_pages_stops_the_next_one", DEVICE);
     in_child!(
@@ -146,6 +148,7 @@ fn a_cancel_between_pages_stops_the_next_one() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_cancel_left_from_the_last_batch_can_be_cleared() {
     let fake = Fake::new(
         "a_cancel_left_from_the_last_batch_can_be_cleared",
@@ -178,6 +181,7 @@ fn a_cancel_left_from_the_last_batch_can_be_cleared() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_cancel_racing_close_never_reaches_a_closed_handle() {
     const ROUNDS: usize = 10_000;
     let fake = Fake::new(
@@ -245,6 +249,7 @@ fn writeln_stderr(text: &str) -> std::io::Result<()> {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_read_that_ignores_the_cancel_stops_on_the_tokens_flag() {
     let fake = Fake::new(
         "a_read_that_ignores_the_cancel_stops_on_the_tokens_flag",
@@ -292,6 +297,7 @@ fn a_read_that_ignores_the_cancel_stops_on_the_tokens_flag() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_read_that_hangs_for_good_ignores_the_cancel() {
     let fake = Fake::new(
         "a_read_that_hangs_for_good_ignores_the_cancel",
@@ -328,6 +334,7 @@ fn a_read_that_hangs_for_good_ignores_the_cancel() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn the_abort_ends_the_child() {
     let fake = Fake::new("the_abort_ends_the_child", &script("at 2 abort\n"));
     in_child!(the_abort_ends_the_child, fake.child().aborts(), || {
