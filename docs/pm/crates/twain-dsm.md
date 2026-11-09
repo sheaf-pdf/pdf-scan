@@ -79,7 +79,7 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   settled the route:** `scripts/twain-sample.ps1` installs the sample's MSI silently (`msiexec /qn`, the DSM
   2.5.0 with it, both bitnesses), on `windows-latest` too; and `twain-spike` lists, transfers, compares and
   cancels through it with a hidden window in both bitnesses here. CI's `twain-spike` job runs the same on
-  `windows-latest` (listing seen there; the transfers there are the slice's closing check). `twain-dsm`'s own
+  `windows-latest`, green on every push of the slice (all seven scenarios, both bitnesses). `twain-dsm`'s own
   tests replace the spike's, and the spike goes.
 - **Open:**
   - `twain.h`'s license, settled 2026-11-08: no copy grants a license (copyright notices, "All rights

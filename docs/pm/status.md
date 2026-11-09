@@ -45,7 +45,8 @@ git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; 
   pull request; `slices/s0-7-twain-spike.md`): its four steps done 2026-11-08: the sample source installed
   silently (here and on `windows-latest`), TWAIN walked from state 1 to 7 and back in both bitnesses, native
   and memory transfers equal pixel for pixel, a cancel from another thread; the seam note's TWAIN rows and
-  `crates/twain-dsm.md` revised from it. Its code review and fixes next, then CI's scans close it.
+  `crates/twain-dsm.md` revised from it. CI green on every push, its scans on `windows-latest` included
+  (TEST-3 done). Its code review and fixes next.
 - **Next:** slice 1's run, its code review and fixes; then its review, and once approved the push and the
   pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note's SANE rows revised;
   slice 8 (`twain-dsm`) can follow slice 7 on Windows.

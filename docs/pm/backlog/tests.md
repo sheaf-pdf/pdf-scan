@@ -18,7 +18,6 @@ From the prior-art survey's "What is still unverified" (`research/prior-art/READ
 
 - **TEST-2** · sane-dl · S0 · open — **SANE in CI: the `test` and `pnm` backends, and the bindings against the header.** Check that Ubuntu runners' `libsane1` includes `pnm` (Debian's build enables it); whether the `test` backend's hand-scanner mode combines with its feeder to give `lines = -1` from a feeder (else the fake does it); a test that the hand-written bindings and status table match the installed `sane.h` (sanetui's idea, Apache-2.0). *(survey, SANE and network scanning)*
 
-- **TEST-3** · twain-dsm · S0 · open — **TWAIN's sample source on a hosted runner.** Whether `Twain_DS_sample01` (BSD-3) installs silently on `windows-latest` (`msiexec /qn`), or runs from yushulx/virtual-scanner's portable zip, or works with the DSM and the source copied into `twain_32` and `twain_64` (if the runner lets us write `C:\Windows\twain_*`); whether it scans with a hidden window in both bitnesses; `CAP_XFERCOUNT` from its environment variable sets the page count. **S0 slice 7, 2026-11-08:** the MSI installs silently there (`scripts/twain-sample.ps1`; CI's `twain-spike` job, step 1) and the DSM lists the source with a hidden window in both bitnesses; it scans so here, `CAP_XFERCOUNT` setting the count (2 when unset, the code's default, not the README's 1). Left: the scans in CI, which close it with the slice. *(survey, TWAIN, WIA and ICA)*
 
 ## Later
 

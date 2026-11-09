@@ -13,14 +13,14 @@ settles, and its upstream contributions.
 | bug (BUG) | `bugs.md` | | 5 | 1 | | 6 | |
 | feature (FEAT) | `features.md` | 1 | 2 | 2 | 5 | 10 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 2 | 2 | 1 | 1 | 6 | |
+| test (TEST) | `tests.md` | 1 | 2 | 1 | 1 | 5 | |
 | question (Q) | `questions.md` | | 1 | 2 | | 3 | |
 | upstream (UP) | `upstream.md` | | 4 | 1 | 1 | 6 | 5 |
-| **all** | | **3** | **15** | **7** | **7** | **32** | **5** |
+| **all** | | **2** | **15** | **7** | **7** | **31** | **5** |
 
 ## Where to start
 
-- **S0:** TEST-2 (SANE in CI) with slice 1; TEST-3 (TWAIN's sample source) with slice 7; FEAT-5 (patch
+- **S0:** TEST-2 (SANE in CI) with slice 1; FEAT-5 (patch
   codes the driver reports) with the Windows backends.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.

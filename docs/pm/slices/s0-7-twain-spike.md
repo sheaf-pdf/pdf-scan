@@ -580,4 +580,13 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   `apps.cpp`, and `0x031F` checked as `WM_DWMNCRENDERINGCHANGED`, by this step rather than taken from the
   review); one claim caught and narrowed before it went in (that CI scans on `windows-latest`: so far CI has
   shown the install and the listing); the docs read for anything private; the core.
-- **Departures from the plan:** *TEST-3 updated, not closed*: CI's scans on the runner aren't in yet.
+- **Departures from the plan:** *TEST-3 updated, not closed*: CI's scans on the runner weren't in yet;
+  closed once they were (below).
+
+### CI, for the slice (2026-11-08)
+
+Green on every push ("so far ci has been green for all of slice 7"): the check job on Ubuntu, Windows and
+macOS, and the `twain-spike` job running all seven scenarios on `windows-latest` in both bitnesses, so the
+sample source installs silently and scans with a hidden window on the runner, both delivery modes, the
+comparison and the cancel included. TEST-3 is closed into `archive/backlog-done.md`; Risk 1's fallbacks
+weren't needed.
