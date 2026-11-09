@@ -656,6 +656,24 @@ doesn't touch is left out.
     numbered twice once the Windows machine's next slice merges; slice 8's own entries in `status.md` and
     `slices/README.md` left as its machine wrote them.
 
+Taken in the steps:
+
+23. **The constructors take owned values** (`String`, `Vec`), as the fields hold them, with no `impl
+    Into<String>` (step 1): plain, the same shape as the fields an app then sets. The alternative,
+    `DeviceInfo::new` taking `impl Into<String>`, reads better in tests; widening to it later breaks only a
+    caller that names the function as a pointer.
+24. **Modules by concept, private, everything re-exported at the root** as the block has it (step 1): `device`
+    (ids, `DeviceInfo`, `Driver`, the two traits, `Opened`, `WindowClosed`, `WindowOwner`), `caps` (capabilities
+    and settings), `image` (`Format`, `RawImage`, `LayoutError`), `page` (pages, the encodings, events, `Done`),
+    `error` (`ScanError`). `Encoding` sits beside `EncodedKind`, as the block orders it.
+25. **`Debug` by hand names the byte count `len`** (`RawImage { format, width, height, len }`, `Encoded { kind,
+    len }`), and `Opened`'s ends in `..` for the device it leaves out (step 1).
+26. **How `RawImage` works its length out** (step 1): a private function gives a row's bytes and the image's in
+    `u64`, refusing `Empty` and then `TooLarge` (past `u64`, or past the limit it's given); `data_len` gives it
+    the platform's limit and turns the total into a `usize` with `try_from` (a second guard, never reached while
+    the limit is `usize::MAX`); `new` calls `data_len`, then checks the length and the padding; `stride()` is
+    worked out again from the format and the width, never stored.
+
 ## For review (security)
 
 1. **`RawImage::new` is where a page from a worker becomes a page** (slice 4 decodes through it): its sizes are
@@ -799,3 +817,60 @@ and merged onto `master` as the rebase would (the worktree removed after). No FF
     in the cargo home, and both targets' standard libraries are installed.
 
 ## So far
+
+**Step 1, the crate and its model; the workspace around it** (2026-11-09; one commit, "Add scan-device: the
+device model, provisional", on `2a6cc3c`, the branch `3f33be5` and the plan's commit). The checks before it:
+none (the plan review's are in "Plan review"; no step had been checked).
+
+- **The crate:** `/crates/scan-device/` 0.0.0, edition 2024, `rust-version` 1.89, `publish = false`, `in-progress
+  = "0.1.0"` and `thiserror.workspace = true`, `[lints] workspace = true`; `#![forbid(unsafe_code)]` and
+  `#![warn(missing_docs)]`; crate docs (the model, devices and their ids, a batch and its events' order, the
+  channel, cancel and progress, the raw layout, stability; no example until the fake's, step 2) and a short
+  README (the licences at the root, linked). Modules `device`, `caps`, `image`, `page` and `error`, everything
+  re-exported at the root, and `pub use in_progress` (decision 24).
+- **The model:** the note's block, its 31 items, each struct's and enum's body and each trait method's
+  signature as the block writes them, derives and `#[non_exhaustive]` the same, `SizeMm`'s three constants;
+  read by a script against the block (`scratch/work/s0-3/step-1/model-vs-note.py`, "31 items ... 0 differ"),
+  the block's doc comments kept on their items. Added as "The model, as built" has it: the six constructors
+  (decision 23), `RawImage::new` with its four checks in order, `data_len`, the accessors and `into_data`
+  (decision 26), and `Debug` by hand for `RawImage`, `Encoded` and `Opened` (decision 25).
+- **Tests:** 11 units (`image`: each format's layout taken and the length refused short and long; a row's bits
+  rounded up; `Empty`; a set padding bit at 13 pixels a row, its row named, the first such row; `TooLarge` past
+  `u64` at `u32::MAX` square for `Gray16`, `Rgb8` and `Rgb16`, `Bw1` and `Gray8` fitting `u64` and refused by
+  the length here, by the limit on 32 bits; 65,536 square in `Rgb16` past a 32-bit `usize` through the
+  parameter, a `Length` here, `TooLarge` on 32 bits, the limit itself held; `data_len` agreeing with `new`;
+  `Debug` without a byte; the layout errors' messages; `caps`: Letter and Legal whole inches, not whole
+  millimetres; `page`: `Encoded`'s `Debug`), two doctests (`RawImage::new`, `data_len`), and `tests/model.rs`, 9
+  tests from outside the crate (each `#[non_exhaustive]` struct by its constructor, its defaults, its fields
+  set; the trait objects, `Opened`, `Event`, `SyncSender<Event>` and `ScanError` `Send`; `Opened` through a
+  boxed test backend, its `Debug`; each `ScanError`'s message; a push-shaped test device moving a child
+  progress and a `SyncSender` clone into a thread it spawns: a batch to the end, the caller's `Tracker` at 1,
+  and a cancel from a third thread while sheet 1's page waits on a rendezvous channel, the page delivered and
+  nothing after, `Done::Cancelled`).
+- **The workspace:** `/Cargo.toml`'s member line after `sane-dl`'s; `/Cargo.lock` gains `in-progress` 0.1.0 and
+  `scan-device`, nothing else ("Locking 1 package to highest Rust 1.89 compatible version", offline); the
+  justfile's `scan_device_msrv`, `scan-device-msrv`, `msrv` naming all three, the gates' loop `sane-dl twain-dsm
+  scan-device`, `deps()` with `--all-features`, and the gates' heading comment saying so; CI's `scan-device-msrv`
+  job after `twain-dsm-msrv`, on `ubuntu-latest` and 1.89; the root README's row after `twain-dsm`'s and its
+  "Next" line `scan-worker` alone. Nothing in `crates/sane-dl/` or `crates/sane-dl.md`.
+- **The MSRV probe** (`scratch/work/s0-3/msrv-probe/`, its README): over `cargo tree -e normal,build,dev
+  --target all`, the probe's (newest versions, resolved offline from the cargo home's index) and the
+  workspace's own graph alike, the highest `rust-version` is `in-progress` 0.1.0's 1.85, then `thiserror`'s
+  1.77: so the family's floor, 1.89. `cargo tree -p scan-device -e normal,build --target all --all-features`:
+  8 packages (`scan-device`, `in-progress`, `thiserror`, `thiserror-impl`, `proc-macro2`, `quote`, `syn`,
+  `unicode-ident`).
+- **Quick checks, the implementation's:** `cargo fmt --all -- --check`, `cargo clippy --locked --workspace
+  --all-targets -- -D warnings` and `cargo test --locked -p scan-device` green; `cargo doc -p scan-device
+  --no-deps` with `-D warnings` clean; `cargo +1.89 check -p scan-device --all-targets`; the unit tests built
+  for `wasm32-wasip1` and run once under Node's WASI (11 passed, the 32-bit branches taken;
+  `scratch/work/s0-3/step-1/wasi/`), ahead of the check's own run, since a wrong 32-bit expectation would
+  otherwise cost a repair. Make-fails on a worktree of its own (`scratch/work/s0-3/step-1/make-fail.md`): 17
+  mutations (the padding check gone, its mask turned, the row misnamed; the length in wrapping arithmetic; no
+  platform limit; no `Empty`; `Bw1` rows rounded down; `Debug` with the bytes, for `RawImage` and `Encoded`;
+  Letter whole millimetres; a constructor's default changed, three ways; a `ScanError`'s message; `Opened`'s
+  `Debug`; the push device's check between sheets gone, and its child progress replaced), each failing a test;
+  the worktree removed.
+- **Departures:** none from the model or the steps. The gates' heading comment, which the plan didn't name,
+  says the graph is read with every feature on. `master`'s slice 8 changes the control file lists were already
+  the plan's (written for `3f33be5`), so nothing there departs.
+- **Decisions:** 23 to 26 ("Taken in the steps").

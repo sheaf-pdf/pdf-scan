@@ -58,6 +58,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "in-progress"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b688f7dc59663fd2c84756e4e8bed087d461713bc6c9977db29c7d442b69425c"
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -147,6 +153,14 @@ dependencies = [
  "libloading",
  "rusty-fork",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "scan-device"
+version = "0.0.0"
+dependencies = [
+ "in-progress",
  "thiserror",
 ]
 
