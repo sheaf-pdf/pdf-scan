@@ -184,9 +184,13 @@ dependencies = [
 name = "scan-worker"
 version = "0.0.0"
 dependencies = [
+ "sane-dl",
  "scan-device",
+ "scan-worker",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 //! Scanner drivers run in a process of their own: a worker serving any [`scan_device`] backends
-//! over its standard input and output, and the protocol it speaks.
+//! over its standard input and output, the client that starts one for each device, and the
+//! protocol between them.
 //!
 //! A scanner's driver is code its maker wrote, loaded into whatever process calls it: a driver
 //! that hangs holds that process's thread for good, one that crashes takes the process with it,
@@ -7,12 +8,119 @@
 //! driver can hang, crash or need another bitness while the app goes on: the app keeps the
 //! pages the worker sent before it failed, ends a worker that went silent, and starts another.
 //!
-//! The worker's side is [`serve`], the whole `main` of a worker binary, given the backends it
-//! serves: every call on them made on its main thread, in order; a batch's events written as
-//! they come, each page's bytes after its line, through a channel that holds the backend back
-//! while the pipe is slow; a batch's progress and its driver's messages forwarded; a cancel
-//! taken at once. This version has the worker's side and the protocol; the client that starts a
-//! worker for each device, watches it, and reads its pages comes next.
+//! Two halves, which ship together:
+//!
+//! - **The worker's side** is [`serve`], the whole `main` of a worker binary, given the backends
+//!   it serves: every call on them made on its main thread, in order; a batch's events written as
+//!   they come, each page's bytes after its line, through a channel that holds the backend back
+//!   while the pipe is slow; a batch's progress and its driver's messages forwarded; a cancel
+//!   taken at once.
+//! - **The app's side** is a [`Client`], given the worker to start for each driver API: it makes
+//!   the device model's calls through a worker, a [`RemoteDevice`] for each device it opens, with
+//!   an [`Error`] of its own that holds the device's [`ScanError`](scan_device::ScanError) beside
+//!   the worker's failures.
+//!
+//! ```no_run
+//! use std::{process::ExitCode, sync::mpsc, thread, time::Duration};
+//!
+//! use scan_worker::scan_device::fake::{FakeBackend, FakeDevice, Sheet};
+//! use scan_worker::scan_device::in_progress::Tracker;
+//! use scan_worker::scan_device::{Driver, Event, Format, Settings, Source};
+//! use scan_worker::{Client, WorkerCommand};
+//!
+//! fn main() -> ExitCode {
+//!     // Run as a worker: the scripted backend, where an app's has its drivers'.
+//!     if std::env::args().nth(1).as_deref() == Some("--scan-worker") {
+//!         let scanner = FakeDevice::new("desk", "Maker", "Model");
+//!         scanner.load([Sheet::new(), Sheet::new()]);
+//!         return scan_worker::serve(vec![Box::new(FakeBackend::new().with(scanner))]);
+//!     }
+//!     // Run as the app, with itself as its worker.
+//!     let me = std::env::current_exe().expect("the program's path");
+//!     let client = Client::new().worker(Driver::Fake, WorkerCommand::new(me).arg("--scan-worker"));
+//!     let stored = client.list(Driver::Fake, Duration::from_secs(5)).expect("a listing").remove(0);
+//!     let mut device = client.open(&stored, Duration::from_secs(5)).expect("the device");
+//!     let (events, received) = mpsc::sync_channel(2);
+//!     let pages = thread::spawn(move || {
+//!         received.iter().filter(|event| matches!(event, Event::Page(_))).count()
+//!     });
+//!     let settings = Settings::new(Source::Feeder, 300, Format::Gray8);
+//!     let done = device.scan(&settings, 1, &events, &Tracker::new()).expect("a batch");
+//!     drop(events);
+//!     println!("{done:?}: {} pages", pages.join().expect("the pages"));
+//!     device.close().expect("the device closed");
+//!     ExitCode::SUCCESS
+//! }
+//! ```
+//!
+//! # The client
+//!
+//! A listing ([`Client::list`]) starts a worker of its own, which lists, answers and is quit, so
+//! a slow listing never holds a device that scans; an open ([`Client::open`]) starts a worker
+//! that keeps the device until [`RemoteDevice::close`], or its drop, asks it to quit. Each is the
+//! worker given for the device's [`Driver`](scan_device::Driver) ([`Client::worker`]), a program
+//! named by an absolute path, never searched for.
+//!
+//! Each worker starts in a private directory of its own, made under the work directory
+//! ([`Client::work_dir`], the system's temporary directory by default) at once under a random
+//! name, on Unix its owner's alone, and removed once the worker has exited. A SANE worker that
+//! opens a stored device finds there a SANE configuration naming only the backend the stored id
+//! names (the id's text after `sane:` up to its first `:`, each character up to U+00FF a byte;
+//! none where the id gives none), given as `SANE_CONFIG_DIR` with SANE's own list after it, so
+//! SANE loads that backend alone and reads nothing anyone else wrote: the directory, then its
+//! current directory (the same), then the system's. That replaces any `SANE_CONFIG_DIR` the app
+//! has; a listing's directory is empty and leaves the app's. Whatever the id, the worker's
+//! backend is the one to refuse it. On Unix a worker leads a process group of its own, so a
+//! terminal's interrupt reaches the app, which decides, and not the worker mid-sheet; on Windows
+//! it's started with no console window. Otherwise it inherits the app's environment.
+//!
+//! The client trusts nothing a worker says, since a driver's code runs there: every line is
+//! capped before it's read whole ([`Limits::line`]); a page's bytes are capped
+//! ([`Limits::page`]) and, raw, checked against its format and size before anything is
+//! allocated, then made a page through [`RawImage::new`](scan_device::RawImage::new), which
+//! checks them again; a page's `dpi` must be finite and above 0; caps must keep the model's
+//! rules (a source at least, each with a format, a list of resolutions not empty, a range's `min`
+//! not past its `max`); a device listed or opened must be of the worker's driver API; and each
+//! message must come in its place. A worker that breaks one of these is killed
+//! ([`Error::Protocol`]): it can't be trusted to be in step.
+//!
+//! A request is written only if it reads back from its own line as it was: JSON can't hold a
+//! paper size that isn't finite, so settings with one are [`Error::Unsendable`], nothing sent.
+//!
+//! ## The watchdog, and cancel
+//!
+//! Silence is counted from the last line the client read, and only while the calling thread
+//! waits on the worker: time it spends handing an event to the caller's full channel is the
+//! caller's, so a slow consumer is never taken for a hung driver. A worker silent past its time
+//! is killed ([`Error::Stopped`]):
+//!
+//! | While | Killed after, without a line ([`Timeouts`]) |
+//! |---|---|
+//! | Starting | `start`, 10 s, for its `hello` |
+//! | A batch | `silence`, 60 s, a flatbed's warm-up included |
+//! | A batch, once cancelled | `cancel`, 10 s, counted from the later of the cancel and the last line, so the sheet in flight finishes while it sends |
+//! | A listing or an open | its deadline, and `grace`, 5 s |
+//! | `caps` | `silence` |
+//! | The settings window | never: it's the user's |
+//!
+//! A worker writes a progress line only when the count moves, so a driver stuck mid-page goes
+//! silent. A batch's caller cancels through its [`Progress`](scan_device::in_progress::Progress),
+//! which the client reads every 50 ms and at each message and sends on once: the worker finishes
+//! the sheet in flight, front and back, and feeds no more. A caller's receiver gone is a cancel
+//! too, the rest of the batch read and dropped. A listing or an open the backend timed out
+//! ([`ScanError::TimedOut`](scan_device::ScanError::TimedOut)) kills its worker at once, since
+//! its driver may still be at it.
+//!
+//! ## When a worker fails
+//!
+//! Every page a worker sent whole before it failed is the caller's already, sent on as it came.
+//! A worker whose output ends unasked is [`Error::Crashed`], with how it exited, and with a page
+//! its output ended within dropped and said; one killed for its silence is [`Error::Stopped`].
+//! Both keep the last 8 KiB of what the worker wrote to its standard error, which a thread drains
+//! as it comes, for the app's log. A worker that ended is closed: every later call on its device
+//! answers [`Error::Ended`]. A worker's end never holds the caller long: asked to quit, it's
+//! given [`Timeouts::grace`] to exit, then killed, and one that can't be reaped even then is left
+//! to a thread that waits for it.
 //!
 //! # The protocol
 //!
@@ -161,9 +269,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod client;
+mod error;
 mod serve;
 mod wire;
 
+pub use client::{Client, Limits, RemoteDevice, Timeouts, WorkerCommand};
+pub use error::{Error, ProtocolError};
 pub use serve::serve;
 pub use wire::PROTOCOL;
 

@@ -1077,3 +1077,145 @@ remarks: the `[workspace.dependencies]` comment, true again from this step (`sca
   input is the end, never a request; `ExitCode::from(1)` for a failed output, `SUCCESS` otherwise; the
   refusals' reasons are for a log, not matched by a client; the test harness, `Piped`, reads the worker's lines
   on a thread of its own so every wait is bounded.
+
+**Step 3, the client, its normal paths and its refusals** (2026-11-09; one commit, "Add scan-worker's client:
+a worker for each device, its pages capped and checked", on `ee4ef2f`). The checks
+before it: step 2's check of `ee4ef2f` passed (`scratch/work/s0-4/flow/checks.md`): `just ci` green with both
+`SANE_DL_REQUIRE_*` set (753 tests, the four MSRV recipes on 1.89, `just scan-worker-msrv` among them,
+`sane-dl-package` run); the test list 369 to 398, none lost; the gates holding, `scan-worker`'s graph 16
+packages, 26 binaries read for libsane; 1.89 standing (16 packages, the highest `scan-device`'s 1.89); the
+devices loop's make-fails on a worktree, `png` as a normal dependency and behind a feature of its own, each
+failing the gate naming `scan-worker` and `png`; the crate docs' 12 literal lines read back through `wire`'s
+types byte for byte, a row per message agreeing; the three `serve` mutations failing (`done` before the join 5
+runs of 5). Its two remarks, for the code review: `serve` writes through `io::stdout()`, a `LineWriter`, so a
+page's bytes holding `\n` go out in pieces before the flush (correct; step 4's throughput run shows the cost);
+and the shared-deadline test's 1.8 s bound, for CI's slower runners.
+
+- **The manifest:** `sane-dl` (path), `tempfile = "3"` and `thiserror` (workspace) join the dependencies; the
+  `fake` feature (`["scan-device/fake"]`, the library unchanged by it); the dev-dependency on the crate itself
+  with `fake`; `[[bin]] scan-worker-fake`, `required-features = ["fake"]`, `test = false`, `doc = false`. The
+  description says the client. `/Cargo.lock`: `scan-worker`'s list gains `sane-dl`, `scan-worker`, `tempfile`
+  and `thiserror`, no package added (each was there for `sane-dl` and its tests).
+- **The client** (`/crates/scan-worker/src/client.rs`, and `client/` `spawn.rs`, `read.rs`, `worker.rs`):
+  `Client` (`new`, `worker`, `limits`, `timeouts`, `work_dir`, `list`, `open`), `WorkerCommand` (`new`, `arg`,
+  `program`, `args`), `Limits` and `Timeouts` (`#[non_exhaustive]`, public fields, `Default` 1 MiB and 1 GiB;
+  10, 60, 10 and 5 s), `RemoteDevice` (`info`, `renamed_from`, `process_id`, `caps`, `scan`, `settings_window`,
+  `close`; `Debug` by hand), as "The client" has them. `spawn`: the program and the work directory absolute or
+  `InvalidInput`; the directory by `tempfile::Builder` (`scan-worker-` and a random name, `permissions(0o700)`
+  on Unix, so it's made at that mode); for a `Driver::Sane` open, the id's name (after `sane:`, each character
+  up to U+00FF its byte, else none), `backend_of`, `ConfigDir::write(.., Search::BeforeSystem)` and its
+  `value()` as `SANE_CONFIG_DIR`; `process_group(0)` on Unix, `CREATE_NO_WINDOW` on Windows, nothing elsewhere.
+  `read`: the reader thread (each line under `Limits::line`, a page's bytes capped, checked against `data_len`
+  and its `dpi` before a byte is allocated, read whole, made through `RawImage::new` or `Encoded`, then
+  `RawPage::new`), handing each message on a `sync_channel(0)`, its last message the end (whether a page was cut
+  short) or what broke the protocol; standard error's drain, its last 8 KiB kept. `worker`: the `hello` under
+  `Timeouts::start`; each call's answer in its place, the driver compared on every listed and opened device, the
+  caps checked; the batch loop (each event sent on as it comes, the watchdog's time counted only while waiting
+  on the worker and restarted after each handing on, the cancel read every 50 ms and at each message and sent
+  once, a failed `send` a cancel with the rest dropped and `Done::Cancelled`, progress as `set_total` on a
+  changed total and `set`, messages to `progress.message`); every request round-tripped before it's written
+  (`Unsendable`); the ends (`Protocol` and `Stopped` kill at once, `Crashed` gives the grace to exit, `close`
+  and drop `quit` then the grace then a kill), each reaped by `try_wait` with growing pauses, or handed with its
+  directory to a thread; every call after an end `Ended`. `/crates/scan-worker/src/error.rs`: `Error` and
+  `ProtocolError` as "Errors" has them, `thiserror`, `Scan` transparent and `Start`'s `io::Error` its source.
+- **`wire`'s changes:** `read_line` no longer skips the rest of a line past the cap (the reader that found it
+  decides: `serve`'s skips it with `skip_line`, the client's reads no more and kills the worker, so a worker
+  writing an endless line is refused at once rather than read to its end); `Reply::name`; `MessageLevel` into
+  `Level`.
+- **The test worker** (`/crates/scan-worker/src/bin/scan-worker-fake/`): `main.rs` (the scenario from the first
+  argument, a count of sheets from the second, 3 by default; `env`; `slow-listing`; the hand-written ones) and
+  `scenarios.rs` (the scripted ones), which the integration tests take too (`#[path]`), so every batch through a
+  worker is compared with the same script run in the test's process. Scenarios: `feeder`, `encodings`, `jams`
+  (sheet 2's back midway, sheet 4's front at its start), `double-feed`, `cover-open`, `gone`, `warm-up`,
+  `reports-sides`, `window`, `renamed`, `not-installed`, `hang`, `crash` and `exit` (at sheet 3's front midway,
+  `FAILING` written to standard error first), `await-cancel-midway` and `await-cancel-back` (sheet 2), and
+  `scan-more` and `talking` (new sheets at each batch; the driver's warning `SAID` as each starts); `env`
+  (devices of `Driver::Sane` saying the current directory, `SANE_CONFIG_DIR` and the directory's contents in
+  JSON); `slow-listing` (a minute's listing, and a backend whose drop takes a minute, so only a kill ends it
+  soon); by hand: `version`, `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`,
+  `refuses`, `no-source`, `big-page` (a line stating 1.2 GB raw, none sent), `page-length`, `padding`,
+  `zero-dpi`, `cut-short`. Step 4's (`hang`, `crash`, `exit`, `await-cancel-*`, `silent`, `cut-short`) are
+  built and not yet tested.
+- **The tests:** 11 unit tests (`read`: messages and pages in order then the end, the line cap, the page cap and
+  each check before the bytes, the ends within a page and a line, lines that aren't messages, the 8 KiB tail;
+  `spawn`: a `sane:` id's name and backend; `worker`: `Unsendable` and the JSON edges sent, the caps rules,
+  the watchdog's deadline). 39 integration tests through the binary: `devices.rs` 12 (a listing equal to the
+  script's; another driver's device refused listed and opened; opened as stored, renamed, gone and `BadId`;
+  `NotInstalled`; a listing and an open past their deadline `TimedOut` and killed, shown by a 30 s grace never
+  waited; a worker that never answers `Stopped` at the deadline and the grace; caps and the settings window,
+  and `Unsupported`; a worker each open device; `NoWorker`; a relative program, a missing one, a relative work
+  directory and a missing one refused at start, nothing left; `WorkerCommand`'s parts; `Send` and `Sync`);
+  `batches.rs` 14 (each of the five formats, duplex, every event equal to the in-process script's and every
+  raw page `pattern`'s; CCITT G4, JPEG, PNG and TIFF pages as the driver gave them; the flatbed's page numbered
+  as asked; reported sides; "Scan More" from `first_sheet`; a jam at a back then a front with Continue twice
+  in one worker; a double feed and an open cover; an empty feeder; gone, and every call after it `Gone`;
+  warming up; progress ending at the last page's bytes; a driver's message at the caller's tracker; `NaN` and
+  infinite sizes `Unsendable`, nothing sent, the next batch whole; a page past a lowered cap refused, the
+  events before it kept, every call after `Ended`); `protocol.rs` 9 (each hand-written worker refused as its
+  `ProtocolError`, the calls after `Ended`); `sane_spawn.rs` 4 (`sane:test:0`'s directory naming `test`,
+  `sane:Desk scanner` and `sane:test:☃` naming none, `SANE_CONFIG_DIR` the directory and `:`, the worker's
+  current directory that directory, under the test's work directory, 0700 on Unix, gone after `close` and
+  drop; a listing's empty with the app's variable; the system's temporary directory by default; every path
+  through `fs::canonicalize`). 2 doctests (the crate's worker-and-client `main` and `Client`'s, `no_run`). So
+  the test list should go from 398 to 450.
+- **The docs:** the crate docs gain the two halves, an example of a binary that's its own worker and client,
+  "The client" (which worker and where it starts, the SANE configuration, the process group and console, what's
+  checked and refused, `Unsendable`), "The watchdog, and cancel" (its table) and "When a worker fails"; each
+  public item documented. The README says the client and the `fake` feature. The root README's row says the
+  client, and "Next" is slice 5's `sane` backend. CI's `scan-worker-msrv` comment says the Windows branch
+  (`creation_flags`, stable since 1.16) isn't compiled on that Rust there. No CHANGELOG (unpublished).
+- **The libsane gate** (`/justfile`): the `jq` reads every `bin` target's `.executable` too, its comment saying
+  so. Read here on a plain `cargo build --workspace --all-features`: `scan-worker-fake` listed beside
+  `fake-libsane`'s library, its `NEEDED` libc, ld-linux and libgcc_s alone. The gate's make-fail (the build
+  script linking libsane into the binaries alone, `-Wl,--no-as-needed` then `-lsane`, failing the gate naming
+  `scan-worker-fake` and passing the gate as it stood) is the checking agent's, with the gates' other runs.
+- **The MSRV probe** (`scratch/work/s0-4/msrv-probe/scan-worker-step-3/`, its README): 31 packages in the
+  probe's newest-versions graph and the workspace's alike; the highest `rust-version` 1.89, `sane-dl`'s and
+  `scan-device`'s, then `libloading`'s 1.88, so 1.89 stands. `cargo tree -p scan-worker -e normal,build --target
+  all --all-features`: 31 packages, step 2's 16 and `sane-dl`, `libloading`, `tempfile`, `fastrand`,
+  `getrandom`, `once_cell`, `rustix`, `errno`, `bitflags`, `libc`, `linux-raw-sys`, `cfg-if`, `r-efi`,
+  `windows-sys`, `windows-link`; no codec, PDF, OCR or GUI crate.
+- **Make-fails** (`scratch/work/s0-4/step-3/make-fail.md`, its script beside it), on a worktree there at a local
+  commit of the step, its own target directory, the branch unchanged; 21 cases, each failing as it should, the
+  base passing after: the plan's three (a page's size not checked against `Limits::page`, failing the
+  hand-written and the lowered cap's tests and the reader's unit test; the request's round trip not checked; the
+  listed device's driver not compared), and the opened device's driver not compared; a timed-out listing, and
+  open, quit rather than killed; `SANE_CONFIG_DIR` not set; a `sane:` id read as its UTF-8 bytes; the directory
+  at the umask's mode; the worker not started in it; it kept after the worker exits; the caps unchecked; a
+  `dpi` checked for finiteness alone; a raw page's length unchecked; the `hello`'s protocol not compared; a
+  refusal taken as an answer; a progress line's count, and a message, not given to the caller; `first_sheet`
+  sent as 1; a call after an end written to the worker; standard error's first 8 KiB kept.
+- **Quick checks:** `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets` with and
+  without `--all-features`, and `--lib`, `-D warnings`; `cargo clippy --locked -p scan-worker --all-targets
+  --all-features -- -D warnings` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, clean (the `cfg` code);
+  `cargo +1.89 check --locked -p scan-worker --all-targets`; `cargo doc` with `-D warnings`, the workspace's
+  default features and all; `cargo test --locked -p scan-worker` (39 units, 39 integration tests, 3 doctests),
+  and the units and integration tests 10 times in a loop, none failing (`scratch/work/s0-4/step-3/loop.txt`);
+  `cargo test --workspace --no-run`. `cargo +1.89 clippy -p scan-worker` now lints `sane-dl` too, and 1.89's
+  clippy refuses `sane-dl`'s own `DEFAULT_LIBRARIES.is_empty()` (`const_is_empty`), as it does for `-p sane-dl`
+  without this step: `sane-dl`'s, left alone (the control file); CI's clippy is stable's. The core (`just ci`,
+  the test list, the gates and the libsane gate's make-fail, `just scan-worker-msrv`, the scans) is the
+  step's check's.
+- **Departures from the plan:** the test worker is a directory, `src/bin/scan-worker-fake/` (`main.rs` and
+  `scenarios.rs`), not one file, so the integration tests take its scripts and compare every batch with the same
+  script in process; more scenarios than "The test worker" listed (`deaf`, `out-of-place`, `refuses`,
+  `reports-sides`, `scan-more`, `talking`, and `slow-listing`'s held exit), so every `ProtocolError` variant is
+  reached through a worker and each claim has a test; the `await-cancel` pair named by their place.
+  `wire::read_line` changed (above), step 2's unit test of it skipping through `skip_line` now. A test of a
+  listing's and an open's watchdog (`deaf`) is here, beside the refusals, since step 4's list doesn't hold
+  it. The libsane gate's make-fail is left to the step's check, with the gates' other runs (the workflow's
+  rule), the `bin` branch's reading of the binary shown here.
+- **Decisions, for review with the plan's:** `close` after an earlier failure is `Ok` (the failure was said,
+  and nothing is left to close), and a worker that won't exit within the grace after `quit` is `Stopped` with
+  the grace as its silence, one that exits with a failure `Crashed`; `Crashed`'s status is `None` where the
+  worker hadn't exited within the grace of its output's end and was killed (its signal would say nothing of the
+  driver); a killed worker is given the grace again to be reaped before it's handed to a thread, so the caller
+  waits at most twice the grace; the error's standard error is read once it has ended, or the grace has passed
+  (a process the driver started may hold it); a listing's worker is quit whatever its answer but `TimedOut`, its
+  `close` errors dropped (the answer is had); an open that fails quits its worker, but `TimedOut` kills it; a
+  reply other than `hello` first, a page among them, is `NoHello`, and a refusal as the answer to a request is
+  `Refused`; a too-long time (`Duration::MAX`) is never, not a panic on the clock; the reader hands each message
+  on a rendezvous channel, so the client holds two pages at most, one being handed to the caller and one read
+  and waiting; `Limits`' and `Timeouts`' defaults live with the client, the worker's own
+  request cap staying in `wire`; a page of 0 width or height is `Layout(Empty)`, said by `data_len` before the
+  length is compared.

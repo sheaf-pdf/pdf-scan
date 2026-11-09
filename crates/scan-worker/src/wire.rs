@@ -120,6 +120,28 @@ pub(crate) enum Reply {
     },
 }
 
+impl Reply {
+    /// The message's name, as its line has it.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Reply::Hello { .. } => "hello",
+            Reply::Devices(_) => "devices",
+            Reply::Opened { .. } => "opened",
+            Reply::Caps(_) => "caps",
+            Reply::Window(_) => "window",
+            Reply::Applied(_) => "applied",
+            Reply::Sheet(_) => "sheet",
+            Reply::Page(_) => "page",
+            Reply::Status(_) => "status",
+            Reply::Progress { .. } => "progress",
+            Reply::Message { .. } => "message",
+            Reply::Done(_) => "done",
+            Reply::Error(_) => "error",
+            Reply::Refused { .. } => "refused",
+        }
+    }
+}
+
 /// A page's line: its pixels' form, where it's from, and how many bytes follow.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PageHeader {
@@ -180,6 +202,16 @@ impl From<Level> for MessageLevel {
     }
 }
 
+impl From<MessageLevel> for Level {
+    fn from(level: MessageLevel) -> Level {
+        match level {
+            MessageLevel::Info => Level::Info,
+            MessageLevel::Warn => Level::Warn,
+            MessageLevel::Error => Level::Error,
+        }
+    }
+}
+
 /// `message` as its line: its JSON and a `\n`.
 pub(crate) fn line(message: &impl Serialize) -> io::Result<Vec<u8>> {
     // The messages hold no map, so nothing here fails to encode; an error is kept all the same.
@@ -193,15 +225,16 @@ pub(crate) fn line(message: &impl Serialize) -> io::Result<Vec<u8>> {
 pub(crate) enum Line {
     /// A line, its `\n` taken off, in the buffer.
     Read,
-    /// A line past the cap: the cap and one more byte were read, the rest of the line skipped
-    /// unkept, and the buffer left empty.
+    /// A line past the cap: the cap and one more byte were read, and the buffer left empty;
+    /// the rest of the line is the caller's to skip ([`skip_line`]) or to leave.
     TooLong,
-    /// The input ended, at a line's start or within one (the buffer holding what came).
+    /// The input ended, at a line's start (the buffer empty) or within one (the buffer holding
+    /// what came).
     End,
 }
 
 /// The next line of `input`, into `line`, read only up to `limit` bytes and its `\n`: a longer
-/// line is never held whole, only skipped.
+/// line is never held whole.
 pub(crate) fn read_line(
     input: &mut impl BufRead,
     limit: usize,
@@ -216,11 +249,16 @@ pub(crate) fn read_line(
     }
     if line.len() > limit {
         line.clear();
-        // Through its `\n`, or to the input's end.
-        input.skip_until(b'\n')?;
         return Ok(Line::TooLong);
     }
     Ok(Line::End)
+}
+
+/// The rest of a line [`read_line`] found too long, read and dropped: through its `\n`, or to
+/// the input's end.
+pub(crate) fn skip_line(input: &mut impl BufRead) -> io::Result<()> {
+    input.skip_until(b'\n')?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -514,8 +552,10 @@ mod tests {
         loop {
             let got = read_line(&mut input, limit, &mut line).unwrap();
             read.push((got, line.clone()));
-            if got == Line::End {
-                return read;
+            match got {
+                Line::Read => {}
+                Line::TooLong => skip_line(&mut input).unwrap(),
+                Line::End => return read,
             }
         }
     }

@@ -259,6 +259,11 @@ fn read_requests(input: impl Read, out: &Output, state: &Mutex<State>, commands:
         match wire::read_line(&mut input, REQUEST_LIMIT, &mut line) {
             Ok(Line::Read) => {}
             Ok(Line::TooLong) => {
+                // Read through, never held; an input that fails there is as gone as one that
+                // ends.
+                if wire::skip_line(&mut input).is_err() {
+                    break;
+                }
                 refuse(format!("a line past the {REQUEST_LIMIT}-byte cap"));
                 continue;
             }

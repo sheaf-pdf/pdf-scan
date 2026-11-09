@@ -1,7 +1,7 @@
 # scan-worker
 
 Scanner drivers run in a process of their own, in Rust: a worker serving any `scan-device` backends over its
-standard input and output.
+standard input and output, and the client that starts one for each device, watches it and reads its pages.
 
 A scanner's driver is code its maker wrote: one that hangs holds the thread that called it, one that crashes
 takes its process with it, and a 32-bit driver loads only into a 32-bit process. Run in a worker process, a
@@ -18,8 +18,20 @@ ends it, and aborts it if a driver's call never returns. The crate's docs give t
 implementation could speak it; its first line is a `hello` with the protocol's version, and a mismatch is an
 error, not a negotiation.
 
-This version has the worker's side and the protocol; the client that starts a worker for each device, watches
-it and reads its pages comes next.
+A `Client`, given the worker binary for each driver API, starts a worker for each listing and each device it
+opens, and makes the device model's calls through it, with an error of its own beside the device's. Each worker
+starts in a private directory of its own, where a SANE worker opening a stored device finds a configuration
+naming only that device's backend. The client trusts nothing a worker says: every line and page is capped
+before it's read, a page checked against its format and size before anything is allocated, and the model's
+rules checked. A watchdog kills a worker silent past its time, a cancel allowed to finish the sheet in flight;
+the pages sent before any failure are the caller's, and a crash says how the worker exited and keeps the end of
+its standard error.
+
+## Features
+
+- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, and workers that break the
+  protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang, crash and exit by
+  design. The library is the same with it or without.
 
 Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
 together. No `unsafe` code.

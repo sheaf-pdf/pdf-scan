@@ -184,16 +184,18 @@ gates:
     metadata=$(cargo metadata --locked --format-version 1)
     linkers=$(jq -r '.packages[] | select(.links == "sane") | .name' <<< "$metadata")
     [[ -z $linkers ]] || fail "these declare links = \"sane\": $linkers"
-    # ...and no binary built needs it: neither a test binary nor a shared
+    # ...and no binary built needs it: neither a test binary, nor a program
+    # (a `bin` target, such as a worker a crate's tests start), nor a shared
     # library (the fake's cdylib, which only `cargo build` builds), each read
     # for libsane among the NEEDED entries of its dynamic section. Built with
     # every feature on, as the graphs are read, so a backend's feature that
-    # links it is caught.
+    # links it is caught, and a program behind a feature is built.
     binaries=$({
         cargo test --locked --workspace --all-features --no-run --message-format=json
         cargo build --locked --workspace --all-features --message-format=json
     } | jq -r 'select(.reason == "compiler-artifact")
         | if .profile.test then .executable
+          elif (.target.kind | index("bin")) then .executable
           elif (.target.kind | index("cdylib")) then (.filenames[] | select(test("\\.so$")))
           else empty end // empty' | sort -u)
     # Each read whole before it's matched, so a binary readelf can't read
