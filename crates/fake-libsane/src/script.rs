@@ -213,6 +213,11 @@ impl Script {
                     {
                         return Err(at(format!("{other:?} isn't a keyword")));
                     }
+                    // A backend's profile is its options, which the line
+                    // just gave, and what it does as it scans.
+                    if let ("profile", [name]) = (other, args) {
+                        script.feed.profile(&word(name).map_err(at)?);
+                    }
                 }
             }
         }

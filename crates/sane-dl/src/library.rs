@@ -1096,6 +1096,7 @@ impl Sane {
                 name: DeviceName::from(name),
                 options,
                 scanning: false,
+                non_blocking: false,
             }),
             Err(error) => {
                 // SAFETY: this caller still holds the call token; `raw` came
@@ -1181,6 +1182,10 @@ pub struct Handle {
     /// followed it yet: a scan is pending, which SANE ends with
     /// `sane_cancel`.
     scanning: bool,
+    /// Whether `set_io_mode(true)` has answered `GOOD` since the handle
+    /// opened, or since `set_io_mode(false)` last did: a page then sets
+    /// blocking mode back before it reads.
+    non_blocking: bool,
 }
 
 impl Handle {
@@ -1491,9 +1496,13 @@ impl Handle {
     }
 
     /// Reads blocking or not (`sane_set_io_mode`), once a frame has
-    /// started: SANE resets it with each [`start`](Self::start). Blocking
-    /// is the default and every backend supports it; one that can't read
-    /// without blocking answers `UNSUPPORTED`, in [`Error::Status`].
+    /// started. A device opens reading blocking.
+    ///
+    /// A backend that can't read without blocking answers `UNSUPPORTED`, in
+    /// [`Error::Status`]. Some answer `UNSUPPORTED` whichever mode is asked
+    /// for, blocking too, though the standard says every backend supports
+    /// blocking (SANE 1.4.0's `fujitsu`, `canon_dr`, `epson2` and `escl`
+    /// among them): they read blocking all the same.
     pub fn set_io_mode(&mut self, non_blocking: bool) -> Result<(), Error> {
         let shared = Arc::clone(&self.shared);
         let guard = shared.acquire(None)?;
@@ -1508,7 +1517,14 @@ impl Handle {
                 call: Call::SetIoMode,
             });
         }
+        self.non_blocking = non_blocking;
         Ok(())
+    }
+
+    /// Whether [`set_io_mode`](Self::set_io_mode) has put the handle in
+    /// non-blocking mode, and nothing has set it back.
+    pub(crate) fn is_non_blocking(&self) -> bool {
+        self.non_blocking
     }
 
     /// A file descriptor that's readable when a read would give bytes

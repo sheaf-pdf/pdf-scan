@@ -129,12 +129,10 @@ fn a_cancel_between_pages_stops_the_next_one() {
             "sane_init",
             "sane_open",
             "sane_start",
-            "sane_set_io_mode",
             "sane_get_parameters",
             "sane_cancel",
             "sane_cancel",
             "sane_start",
-            "sane_set_io_mode",
             "sane_get_parameters",
             "sane_cancel",
             "sane_close",
@@ -143,8 +141,8 @@ fn a_cancel_between_pages_stops_the_next_one() {
     );
     // The token's cancel, from its thread, then the next page's own, and
     // no start between them.
-    assert_ne!(calls[5].1, main);
-    assert_eq!(calls[6].1, main);
+    assert_ne!(calls[4].1, main);
+    assert_eq!(calls[5].1, main);
 }
 
 #[test]
@@ -229,8 +227,10 @@ fn a_read_that_ignores_the_cancel_stops_on_the_tokens_flag() {
             let mut handle = sane.open("fake:0").unwrap();
             let token = handle.cancel_token();
             let canceller = thread::spawn(move || {
-                // The reads answer GOOD with no bytes by now, and go on.
+                // The reads answer GOOD with no bytes by now, and go on, a
+                // pause between them.
                 wait_for_log("length=0 given=0");
+                thread::sleep(Duration::from_millis(300));
                 token.cancel();
             });
             match handle.batch().next_page(|_| {}) {
@@ -249,6 +249,14 @@ fn a_read_that_ignores_the_cancel_stops_on_the_tokens_flag() {
         .filter(|line| line.kind == "call" && line.function == "sane_read")
         .count();
     assert!(after <= 1, "{after} reads after the cancel");
+    // The empty reads came after pauses that grow to 10 ms, not one after
+    // another: about 30 in 300 ms, where reading at once makes thousands.
+    let empty = log
+        .lines
+        .iter()
+        .filter(|line| line.kind == "return" && line.rest.ends_with("length=0 given=0"))
+        .count();
+    assert!((2..200).contains(&empty), "{empty} empty reads");
 }
 
 #[test]

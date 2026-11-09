@@ -288,10 +288,13 @@ pub enum Error {
         /// What's wrong with them.
         reason: String,
     },
-    /// The frame ended (`EOF`) before the bytes its parameters promised.
+    /// The frame ended (`EOF`) before the bytes its parameters promised:
+    /// all of a known frame's, or a row of a frame of unknown height, which
+    /// can't be an image with no rows.
     #[error("the frame ended after {read} of its {expected} bytes")]
     ShortFrame {
-        /// The bytes its parameters promised, padding included.
+        /// The bytes its parameters promised, padding included: for a frame
+        /// of unknown height, a row's.
         expected: u64,
         /// The bytes read.
         read: u64,

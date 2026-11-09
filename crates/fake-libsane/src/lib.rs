@@ -80,7 +80,7 @@
 //! | `option-null` | An option whose descriptor is null, though it's counted |
 //! | `option-count N` | Option 0's value, in place of the real count |
 //! | `control-status N STATUS` | `sane_control_option` on option `N` answers `STATUS`, doing nothing |
-//! | `profile NAME` | A backend's layout, its lines as above: `fujitsu` (`source` from `Flatbed`, `ADF Front`, `ADF Back`, `ADF Duplex`), `airscan` (`Flatbed`, `ADF`, `ADF Duplex`, fewer resolutions in duplex), `brother` (long `Automatic Document Feeder(left aligned,Duplex)` sources), `canon-dr` (a `ScanMode` of `Simplex` or `Duplex`), `lexmark` (a `BOOL` `scan-both-sides`), `epson` (an `adf-mode` of `Simplex` or `Duplex`), `kodak` (a `duplex` of `front`, `back` or `both`); each with `mode`, `resolution`, the scan area and a `page-width` and `page-height`, active only while a feeder is the source |
+//! | `profile NAME` | A backend's layout, its lines as above: `fujitsu` (`source` from `Flatbed`, `ADF Front`, `ADF Back`, `ADF Duplex`), `airscan` (`Flatbed`, `ADF`, `ADF Duplex`, fewer resolutions in duplex), `brother` (long `Automatic Document Feeder(left aligned,Duplex)` sources), `canon-dr` (a `ScanMode` of `Simplex` or `Duplex`), `lexmark` (a `BOOL` `scan-both-sides`), `epson` (an `adf-mode` of `Simplex` or `Duplex`), `kodak` (a `duplex` of `front`, `back` or `both`); each with `mode`, `resolution`, the scan area and a `page-width` and `page-height`, active only while a feeder is the source; and `fujitsu`, `canon-dr`, `kodak` and `epson` with `io-mode-unsupported`, as those backends answer |
 //!
 //! A number for a `FIXED` option is decimal (`215.9`), rounded to the
 //! nearest 1/65536; for any other, an integer. A descriptor is given at the
@@ -118,13 +118,15 @@
 //! | `read-max N` | A read gives at most `N` bytes |
 //! | `read-length N` | Every `GOOD` read claims `N` bytes, whatever it gave; `read-length past`, one more than it was asked for |
 //! | `non-blocking` | `sane_set_io_mode` takes non-blocking (without, `UNSUPPORTED`) |
+//! | `io-mode-unsupported` | `sane_set_io_mode` answers `UNSUPPORTED` whatever it's asked, blocking too and with no frame in progress, as some backends do; the `fujitsu`, `canon-dr`, `kodak` and `epson` profiles say so too |
 //! | `select-fd N` | `sane_get_select_fd` answers `GOOD` with `N` (without, `UNSUPPORTED`) |
 //! | `parameters-status STATUS` | `sane_get_parameters` answers `STATUS` |
 //! | `start-inval-deactivates NAME...` | A start answering `INVAL` makes these options inactive, saying nothing |
 //!
 //! `sane_set_io_mode` and `sane_get_select_fd` answer `INVAL` with no frame
-//! in progress, as the standard says. A start that answers `INVAL` makes
-//! every descriptor stale, as a set that says `RELOAD_OPTIONS` does.
+//! in progress, as the standard says (but for `io-mode-unsupported`). A
+//! start that answers `INVAL` makes every descriptor stale, as a set that
+//! says `RELOAD_OPTIONS` does.
 //!
 //! **The bytes:** a frame's bytes are its lines, each `BPL` bytes, the
 //! bytes past what its pixels need (the standard's formula) padding,

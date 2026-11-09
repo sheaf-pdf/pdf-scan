@@ -803,7 +803,8 @@ pub unsafe extern "C" fn sane_cancel(handle: ffi::SANE_Handle) {
 const _: ffi::SaneCancelFn = sane_cancel;
 
 /// Blocking always; non-blocking where the script says, else
-/// `UNSUPPORTED`; `INVAL` with no frame in progress.
+/// `UNSUPPORTED`; `INVAL` with no frame in progress. Or `UNSUPPORTED`
+/// whatever is asked, where the script says.
 ///
 /// # Safety
 ///

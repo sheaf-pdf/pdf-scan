@@ -115,7 +115,7 @@ pub use status::{FrameFormat, Status, Version};
 /// it caps.
 ///
 /// A backend is C code that may return anything: these keep a malformed or
-/// hostile answer from becoming an unbounded allocation or loop. The
+/// hostile answer from becoming an unbounded allocation or read. The
 /// defaults are far above what any real backend gives. Set on a [`Sane`]
 /// with [`Sane::set_limits`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

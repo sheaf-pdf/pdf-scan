@@ -71,7 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   that can say so). Rows come top down with any padding dropped, a three-pass image's frames are interleaved
   into one RGB image, and the samples are as SANE encodes them: at depth 1, eight pixels a byte with the
   leftmost in the high bit, and in a gray image 1 is black; at depth 16, two bytes a sample in this machine's
-  byte order. A status mid-page, such as a jam or an open cover, is an error, and the page is dropped.
+  byte order. A status mid-page, such as a jam or an open cover, is an error, and the page is dropped. A
+  page reads blocking, and a read that gives no bytes is made again after a pause of up to 10 ms, until
+  the backend gives bytes or a status, or a token cancels.
 
 ## Loading, and what can fail
 
@@ -116,7 +118,7 @@ trusted as much as the program itself, never one an untrusted party can write.
 ## Caps on what SANE gives
 
 A backend is C code that may return anything. `Limits` caps what this crate accepts, each checked before
-the work it caps, so a malformed or hostile answer is an error, never an unbounded allocation or loop. The
+the work it caps, so a malformed or hostile answer is an error, never an unbounded allocation or read. The
 defaults are far above what a real backend gives:
 
 | Cap | Default |

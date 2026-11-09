@@ -95,6 +95,9 @@ pub struct Feed {
     pub read_length: Option<ReadLength>,
     /// Whether `sane_set_io_mode` takes non-blocking.
     pub non_blocking: bool,
+    /// Whether `sane_set_io_mode` answers `UNSUPPORTED` to either mode,
+    /// frame or none, as some backends do.
+    pub io_mode_unsupported: bool,
     /// What `sane_get_select_fd` gives; without, `UNSUPPORTED`.
     pub select_fd: Option<i32>,
     /// What `sane_get_parameters` answers in place of `GOOD`.
@@ -245,6 +248,10 @@ impl Feed {
                 want(0)?;
                 self.non_blocking = true;
             }
+            "io-mode-unsupported" => {
+                want(0)?;
+                self.io_mode_unsupported = true;
+            }
             "select-fd" => {
                 want(1)?;
                 self.select_fd = Some(integer(&words?[0], "a file descriptor")?);
@@ -264,6 +271,15 @@ impl Feed {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// What a backend's profile says of scanning: the backends whose
+    /// `sane_set_io_mode` answers `UNSUPPORTED` to either mode (SANE
+    /// 1.4.0's `fujitsu`, `canon_dr`, `kodak` and `epson2`) do so here.
+    pub fn profile(&mut self, name: &str) {
+        if matches!(name, "fujitsu" | "canon-dr" | "kodak" | "epson") {
+            self.io_mode_unsupported = true;
+        }
     }
 
     /// Every page's frames.
@@ -705,11 +721,12 @@ mod tests {
     #[test]
     fn scan_lines_parse_and_say_their_errors() {
         let feed = feed(
-            "frame RGB 1 9 3 -1 8\nsheets 10\nnon-blocking\nselect-fd -1\nparameters-status IO_ERROR\nread-length -1\nstart-inval-deactivates a b\n",
+            "frame RGB 1 9 3 -1 8\nsheets 10\nnon-blocking\nio-mode-unsupported\nselect-fd -1\nparameters-status IO_ERROR\nread-length -1\nstart-inval-deactivates a b\n",
         );
         assert_eq!(feed.frames[0].bytes, Bytes::Count(36));
         assert_eq!(feed.sheets, Some(10));
         assert!(feed.non_blocking);
+        assert!(feed.io_mode_unsupported);
         assert_eq!(feed.select_fd, Some(-1));
         assert_eq!(feed.parameters_status, Some(ffi::SANE_STATUS_IO_ERROR));
         assert_eq!(feed.read_length, Some(ReadLength::Claim(-1)));

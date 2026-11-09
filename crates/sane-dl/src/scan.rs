@@ -9,8 +9,13 @@
 //! chunks without a library.
 
 use std::fmt;
+use std::time::Duration;
 
 use crate::{Call, Error, FrameFormat, Handle, Limits, Status, ffi};
+
+/// The longest pause between reads that gave no bytes, in a page's reading
+/// ([`Batch::next_page`]).
+const EMPTY_READ_PAUSE: Duration = Duration::from_millis(10);
 
 /// A frame's parameters, as `sane_get_parameters` gives them: each field
 /// the integer SANE wrote, unchecked.
@@ -265,8 +270,10 @@ pub struct Image {
 pub struct Progress {
     /// Bytes read of the page so far, every frame's, padding included.
     pub bytes_read: u64,
-    /// The page's bytes, where its frames' heights are known (a three-pass
-    /// page's counted as three frames like its first).
+    /// The page's bytes, where its frames' heights are known: those of the
+    /// frames read so far, and the frame being read counted again for each
+    /// still to come in a three-pass page. Never below `bytes_read`, and
+    /// exact once the page's last frame has begun.
     pub bytes_expected: Option<u64>,
 }
 
@@ -341,16 +348,26 @@ impl Assembly {
             .is_some_and(|frame| frame.parameters.last_frame == ffi::SANE_TRUE)
     }
 
-    /// How far the page has come.
+    /// How far the page has come: the frames that have ended as they
+    /// were read, and the frame being read expected for itself and for each
+    /// frame still to come, since a three-pass page's frames may differ in
+    /// padding.
     pub(crate) fn progress(&self) -> Progress {
-        let first = self.done.first().or(self.current.as_ref());
-        let bytes_expected = first.and_then(|frame| {
+        let latest = self.current.as_ref().or(self.done.last());
+        let bytes_expected = latest.and_then(|frame| {
             let frames = if channel_of(frame.parameters.format).is_some() {
                 3
             } else {
                 1
             };
-            frame.expected.map(|bytes| bytes * frames)
+            let ended = self.done.len() as u64;
+            let coming = if self.current.is_some() {
+                frames - ended
+            } else {
+                frames.saturating_sub(ended)
+            };
+            let done: u64 = self.done.iter().map(|frame| frame.read).sum();
+            frame.expected.map(|bytes| done + bytes * coming)
         });
         Progress {
             bytes_read: self.page_read,
@@ -461,9 +478,11 @@ impl Assembly {
     }
 
     /// The frame has ended (`EOF`): [`Error::ShortFrame`] before a known
-    /// frame's bytes, [`Error::PartialRow`] partway into a row of a frame of
-    /// unknown height, and a three-pass frame of unknown height whose rows
-    /// differ from the first's [`Error::BadParameters`].
+    /// frame's bytes, or before the first row of a frame of unknown height,
+    /// [`Error::PartialRow`] partway into a later row of one, and a
+    /// three-pass frame of unknown height whose rows differ from the
+    /// first's [`Error::BadParameters`]. So every frame that ends well has
+    /// a row at least, as `lines` promises when it's known.
     pub(crate) fn end_frame(&mut self) -> Result<(), Error> {
         let Some(frame) = self.current.take() else {
             return Ok(());
@@ -477,6 +496,12 @@ impl Assembly {
                 });
             }
             Some(_) => {}
+            None if frame.read < bytes_per_line => {
+                return Err(Error::ShortFrame {
+                    expected: bytes_per_line,
+                    read: frame.read,
+                });
+            }
             None => {
                 let extra = frame.read % bytes_per_line;
                 if extra != 0 {
@@ -585,6 +610,13 @@ impl Batch<'_> {
     /// its padding dropped, and a three-pass image's frames interleaved
     /// ([`Image`]).
     ///
+    /// A handle put in non-blocking mode ([`Handle::set_io_mode`]) is set
+    /// back to blocking for the page; a backend that refuses (some answer
+    /// `UNSUPPORTED` to either mode) is read as it is. A read that gives no
+    /// bytes is made again after a pause that grows to 10 ms, for as long
+    /// as the backend answers so: a byte, a status or a token's cancel ends
+    /// the wait, as with a read that blocks.
+    ///
     /// `on_progress` hears how far the page has come after each read that
     /// gives bytes, called with no lock held, so it may use the handle's
     /// [`CancelToken`](crate::CancelToken).
@@ -597,8 +629,10 @@ impl Batch<'_> {
     /// backend that ignores `sane_cancel` and goes on answering; and the
     /// frame errors ([`Error::BadParameters`], [`Error::ShortFrame`],
     /// [`Error::LongFrame`], [`Error::PartialRow`],
-    /// [`Error::FrameTooLarge`], [`Error::BadReadLength`]). After any of
-    /// them `sane_cancel` has been called.
+    /// [`Error::FrameTooLarge`], [`Error::BadReadLength`]), a frame of
+    /// unknown height that ends before its first row among them
+    /// (`ShortFrame`), so no page has no rows. After any of them
+    /// `sane_cancel` has been called.
     pub fn next_page(&mut self, mut on_progress: impl FnMut(Progress)) -> Result<Page, Error> {
         let limits = self.handle.limits();
         let mut assembly = Assembly::new(limits);
@@ -617,21 +651,37 @@ impl Batch<'_> {
                 }
                 Err(error) => return Err(error),
             }
-            // Blocking reads, which every backend supports; non-blocking
-            // ones with the select fd are the step-by-step calls'.
+            // A page reads blocking, as a device opens. Only a handle the
+            // step-by-step calls put in non-blocking mode is set back, and
+            // whatever that answers, the page goes on: some backends answer
+            // `UNSUPPORTED` to either mode, and read blocking all the same,
+            // and one left non-blocking is read as an empty read is, below.
+            if self.handle.is_non_blocking() {
+                let _ = self.handle.set_io_mode(false);
+            }
             let begun = self
                 .handle
-                .set_io_mode(false)
-                .and_then(|()| self.handle.parameters())
+                .parameters()
                 .and_then(|parameters| assembly.begin_frame(parameters));
             if let Err(error) = begun {
                 self.handle.cancel();
                 return Err(error);
             }
+            let mut pause = Duration::ZERO;
             loop {
                 match self.handle.read(&mut buffer) {
-                    Ok(ReadOutcome::Bytes(0)) => std::thread::yield_now(),
+                    Ok(ReadOutcome::Bytes(0)) => {
+                        // A blocking read waits for a byte, but a backend may
+                        // answer `GOOD` with none (one left non-blocking, or
+                        // one that doesn't keep the rule): it's read again,
+                        // after a pause that grows to `EMPTY_READ_PAUSE`, so
+                        // waiting costs no processor. A byte, a status or a
+                        // token's cancel ends the wait.
+                        pause = (pause * 2).clamp(Duration::from_micros(100), EMPTY_READ_PAUSE);
+                        std::thread::sleep(pause);
+                    }
                     Ok(ReadOutcome::Bytes(length)) => {
+                        pause = Duration::ZERO;
                         if let Err(error) = assembly.take(&buffer[..length]) {
                             self.handle.cancel();
                             return Err(error);
@@ -1162,6 +1212,27 @@ mod tests {
             }) => {}
             other => panic!("{other:?}"),
         }
+        // A frame of unknown height with no rows, or part of one: no image,
+        // as `lines = 0` isn't one.
+        for chunks in [&[][..], &[&[1u8, 2][..]][..]] {
+            match assemble(&[(unknown, chunks)], Limits::default()) {
+                Err(Error::ShortFrame { expected: 4, read }) => {
+                    assert_eq!(read, chunks.concat().len() as u64);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        let mut assembly = Assembly::new(Limits::default());
+        assembly
+            .begin_frame(frame(FrameFormat::RED, 0, 1, 1, -1, 8))
+            .unwrap();
+        assert!(matches!(
+            assembly.end_frame(),
+            Err(Error::ShortFrame {
+                expected: 1,
+                read: 0
+            })
+        ));
         // A three-pass page of unknown height whose frames end at different
         // rows.
         let mut assembly = Assembly::new(Limits::default());
@@ -1225,5 +1296,25 @@ mod tests {
         unknown.begin_frame(gray(4, 3, -1, 8)).unwrap();
         unknown.take(&[0; 4]).unwrap();
         assert_eq!(unknown.progress().bytes_expected, None);
+        // Three passes whose padding differs: each frame as read, and the
+        // one being read for itself and those to come, so the count never
+        // passes what's expected.
+        let mut padded = Assembly::new(Limits::default());
+        let mut heard = Vec::new();
+        for (format, last, bpl) in [
+            (FrameFormat::RED, 0, 2),
+            (FrameFormat::GREEN, 0, 6),
+            (FrameFormat::BLUE, 1, 6),
+        ] {
+            padded
+                .begin_frame(frame(format, last, bpl, 2, 2, 8))
+                .unwrap();
+            padded.take(&vec![0; bpl as usize * 2]).unwrap();
+            let progress = padded.progress();
+            heard.push((progress.bytes_read, progress.bytes_expected));
+            padded.end_frame().unwrap();
+        }
+        assert_eq!(heard, [(4, Some(12)), (16, Some(28)), (28, Some(28))]);
+        assert_eq!(padded.finish().data.len(), 12);
     }
 }

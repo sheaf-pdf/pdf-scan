@@ -109,25 +109,114 @@ fn a_feeder_gives_its_sheets_then_no_docs() {
     });
     let log = fake.log();
     log.assert_no_violations();
+    let page = ["sane_start", "sane_get_parameters", "sane_read"];
+    let mut expected: Vec<&str> = page.repeat(3);
+    expected.extend(["sane_start", "sane_cancel", "sane_close"]);
+    assert_eq!(scanning_calls(&log), expected);
+    // Read blocking, as the device opened, without asking; the length asked
+    // for the read chunk.
+    assert_eq!(
+        log.nth("call", "sane_read", 0).1.rest,
+        "handle=0x5a00 max_length=262144"
+    );
+    assert_eq!(log.nth("return", "sane_start", 3).1.rest, "status=NO_DOCS");
+}
+
+#[test]
+fn a_backend_refusing_either_io_mode_scans_its_pages() {
+    // fujitsu's profile answers UNSUPPORTED to either mode, as SANE 1.4.0's
+    // fujitsu backend does.
+    let fake = Fake::new(
+        "a_backend_refusing_either_io_mode_scans_its_pages",
+        &script("profile fujitsu\nsheets 3\n"),
+    );
+    in_child!(
+        a_backend_refusing_either_io_mode_scans_its_pages,
+        fake.child(),
+        || {
+            let sane = common::load_fake();
+            let mut handle = sane.open("fake:0").unwrap();
+            handle.start().unwrap();
+            for non_blocking in [false, true] {
+                match handle.set_io_mode(non_blocking) {
+                    Err(Error::Status {
+                        status: Status::UNSUPPORTED,
+                        call: Call::SetIoMode,
+                    }) => {}
+                    other => panic!("{other:?}"),
+                }
+            }
+            // That start took the first sheet; a batch takes the rest.
+            handle.cancel();
+            let mut batch = handle.batch();
+            for page in 2..=3 {
+                let image = image(batch.next_page(|_| {}));
+                assert_eq!(image.data, common::fake_pixels(page, false, 0, 16, 4));
+            }
+            assert_eq!(
+                batch.next_page(|_| {}).unwrap(),
+                Page::NoDocs {
+                    from: Call::Start,
+                    pages: 2
+                }
+            );
+        }
+    );
+    let log = fake.log();
+    log.assert_no_violations();
+    let modes = log
+        .lines
+        .iter()
+        .filter(|line| line.kind == "call" && line.function == "sane_set_io_mode")
+        .count();
+    assert_eq!(modes, 2, "only the step-by-step calls set a mode");
+}
+
+#[test]
+fn a_page_sets_blocking_back_after_the_step_by_step_calls() {
+    let fake = Fake::new(
+        "a_page_sets_blocking_back_after_the_step_by_step_calls",
+        &script("non-blocking\nsheets 3\n"),
+    );
+    in_child!(
+        a_page_sets_blocking_back_after_the_step_by_step_calls,
+        fake.child(),
+        || {
+            let sane = common::load_fake();
+            let mut handle = sane.open("fake:0").unwrap();
+            handle.start().unwrap();
+            handle.set_io_mode(true).unwrap();
+            handle.cancel();
+            let mut batch = handle.batch();
+            image(batch.next_page(|_| {}));
+            image(batch.next_page(|_| {}));
+        }
+    );
+    let log = fake.log();
+    log.assert_no_violations();
+    let modes: Vec<&str> = log
+        .lines
+        .iter()
+        .filter(|line| line.kind == "call" && line.function == "sane_set_io_mode")
+        .map(|line| line.rest.as_str())
+        .collect();
+    // Non-blocking by the step-by-step call, blocking again for the first
+    // page, and the second page's start left as it is.
+    assert_eq!(
+        modes,
+        [
+            "handle=0x5a00 non_blocking=1",
+            "handle=0x5a00 non_blocking=0"
+        ]
+    );
     let page = [
         "sane_start",
         "sane_set_io_mode",
         "sane_get_parameters",
         "sane_read",
     ];
-    let mut expected: Vec<&str> = page.repeat(3);
-    expected.extend(["sane_start", "sane_cancel", "sane_close"]);
-    assert_eq!(scanning_calls(&log), expected);
-    // Read blocking, the length asked for the read chunk.
-    assert_eq!(
-        log.nth("call", "sane_set_io_mode", 0).1.rest,
-        "handle=0x5a00 non_blocking=0"
-    );
-    assert_eq!(
-        log.nth("call", "sane_read", 0).1.rest,
-        "handle=0x5a00 max_length=262144"
-    );
-    assert_eq!(log.nth("return", "sane_start", 3).1.rest, "status=NO_DOCS");
+    let calls = scanning_calls(&log);
+    assert_eq!(&calls[3..7], page, "{calls:?}");
 }
 
 #[test]
@@ -156,12 +245,7 @@ fn a_batch_dropped_after_a_page_ends_with_a_cancel() {
     );
     let log = fake.log();
     log.assert_no_violations();
-    let page = [
-        "sane_start",
-        "sane_set_io_mode",
-        "sane_get_parameters",
-        "sane_read",
-    ];
+    let page = ["sane_start", "sane_get_parameters", "sane_read"];
     let mut expected: Vec<&str> = Vec::new();
     for _ in 0..2 {
         expected.extend(page);
@@ -244,12 +328,7 @@ fn a_jam_or_an_open_cover_is_an_error_saying_its_call() {
     let log = fake.log();
     log.assert_no_violations();
     let calls = scanning_calls(&log);
-    let page = [
-        "sane_start",
-        "sane_set_io_mode",
-        "sane_get_parameters",
-        "sane_read",
-    ];
+    let page = ["sane_start", "sane_get_parameters", "sane_read"];
     let mut expected: Vec<&str> = page.to_vec();
     expected.extend(["sane_start", "sane_cancel"]);
     expected.extend(page);
@@ -740,6 +819,28 @@ failing_page!(
             rows: 4,
             extra: 6,
             bytes_per_line: 16
+        }
+    )
+);
+failing_page!(
+    an_unknown_height_frame_with_no_rows_is_short,
+    "frame GRAY 1 16 16 -1 8 0\n",
+    |error| matches!(
+        error,
+        Error::ShortFrame {
+            expected: 16,
+            read: 0
+        }
+    )
+);
+failing_page!(
+    three_passes_of_unknown_height_with_no_rows_are_short,
+    "frame RED 0 4 4 -1 8 0\nframe GREEN 0 4 4 -1 8 0\nframe BLUE 1 4 4 -1 8 0\n",
+    |error| matches!(
+        error,
+        Error::ShortFrame {
+            expected: 4,
+            read: 0
         }
     )
 );

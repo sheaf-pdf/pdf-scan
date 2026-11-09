@@ -800,6 +800,9 @@ impl Fake {
     /// `sane_set_io_mode`'s status.
     pub fn io_mode(&mut self, id: usize, non_blocking: i32) -> i32 {
         let takes = self.script.feed.non_blocking;
+        if self.script.feed.io_mode_unsupported {
+            return ffi::SANE_STATUS_UNSUPPORTED;
+        }
         match self.open_handle(id) {
             Some(handle) if handle.scan.frame_open() => {
                 if non_blocking != ffi::SANE_FALSE && !takes {
@@ -1532,6 +1535,25 @@ mod tests {
         assert_eq!(other.io_mode(id, 1), ffi::SANE_STATUS_GOOD);
         assert_eq!(other.select_fd(id), (ffi::SANE_STATUS_UNSUPPORTED, None));
         assert_eq!(other.parameters(id).0, ffi::SANE_STATUS_IO_ERROR);
+        // As some backends answer: neither mode, whatever the state; and
+        // those backends' profiles say so.
+        for script in [
+            "device fake:0 a b c\nio-mode-unsupported\nnon-blocking\n",
+            "device fake:0 a b c\nprofile fujitsu\n",
+        ] {
+            let mut refusing = initialised(script);
+            let id = opened(&mut refusing);
+            assert_eq!(refusing.io_mode(id, 0), ffi::SANE_STATUS_UNSUPPORTED);
+            start(&mut refusing, id);
+            assert_eq!(refusing.io_mode(id, 0), ffi::SANE_STATUS_UNSUPPORTED);
+            assert_eq!(refusing.io_mode(id, 1), ffi::SANE_STATUS_UNSUPPORTED);
+        }
+        assert!(
+            !initialised("profile airscan\n")
+                .script
+                .feed
+                .io_mode_unsupported
+        );
     }
 
     #[test]
