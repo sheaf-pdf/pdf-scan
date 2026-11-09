@@ -78,6 +78,39 @@ jobs:
       - name: Gates
         run: just gates
 
+  # TWAIN through the TWAIN Working Group's sample data source, a virtual
+  # scanner that reads its pages from a file: the DSM and the source installed
+  # by the script (the runner is elevated, so msiexec asks nothing), then the
+  # spike in both bitnesses. Its own timeout, since a hung driver call would
+  # otherwise hold the runner for hours.
+  twain-spike:
+    name: TWAIN through the sample source
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+      - uses: extractions/setup-just@v4
+      # Windows PowerShell 5.1, where the script was tested.
+      - name: Install the sample source and the DSM
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\twain-sample.ps1 Install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: What's installed
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\twain-sample.ps1 Status
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: TWAIN, 64-bit
+        run: just twain-spike x86_64-pc-windows-msvc
+      - name: TWAIN, 32-bit
+        run: just twain-spike i686-pc-windows-msvc
+
   # Without SANE installed: what the oldest Rust can break is compiling, and
   # the tests that need libsane say they skipped.
   sane-dl-msrv:

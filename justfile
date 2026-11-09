@@ -33,6 +33,14 @@ msrv: sane-dl-msrv
 sane-dl-msrv:
     cargo +{{ sane_dl_msrv }} test --locked -p sane-dl
 
+# TWAIN driven through the TWAIN Working Group's sample data source, in the
+# bitness `target` builds for (x86_64-pc-windows-msvc or
+# i686-pc-windows-msvc), three pages a batch. Windows only, with the source
+# installed (`scripts/twain-sample.ps1 Install`), so not in `ci`: CI's
+# twain-spike job runs it.
+twain-spike target scenario="all":
+    CAP_XFERCOUNT=3 cargo run --locked -p twain-spike --target {{ target }} -- {{ scenario }}
+
 # The boundaries of the layers, checked over every target's dependency
 # graph; that nothing links libsane; and what files may name.
 gates:

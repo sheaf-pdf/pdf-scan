@@ -441,4 +441,45 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
 
 ## So far
 
-Nothing yet.
+### Step 1: the sample source on CI; the DSM loaded; sources listed (2026-11-08)
+
+- **What it does:** `scripts/twain-sample.ps1` committed, its help corrected (2 pages by default; 0 or less
+  random from 0 to 14). `/crates/twain-spike/`: its manifest (`windows-sys` 0.61 for Windows only, the eight
+  features; `Cargo.lock` gained only the crate's own entry, `windows-sys` 0.61.2 being locked already); `ffi`
+  (the whole subset, with Kodak Alaris's notice and the TWAIN Toolkit's disclaimer; 136 constants, each read
+  from `TWAINH.cs` and checked against `twain.h` by a script, `scratch/work/s0-7/step-1/consts.py`, all
+  agreeing; the layouts asserted for both bitnesses); `dsm` (loading from System32, `DSM_Entry`, the module's
+  path, version and PE `Machine`, the memory functions with the `GlobalAlloc` fallback); `window` (the
+  apartment and the hidden top-level window, `DefWindowProcW` its window procedure); `session` (the state, the
+  identities, typed triplets with their answers checked, the walk down on drop); `twain_thread` (the thread,
+  its events); `run` (the scenarios chosen, the 30-second watchdog ending the process with
+  `TerminateProcess`); the `list` scenario. `just twain-spike target [scenario]`; the CI job.
+- **Checked here:** the core (`just fmt clippy test doc`; clippy for `i686-pc-windows-msvc` and
+  `x86_64-unknown-linux-gnu`, and the Linux docs, all without a warning); `twain-spike list` passing in both
+  bitnesses (`scratch/work/s0-7/step-1/list-64.txt`, `list-32.txt`): the DSM 2.5.0.0, machine 0x8664 and
+  0x14C (the 32-bit one under the System32 name), the DSM's own memory functions driven, the sample listed once,
+  states 1 to 3 and back; a layout assertion seen to fail on both targets when `ProtocolMajor` was widened to
+  `u32` (`make-fail-*.log`), the file restored byte for byte; the twain-spike graph (`twain-spike`,
+  `windows-sys`, `windows-link`) clear of the devices layer's patterns; the name gate's `git grep` finding
+  nothing; the test list empty, as the workspace has no tests yet (`test-list.txt`, step 2's baseline);
+  `~/.cargo` unchanged at depth 3 (a full walk is too slow here); every `SAFETY` comment read; the diff
+  scanned.
+- **Found:**
+  - **The DSM skips Windows' `wiatwain.ds` on purpose**: its log says "We're deliberately skipping this file:
+    C:\WINDOWS\twain_32\wiatwain.ds" (`apps.cpp` line 1591; `scratch/work/s0-7/step-1/dsm32.log`), so the
+    32-bit list holds the sample alone, as the 64-bit one does. The plan expected `wiatwain.ds` listed; it
+    isn't, and WIA devices aren't reached through TWAIN this way: the `wia` backend stays needed.
+  - **The DSM loads every source at `MSG_OPENDSM`**, not when they're listed (its log), so a source's code
+    runs as soon as the DSM is opened.
+  - **The DSM logs on request:** `TWAINDSM_LOG` naming a file and `TWAINDSM_MODE=w`; a tool for slices 8, 9
+    and 12.
+- **Departures from the plan, and why:**
+  - *The message loop and posted requests wait for step 2*, where the first scenario needs them; this step has
+    the thread, apartment, window, events and watchdog.
+  - *`dsm_triplet` is an `unsafe fn`*, found in the `SAFETY` reading: as a safe function taking a raw data
+    pointer, a wrong pointer anywhere in the session would have been undefined behaviour with no `unsafe` at
+    the call. Each call now says why its pointer is right.
+  - *`just twain-spike` takes the scenario as an optional second argument*, `all` by default, so the CI job
+    runs `all` from now on (just `list` so far) and doesn't change in step 3.
+  - *`TWLG_USA`*, not `TWLG_ENGLISH_USA`, which both sources define as an alias of it.
+- **Waiting on Greg:** the push and the draft pull request, so CI's `twain-spike` job reports before step 2.
