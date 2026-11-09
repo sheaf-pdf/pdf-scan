@@ -86,8 +86,9 @@ impl Api {
     /// `sane.h` gives them. Each of `names` must be one of these:
     ///
     /// - SANE's own name, by system ([`Sane::DEFAULT_LIBRARIES`]), so that
-    ///   what opens is what the system's loader finds under it, in the
-    ///   environment the process started with: the system's SANE, trusted
+    ///   what opens is what the system's loader finds under it, by the
+    ///   search the process started with, its entries absolute (the rules
+    ///   [`Sane::load`]'s docs give the process): the system's SANE, trusted
     ///   as a library linked at build time is, since a library under SANE's
     ///   name is SANE;
     /// - a library already in the process that exports none of SANE's
@@ -922,9 +923,9 @@ const DEFAULT_LIBRARIES: &[&str] = &[
     "/usr/local/lib/libsane.1.dylib",
     "/opt/local/lib/libsane.1.dylib",
 ];
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 const DEFAULT_LIBRARIES: &[&str] = &["libsane.so.1"];
-#[cfg(not(unix))]
+#[cfg(any(not(unix), all(target_vendor = "apple", not(target_os = "macos"))))]
 const DEFAULT_LIBRARIES: &[&str] = &[];
 
 /// SANE, loaded and started: the way to list devices and open them.
@@ -947,19 +948,28 @@ const DEFAULT_LIBRARIES: &[&str] = &[];
 /// manifest's `links` key), but every shared library built with it holds a
 /// copy of its own, so a process that loads two such libraries holds two
 /// copies. On Linux every copy takes one slot for the whole process before
-/// the library opens: a Unix socket bound to a name formed from the
-/// process's id and pid namespace, in Linux's abstract socket namespace,
-/// which the system frees when SANE has ended or the process ends. So a
-/// second copy's load is `AlreadyLoaded` too, as is a load while a child
-/// this process forked still holds the slot (until the child runs a program
-/// or ends). Where the system refuses the socket (a sandbox that forbids
-/// Unix sockets, or binding that name), the load is
-/// [`LoadError::SlotRefused`], never SANE unguarded. The slot can't see
-/// across a change, between two copies' loads, of the process's network
-/// namespace (where the name lives) or of its view of `/proc` (which the
-/// name is formed from), so a program that makes one keeps to one copy. On
-/// macOS and the BSDs a copy sees only its own loads, so a program there
-/// keeps to one copy of this crate in a process.
+/// the library opens: a Unix datagram socket bound to the name
+/// `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` in Linux's abstract
+/// socket namespace, from the device and inode of the process's pid
+/// namespace (`/proc/self/ns/pid`, or `none` in their place where it can't
+/// be read) and its pid. The name is fixed for good, so every version of
+/// the crate finds every other's, and the system frees it when SANE has
+/// ended or the process ends. While someone other than this copy holds it,
+/// a load is [`LoadError::SlotTaken`]: another copy that has SANE loaded,
+/// a child the process forked (until the child runs a program or ends), or
+/// another process that bound the name first. A child spawned on any
+/// thread holds it from its fork until its program starts, a moment a load
+/// waits out, trying again for a tenth of a second. Where the system
+/// refuses the socket (a sandbox that forbids Unix sockets, or binding that
+/// name), the load is [`LoadError::SlotRefused`], never SANE unguarded. The
+/// slot can't see across a change, between two copies' loads, of the
+/// process's network namespace (where the name lives) or of its view of
+/// `/proc` (which the name is formed from), so a program that makes one
+/// keeps to one copy. On every system but Linux a copy sees only its own
+/// loads, so a program there keeps to one copy of this crate in a process.
+/// And the slot guards this crate's copies alone: another user of libsane
+/// in the process, such as a library linked to it, shares the library this
+/// crate opens, and is the program's to rule out.
 ///
 /// **One call at a time.** SANE lets no call overlap another but
 /// `sane_cancel`, so every call through this instance takes its one lock,
@@ -975,33 +985,38 @@ pub struct Sane {
 impl Sane {
     /// What [`load`](Self::load) tries, in order: the system's SANE.
     ///
-    /// On Linux and the other Unix-like systems, its versioned soname,
-    /// `libsane.so.1`, found by the system loader's own search, as a library
-    /// linked at build time would be. On macOS, where SANE isn't the
-    /// system's and a bare name would be looked for in the working
-    /// directory too, the paths its package managers install it at:
+    /// On Linux, the BSDs and the other Unix-like systems but Apple's, its
+    /// versioned soname, `libsane.so.1`, found by the system loader's own
+    /// search, as a library linked at build time would be. On macOS, where
+    /// SANE isn't the system's and a bare name would be looked for in the
+    /// working directory too, the paths its package managers install it at:
     /// Homebrew's on Apple silicon and on Intel, then MacPorts'. None on
-    /// Windows, where SANE isn't the scanner API.
+    /// Windows, where SANE isn't the scanner API, nor on Apple's other
+    /// systems (iOS and its kin, Mac Catalyst among them), where a bare name
+    /// would be looked for in the working directory too and SANE has no
+    /// installed path.
     pub const DEFAULT_LIBRARIES: &'static [&'static str] = DEFAULT_LIBRARIES;
 
     /// Loads the system's SANE ([`DEFAULT_LIBRARIES`](Self::DEFAULT_LIBRARIES),
     /// the first that opens) and starts it.
     ///
     /// Where it isn't installed this is [`LoadError::NotFound`], naming what
-    /// was tried, and on Windows [`LoadError::NoDefault`]. A library found
-    /// under SANE's name that lacks one of SANE's 14 functions is
-    /// [`LoadError::MissingSymbol`], before any of them is called.
-    /// `sane_init` is called with no authorization callback, so a backend
-    /// that asks for a password gets none.
+    /// was tried, and where the system has no default
+    /// [`LoadError::NoDefault`]. A library found under SANE's name that
+    /// lacks one of SANE's 14 functions is [`LoadError::MissingSymbol`],
+    /// before any of them is called. `sane_init` is called with no
+    /// authorization callback, so a backend that asks for a password gets
+    /// none.
     ///
     /// # Which library, and why this is safe
     ///
-    /// No code chooses the library, this crate's or its caller's: it's the
-    /// one the system's loader finds under SANE's name, in the environment
-    /// the process started with. Opening it runs its code in this process,
-    /// and its functions are called as `sane.h` declares them, so a library
-    /// under SANE's name is taken as SANE, as one linked at build time
-    /// would be. It's never closed, so none of its code runs at an unload.
+    /// The library is the one the system's loader finds under SANE's name,
+    /// by the search the process started with, so no code in the process
+    /// chooses it, this crate's or its caller's, while the process keeps to
+    /// the two rules below. Opening it runs its code in this process, and
+    /// its functions are called as `sane.h` declares them, so a library
+    /// under SANE's name is taken as SANE, as one linked at build time would
+    /// be. It's never closed, so none of its code runs at an unload.
     ///
     /// To load another SANE, one a program ships or a build of one's own,
     /// give the process that loads it the loader's search path as it
@@ -1009,13 +1024,33 @@ impl Sane {
     /// `DYLD_LIBRARY_PATH` on macOS (where dyld looks for the file name of
     /// each of the installed paths there), naming a directory that holds
     /// SANE's own libraries alone, since the variable reaches every library
-    /// the process loads by name. Or build a run path into the program. Set
-    /// from inside the running process, the variable comes too late: the
-    /// loader reads it as the process starts. Whoever starts a process
-    /// chooses its libraries this way, as with any library linked at build
-    /// time; the loaders ignore these variables in a set-id process, and
-    /// dyld in a process it restricts, such as one under the hardened
-    /// runtime.
+    /// the process loads by name. Or build a run path into the binary or
+    /// shared library that holds this crate, whose code calls the loader
+    /// (on Linux `$ORIGIN/…`, from that file's directory). The loaders
+    /// ignore these variables in a set-id process, and dyld in a process it
+    /// restricts, such as one under the hardened runtime.
+    ///
+    /// That rests on the process's environment, as every library a process
+    /// loads by name does, and holds while the environment keeps to two
+    /// rules, its starter's and the program's to keep:
+    ///
+    /// - **Every entry of the search path is absolute,** in the variable
+    ///   and in any run path built in. An empty entry (a leading, trailing
+    ///   or doubled `:`, as `LD_LIBRARY_PATH=/opt/sane/lib:$LD_LIBRARY_PATH`
+    ///   leaves where the variable was unset) means the working directory,
+    ///   and a relative entry is looked for from it, as the library loads;
+    ///   the program's own code may change its working directory, and so
+    ///   would choose the library. The C library's own lookups, which std
+    ///   uses, are open to such entries alike.
+    /// - **Nothing in the process changes `LD_LIBRARY_PATH` while SANE is
+    ///   in use.** The system's loader reads it as the process starts, so
+    ///   for SANE itself a change comes too late. But SANE's `dll`, the part
+    ///   of SANE that loads its backends, reads it (or, where it's unset,
+    ///   `SHLIB_PATH` or `LIBPATH`) each time it loads one, at a listing or
+    ///   an open, and looks there first for the backend's library: a value
+    ///   set inside the process would choose libraries that then run in it.
+    ///   So a program sets it, as it sets `SANE_CONFIG_DIR`, on a process it
+    ///   starts, never on its own.
     pub fn load() -> Result<Sane, LoadError> {
         if Self::DEFAULT_LIBRARIES.is_empty() {
             return Err(LoadError::NoDefault);
@@ -1025,8 +1060,9 @@ impl Sane {
         // the system loader's search, or the paths its package managers
         // install it at, under whose file name dyld searches its own
         // variable's directories first. What the loader finds under them,
-        // in the environment the process started with, is the system's
-        // SANE, the first case `start`'s contract allows.
+        // by the search the process started with, its entries absolute (the
+        // first of the two rules this function's docs give the process), is
+        // the system's SANE, the first case `start`'s contract allows.
         unsafe { Sane::start(&names) }
     }
 
@@ -1053,7 +1089,8 @@ impl Sane {
         // Linux, where the slot is the process's, but for a change of the
         // process's network namespace or of its view of `/proc` between two
         // copies' loads; elsewhere within this copy. Beyond what the slot
-        // sees, a program keeps to one copy (`Sane`'s docs).
+        // sees, a program keeps to one copy, and to no other user of
+        // libsane in the process (`Sane`'s docs).
         // `code` is valid for SANE's write; no authorization callback is
         // given.
         let status = Status(unsafe { (api.init)(&mut code, None) });
@@ -1864,7 +1901,7 @@ mod tests {
         }
         // The slot (this copy's, and on Linux the process's) was freed: a
         // second try gets as far as the loader again, rather than
-        // `AlreadyLoaded`.
+        // `AlreadyLoaded` or `SlotTaken`.
         // SAFETY: as above.
         let again = unsafe { Sane::start(&names) };
         assert!(
@@ -1902,7 +1939,7 @@ mod tests {
         }
         // The slot (this copy's, and on Linux the process's) was freed: a
         // second try is refused for the library again, rather than
-        // `AlreadyLoaded`.
+        // `AlreadyLoaded` or `SlotTaken`.
         // SAFETY: as above.
         let again = unsafe { Sane::start(&names) };
         assert!(

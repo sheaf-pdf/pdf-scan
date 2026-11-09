@@ -6,11 +6,19 @@
 //! process: a Unix datagram socket bound to a name in the abstract
 //! namespace, formed from the process's pid namespace and its pid. Whichever
 //! copy binds it first holds SANE; another's bind is refused
-//! (`AddrInUse`), and its load is [`LoadError::AlreadyLoaded`]. The name
+//! (`AddrInUse`), and its load is [`LoadError::SlotTaken`]. The name
 //! belongs to a socket, not a file: the kernel frees it when the socket
 //! closes, and when the process ends, however it ends, so nothing is left
-//! behind to clean up. std makes the socket close-on-exec, so a program the
-//! process runs never holds it.
+//! behind to clean up.
+//!
+//! A child the process forks holds a copy of the socket, and so the name,
+//! until it runs a program (std makes the socket close-on-exec) or ends.
+//! Every child std's `Command` starts holds it so for a moment, from its
+//! fork until its program starts, whichever thread spawned it. So a load
+//! that finds the name bound tries again for a short while ([`WAIT`])
+//! before it's refused: a spawn in flight is waited out, while another
+//! copy's live SANE, a child forked without running a program, or another
+//! process that bound the name first, outlast the wait.
 //!
 //! The socket is bound and never read: nothing is sent on it, and what
 //! another process sends it queues within the kernel's small bound for a
@@ -23,8 +31,18 @@ use std::io;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::{SocketAddr, UnixDatagram};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::LoadError;
+
+/// How long a load tries for the name, once it finds it bound, before it's
+/// refused: far longer than a child takes from its fork to its program's
+/// start, and short enough not to keep a caller waiting.
+const WAIT: Duration = Duration::from_millis(100);
+
+/// The pause between two tries.
+const PAUSE: Duration = Duration::from_millis(1);
 
 /// The process's slot, held while bound: from before the library opens
 /// until after `sane_exit`, and freed when dropped.
@@ -33,18 +51,26 @@ pub(crate) struct ProcessSlot {
 }
 
 impl ProcessSlot {
-    /// Binds the process's name: [`LoadError::AlreadyLoaded`] if it's bound
-    /// already, by this copy or another, and [`LoadError::SlotRefused`] if
-    /// the system refuses the socket for another reason, so SANE is never
-    /// loaded unguarded.
+    /// Binds the process's name, trying again for up to [`WAIT`] while it's
+    /// bound: [`LoadError::SlotTaken`] if it's bound still, and
+    /// [`LoadError::SlotRefused`] if the system refuses the socket for
+    /// another reason, so SANE is never loaded unguarded.
     pub(crate) fn take() -> Result<ProcessSlot, LoadError> {
         let name = name(pid_namespace(), std::process::id());
         let address =
             SocketAddr::from_abstract_name(name.as_bytes()).map_err(LoadError::SlotRefused)?;
-        match UnixDatagram::bind_addr(&address) {
-            Ok(socket) => Ok(ProcessSlot { _socket: socket }),
-            Err(error) if error.kind() == io::ErrorKind::AddrInUse => Err(LoadError::AlreadyLoaded),
-            Err(error) => Err(LoadError::SlotRefused(error)),
+        let until = Instant::now() + WAIT;
+        loop {
+            match UnixDatagram::bind_addr(&address) {
+                Ok(socket) => return Ok(ProcessSlot { _socket: socket }),
+                Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                    if Instant::now() >= until {
+                        return Err(LoadError::SlotTaken);
+                    }
+                    thread::sleep(PAUSE);
+                }
+                Err(error) => return Err(LoadError::SlotRefused(error)),
+            }
         }
     }
 }

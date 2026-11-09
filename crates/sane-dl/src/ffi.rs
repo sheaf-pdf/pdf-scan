@@ -38,14 +38,17 @@
 //! SANE's C API as `sane.h` declares it: its types and constants.
 //!
 //! The raw names, for anyone who wants them, and what the rest of this crate
-//! is built on. Nothing here calls anything, and nothing here can be called:
-//! the functions' types, as pointers, and the authorization callback's are
-//! the crate's own, inside it, since a pointer of one would be `unsafe` to
-//! call; the crate looks the functions up in the library it loads. Every C
-//! enum is an integer type with constants, because a backend may return a
-//! value the enum doesn't list, and a Rust enum holding one would be
-//! undefined behaviour. The structs are plain data, as SANE gives them:
-//! reading through one of their pointers is the reader's own `unsafe`.
+//! is built on. Nothing here calls SANE, and none of its functions can be
+//! called through this module: the functions' types, as pointers, and the
+//! authorization callback's are the crate's own, inside it, since a pointer
+//! of one would be `unsafe` to call; the crate looks the functions up in the
+//! library it loads. The header's function-like macros are `const fn`s over
+//! plain numbers. Every C enum is an integer type with constants, because a
+//! backend may return a value the enum doesn't list, and a Rust enum
+//! holding one would be undefined behaviour. The structs and the
+//! constraint's union are plain data, as SANE gives them: reading through
+//! one of their pointers, or a field of the union, is the reader's own
+//! `unsafe`, and no public function of this crate takes or gives one.
 //!
 //! Translated from SANE 1.4.0's public-domain `sane.h`, whose notice heads
 //! this module's source with what was changed. A test checks these

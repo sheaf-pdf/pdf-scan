@@ -215,8 +215,8 @@ fn a_slot_bound_first_refuses_the_load_before_the_library_opens() {
             // Another copy of the crate holding SANE would hold this.
             let held = bind_slot().expect("couldn't bind the slot");
             match sane_dl::Sane::load() {
-                Err(LoadError::AlreadyLoaded) => {}
-                other => panic!("expected AlreadyLoaded, got {other:?}"),
+                Err(LoadError::SlotTaken) => {}
+                other => panic!("expected SlotTaken, got {other:?}"),
             }
             assert!(!sane_is_mapped(), "the library was opened");
             assert_fake_not_started();
@@ -255,8 +255,8 @@ fn the_slot_is_held_until_sane_and_its_handles_are_gone() {
             drop(handle);
             let held = bind_slot().expect("the slot wasn't freed when SANE ended");
             match sane_dl::Sane::load() {
-                Err(LoadError::AlreadyLoaded) => {}
-                other => panic!("expected AlreadyLoaded, got {other:?}"),
+                Err(LoadError::SlotTaken) => {}
+                other => panic!("expected SlotTaken, got {other:?}"),
             }
             drop(held);
         }
@@ -293,6 +293,75 @@ fn a_refused_load_frees_the_slot() {
     assert_eq!(
         log.calls_but_options(),
         ["sane_init", "sane_init", "sane_exit"]
+    );
+}
+
+/// A child spawned on another thread holds the process's slot from its fork
+/// until its program starts, and a load in that moment waits it out rather
+/// than being refused: SANE loaded and ended again and again while a thread
+/// spawns programs, every load given SANE.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_load_waits_out_a_child_spawned_meanwhile() {
+    /// How many times SANE is loaded: without the wait, about one load in
+    /// four is refused while a thread spawns programs.
+    const LOADS: usize = 200;
+    let fake = Fake::new("a_load_waits_out_a_child_spawned_meanwhile", "");
+    in_child!(
+        a_load_waits_out_a_child_spawned_meanwhile,
+        fake.child(),
+        || {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            // The fake is what loads.
+            drop(common::load_fake());
+            let stop = Arc::new(AtomicBool::new(false));
+            let spawned = Arc::new(AtomicUsize::new(0));
+            let spawner = {
+                let (stop, spawned) = (Arc::clone(&stop), Arc::clone(&spawned));
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        let status = std::process::Command::new("true")
+                            .status()
+                            .expect("couldn't run `true`");
+                        assert!(status.success(), "`true` failed: {status}");
+                        spawned.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            };
+            // Loads begin once the spawning has.
+            while spawned.load(Ordering::Relaxed) == 0 {
+                std::thread::yield_now();
+            }
+            let refused: Vec<String> = (0..LOADS)
+                .filter_map(|load| match sane_dl::Sane::load() {
+                    Ok(sane) => {
+                        drop(sane);
+                        None
+                    }
+                    Err(error) => Some(format!("load {load}: {error:?}")),
+                })
+                .collect();
+            stop.store(true, Ordering::Relaxed);
+            spawner.join().expect("the spawning thread panicked");
+            assert!(
+                refused.is_empty(),
+                "{} of {LOADS} loads refused while {} programs were spawned, the first: {}",
+                refused.len(),
+                spawned.load(Ordering::Relaxed),
+                refused[0]
+            );
+        }
+    );
+    let log = fake.log();
+    log.assert_no_violations();
+    let calls = log.calls_but_options();
+    assert_eq!(calls.len(), 2 * (LOADS + 1), "{calls:?}");
+    assert!(
+        calls
+            .chunks(2)
+            .all(|pair| pair == ["sane_init", "sane_exit"]),
+        "{calls:?}"
     );
 }
 

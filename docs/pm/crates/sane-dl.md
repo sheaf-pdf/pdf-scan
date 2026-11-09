@@ -12,20 +12,31 @@ SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md
 - **What:** SANE for Rust, loaded at run time (M5 proposal 6, M5 ask 6, entry 5): `Sane::load()` opens
   `libsane.so.1` with `libloading` (0.9, ISC) through the system loader's search (on macOS `libsane.1.dylib` at
   Homebrew's and MacPorts' absolute paths, never a bare name, which dyld would also seek in the working
-  directory; none on Windows, `NoDefault`). Nothing fails until SANE is asked for, and then it says so
-  (`LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`, `UnsupportedVersion`,
-  `AlreadyLoaded`, `SlotRefused`). Never unloaded; one `Sane` per process, another after it ends.
+  directory; none on Windows or Apple's other systems, `NoDefault`). Nothing fails until SANE is asked for,
+  and then it says so (`LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
+  `UnsupportedVersion`, `AlreadyLoaded`, `SlotTaken`, `SlotRefused`). Never unloaded; one `Sane` per process,
+  another after it ends.
   - **Which library:** the loader's choice alone; no code, the crate's or its caller's, names a path (slice
     1a removed `Sane::load_from`, an `unsafe fn`). What loads is what the system's loader finds under SANE's
     name, in the environment the process started with, taken as SANE as a library linked at build time is
     (the soname names SANE 1's ABI, which the header contract checks the bindings against), and never closed.
     Another SANE (one an app ships, a build of one's own, the tests' fake) is loaded through the loader's own
     search path given to the process as it starts, `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS), naming a
-    directory of SANE's libraries alone, or a run path built into the program; set from inside the process it
-    comes too late. The loaders ignore those variables in a set-id process, and dyld in a process it restricts
-    (the hardened runtime: FEAT-13). So M5 proposal 6's `SHEAF_LIBSANE` becomes, for sheaf's tests, the
-    loader's variable on the test's child, and a worker's client that wants another SANE sets it on the
-    worker's command beside `SANE_CONFIG_DIR`.
+    directory of SANE's libraries alone, or a run path built into the binary or shared library that holds the
+    crate (glibc searches the calling object's). The loaders ignore those variables in a set-id process, and
+    dyld in a process it restricts (the hardened runtime: FEAT-13). So M5 proposal 6's `SHEAF_LIBSANE`
+    becomes, for sheaf's tests, the loader's variable on the test's child, and a worker's client that wants
+    another SANE sets it on the worker's command beside `SANE_CONFIG_DIR`.
+  - **What that rests on** (slice 1a's code review): the process's environment, as every library loaded by
+    name does, kept to two rules `Sane::load`'s docs give its starter and the program. Every entry of the
+    search path (and of a run path) absolute: glibc reads an empty entry as the working directory and looks a
+    relative one up from it as the library loads, and `set_current_dir` is safe, so with one the program's own
+    code would choose (std's name lookups are open to it alike). And `LD_LIBRARY_PATH` never changed inside a
+    process using SANE: the system's loader reads it as the process starts, but SANE's `dll` reads it (or
+    `SHLIB_PATH`, `LIBPATH`) with `getenv` each time it loads a backend, at a listing or an open, before its
+    own directory, and `set_var` is safe before edition 2024. Said rather than made `unsafe`: a change after
+    `load` reaches `open` and `devices` too, and the Vulkan loader's variables, under ash's and wgpu's safe
+    entries, are the same case (the slice's decision 33, for review).
   - **One SANE per process, across copies of the crate:** cargo refuses two versions in one build (the
     manifest's `links = "sane-dl"`, with a build script that builds nothing), but each shared library built
     with the crate holds a copy of its own. On Linux every copy takes one slot for the whole process before
@@ -33,11 +44,16 @@ SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md
     Unix datagram socket bound to an abstract name formed from the pid namespace (`/proc/self/ns/pid`'s device
     and inode) and the pid, `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` (`…/pidns/none/pid/<pid>` where
     `/proc` can't be read), fixed for good so every version finds every other; the kernel frees it however the
-    process ends. Taken already (another copy, a child forked without an exec, or a local user binding the name
-    first) is `AlreadyLoaded`; any other refusal (a sandbox that forbids Unix sockets or that name) is
-    `SlotRefused`, never SANE unguarded. It can't see a change of the process's network namespace or of its
-    view of `/proc` between two copies' loads; there, and on macOS and the BSDs, where a copy sees only its
-    own loads (BUG-8), a program keeps to one copy, as the docs say.
+    process ends. A load that finds it bound tries again for 100 ms, since every child the process spawns
+    holds it from its fork until its exec (slice 1a's code review: without the wait, a load beside a thread
+    spawning programs was refused up to half the time); still held (another copy with SANE loaded, a child
+    forked without an exec, a local user binding the name first) is `SlotTaken`, and this copy's own live
+    `Sane` is `AlreadyLoaded`; any other refusal (a sandbox that forbids Unix sockets or that name: a profile
+    allows `@sane-dl/slot/**`) is `SlotRefused`, never SANE unguarded. The name is in the public docs, a
+    promise across versions. It can't see a change of the process's network namespace or of its view of
+    `/proc` between two copies' loads, nor another user of libsane in the process; there, and on every system
+    but Linux, where a copy sees only its own loads (BUG-8), the program keeps to one copy, as the docs
+    say.
   - Bindings of its own (`sane_dl::ffi`, public, types and constants only), from SANE 1.4.0's public-domain
     `sane.h`: its structs, types and constants, its function-like macros as `const fn`s; the types of its 14
     functions and `SANE_Auth_Callback` are `pub(crate)` (slice 1a), since nothing public hands one out, so
@@ -137,8 +153,9 @@ SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md
   - The process's slot (Linux): its name bound first refuses a load before the library opens; held while a
     `Sane` or a handle lives, freed after; freed by a refused load; a socket the system refuses (descriptors
     exhausted under a lowered limit, through util-linux's `prlimit`, skipped where that's missing) is
-    `SlotRefused`. A probe outside the workspace (two `cdylib`s each holding a copy, built apart) showed two
-    copies starting SANE twice before it and the second refused after.
+    `SlotRefused`; bound by hand, `SlotTaken`; 200 loads beside a thread spawning programs, none refused.
+    A probe outside the workspace (two `cdylib`s each holding a copy, built apart) showed two copies starting
+    SANE twice before it and the second refused after.
   - `Image`'s and `Page`'s `Debug` of a 1 MiB image under 1 KiB, its length given and none of its bytes.
   - The bindings checked against the installed `sane.h` (sanetui's idea), statuses included: printscan's own
     fake gave `NO_DOCS` the code 6, which is `JAMMED`. Here against 1.4.0's header, in CI against Ubuntu's
@@ -150,8 +167,8 @@ SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md
 - **Open:**
   - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it, and the fake's
     tests through `DYLD_LIBRARY_PATH` beside it.
-  - Two copies of the crate built apart in one process on macOS and the BSDs (BUG-8): no kernel-freed name
-    per process in std there, so the program's rule.
+  - Two copies of the crate built apart in one process on every system but Linux (BUG-8): no kernel-freed
+    name per process in std there, so the program's rule.
   - A SANE an app ships, on macOS under the hardened runtime, where dyld ignores its variables (FEAT-13): only
     if such an app comes.
   - No authorization callback (FEAT-11), until a networked backend needs one.

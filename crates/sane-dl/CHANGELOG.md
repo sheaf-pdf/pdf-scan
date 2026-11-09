@@ -10,23 +10,30 @@ version is published.
 Changed before the release, for anyone who built this version from the repository: `Sane::load_from` is
 gone, so the library is always the one the system's loader finds under SANE's name; `ffi`'s
 function-pointer types (`SaneInitFn` and the rest, and `SANE_Auth_Callback`) are inside the crate; on
-Linux one SANE per process holds across copies of the crate, with `LoadError::SlotRefused` new; and `Image`'s
-`Debug` gives its data's length rather than every byte.
+Linux one SANE per process holds across copies of the crate, with `LoadError::SlotTaken` and
+`LoadError::SlotRefused` new, and `AlreadyLoaded` now this copy's own load alone; Apple's systems other than
+macOS have no default library; and `Image`'s `Debug` gives its data's length rather than every byte.
 
 - **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
   `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on
-  Windows, `LoadError::NoDefault`), as the system's loader finds it, in the environment the process started
-  with; no code chooses another. Another SANE is loaded through the loader's own search path
-  (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`), given to the process as it starts, or a run path built in. Then
-  `sane_init`, with no authorization callback, and a SANE other than version 1 refused after its
-  `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
-  `UnsupportedVersion`, `AlreadyLoaded`, `SlotRefused`. One `Sane` per process, and another once it has
-  ended; a failed load leaves nothing behind; the library is never unloaded. Nothing links libsane; the
-  manifest's `links = "sane-dl"`, with a build script that builds nothing, keeps a build to one version of
-  the crate. On Linux one SANE per process whatever copies of the crate it holds (each shared library built
-  with it holds one): every copy takes the process's slot, a Unix socket's name in the abstract namespace
-  formed from the process's id, before the library opens, a second copy's load `AlreadyLoaded`, a socket the
-  system refuses `SlotRefused`. On macOS and the BSDs a copy sees only its own loads. No public function is
+  Windows or Apple's other systems, `LoadError::NoDefault`), as the system's loader finds it, by the search
+  the process started with; no code in the process chooses another. Another SANE is loaded through the
+  loader's own search path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`), given to the process as it starts, or a
+  run path built into the binary or shared library that holds the crate. That rests on two rules of the
+  process's environment, which `Sane::load`'s docs give: every entry of the search path absolute, since an
+  empty or relative one is looked for from the working directory, which the program may change; and
+  `LD_LIBRARY_PATH` never changed inside a process using SANE, since SANE's `dll` reads it each time it
+  loads a backend. Then `sane_init`, with no authorization callback, and a SANE other than version 1 refused
+  after its `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
+  `UnsupportedVersion`, `AlreadyLoaded`, `SlotTaken`, `SlotRefused`. One `Sane` per process, and another once
+  it has ended; a failed load leaves nothing behind; the library is never unloaded. Nothing links libsane;
+  the manifest's `links = "sane-dl"`, with a build script that builds nothing, keeps a build to one version
+  of the crate. On Linux one SANE per process whatever copies of the crate it holds (each shared library
+  built with it holds one): every copy takes the process's slot before the library opens, a Unix socket bound
+  to `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` in the abstract namespace, a name fixed for good; while
+  someone else holds it, a load is `SlotTaken` (a spawned child's moment between its fork and its program
+  waited out first), and a socket the system refuses is `SlotRefused`. On every other system a copy sees
+  only its own loads, and the slot never sees another user of libsane in the process. No public function is
   `unsafe`.
 - **The bindings,** `sane_dl::ffi`: SANE 1.4.0's `sane.h` as Rust declarations, types and constants only,
   its public-domain notice kept and what was changed said; the types of its functions, which the crate
