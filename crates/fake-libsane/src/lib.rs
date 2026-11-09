@@ -4,8 +4,9 @@
 //! the system's `libsane`. It plays what SANE's own `test` and `pnm` backends
 //! can't: values no well-behaved backend returns, listings that take their
 //! time, the feeder and duplex options of particular backends and
-//! descriptors that change after a set, and, as it grows, a jam or an open
-//! cover at a given sheet, and reads that hang.
+//! descriptors that change after a set, a feeder that ends where a test
+//! says, duplex pages marked front or back, a jam or an open cover at a
+//! given page, frames no real backend sends, reads that hang, and an abort.
 //! Each is scripted by the test that loads it. It logs every call, and
 //! records a violation whenever its caller breaks SANE's calling rules.
 //!
@@ -51,8 +52,7 @@
 //! and any other name returns `INVAL`. A device list is overwritten with
 //! `#`s when it goes stale (at the next listing or `sane_exit`, as SANE
 //! has it), and kept, never freed, so a caller that reads it late reads the
-//! wrong names rather than freed memory. Scanning isn't played yet: those
-//! calls return `UNSUPPORTED`.
+//! wrong names rather than freed memory.
 //!
 //! ## Options
 //!
@@ -94,6 +94,45 @@
 //! a number out of its range or word list is moved to the nearest it allows
 //! and said `INEXACT`, and the rules fire.
 //!
+//! ## Scanning
+//!
+//! Every page is the same frames, scanned from a feeder. `sane_start` takes
+//! the next frame of the page in progress, or the next page; a page is
+//! taken from the feeder by the start that begins it, whatever that start
+//! answers (but `NO_DOCS` for a feeder that's empty). `sane_cancel` drops
+//! the page in flight, and reads then answer `CANCELLED` until the next
+//! start. `sane_get_parameters` gives the frame in progress, or else the
+//! next one.
+//!
+//! | Line | What it does |
+//! |---|---|
+//! | `frame FORMAT LAST BPL PPL LINES DEPTH [BYTES]` | A frame of every page, in order: its parameters as `sane_get_parameters` gives them (the format by name, `GRAY`, `RGB`, `RED`, `GREEN`, `BLUE`, or any number; the rest any integers), then the bytes it sends before `EOF` (by default `BPL` × `LINES`, or 4 lines for `LINES` -1), or `endless` for none. Without any, every page is one frame `GRAY 1 16 16 4 8` |
+//! | `sheets N` | The feeder holds `N` sheets (without, it never ends): the start after the last page answers `NO_DOCS` |
+//! | `duplex` | Each sheet is two pages, front then back |
+//! | `at PAGE start STATUS` | That page's start answers `STATUS` (pages count from 1) |
+//! | `at PAGE read STATUS [BYTES]` | Once `BYTES` of that page's bytes (all its frames', default 0) are sent, every read answers `STATUS` |
+//! | `at PAGE hang [BYTES]` | Once `BYTES` are sent, a read blocks until `sane_cancel`, then answers `CANCELLED` |
+//! | `at PAGE hang-forever [BYTES]` | Once `BYTES` are sent, a read blocks for good, cancelled or not |
+//! | `at PAGE ignore-cancel [BYTES]` | Once `BYTES` are sent, every read answers `GOOD` with no bytes, and `sane_cancel` changes nothing |
+//! | `at PAGE abort` | That page's start aborts the process, its log's last line `note … abort` |
+//! | `read-max N` | A read gives at most `N` bytes |
+//! | `read-length N` | Every `GOOD` read claims `N` bytes, whatever it gave; `read-length past`, one more than it was asked for |
+//! | `non-blocking` | `sane_set_io_mode` takes non-blocking (without, `UNSUPPORTED`) |
+//! | `select-fd N` | `sane_get_select_fd` answers `GOOD` with `N` (without, `UNSUPPORTED`) |
+//! | `parameters-status STATUS` | `sane_get_parameters` answers `STATUS` |
+//! | `start-inval-deactivates NAME...` | A start answering `INVAL` makes these options inactive, saying nothing |
+//!
+//! `sane_set_io_mode` and `sane_get_select_fd` answer `INVAL` with no frame
+//! in progress, as the standard says. A start that answers `INVAL` makes
+//! every descriptor stale, as a set that says `RELOAD_OPTIONS` does.
+//!
+//! **The bytes:** a frame's bytes are its lines, each `BPL` bytes, the
+//! bytes past what its pixels need (the standard's formula) padding,
+//! `0xEE`. Of the rest, each frame's first byte is `F` on a front and `B`
+//! on a back (every page without `duplex` is a front), and every other is
+//! `(page × 31 + frame × 7 + line × 3 + column) mod 251`, the page counted
+//! from 1, the frame, line and column (in bytes) from 0.
+//!
 //! # The log
 //!
 //! A line per event, its words separated by spaces: what happened, the
@@ -125,12 +164,20 @@
 //! - after `sane_start`, `sane_get_parameters` or `sane_read` returns a
 //!   status other than `GOOD` and `EOF` (an error, or a batch's `NO_DOCS`),
 //!   the next call on that handle is neither `sane_cancel` nor `sane_close`;
+//! - `sane_close` comes with a scan pending (a `sane_start` answered `GOOD`
+//!   and no `sane_cancel` came since, and no error status is waiting for
+//!   one): a batch ends with `sane_cancel`, even after its last `EOF`;
+//! - `sane_start` comes before the frame in progress has reached `EOF`, with
+//!   no `sane_cancel` between (answered `INVAL`), or `sane_read` with no
+//!   frame started (answered `INVAL`);
 //! - a call comes before `sane_init` or after `sane_exit`, or `sane_init`
 //!   twice without `sane_exit` between;
 //! - a pointer SANE must write through is null (`sane_get_devices`'s list,
 //!   `sane_open`'s handle, `sane_control_option`'s value but for
-//!   `SET_AUTO`), or `sane_open`'s device name is: the call is answered
-//!   `INVAL`, and nothing is listed or opened. (`sane_init`'s
+//!   `SET_AUTO`, `sane_get_parameters`'s parameters, `sane_read`'s data and
+//!   length, `sane_get_select_fd`'s descriptor), or `sane_open`'s device
+//!   name is: the call is answered `INVAL`, and nothing is listed or
+//!   opened. (`sane_init`'s
 //!   `version_code` may be null, as the standard allows: no version is
 //!   given, and the log's `return` line says `version_code=null`.)
 //!
@@ -143,8 +190,17 @@
 //! read; a set or `SET_AUTO` of one software can't set; `SET_AUTO` of one
 //! that can't choose; a `BOOL` set as anything but a word of 0 or 1; a
 //! string with no `NUL` within the option's size; an action SANE doesn't
-//! define; and, after a set that said `RELOAD_OPTIONS`, a call on any
-//! option but 0 before every descriptor has been read again.
+//! define; and, after a set that said `RELOAD_OPTIONS` or a start that
+//! answered `INVAL`, a call on any option but 0 before every descriptor has
+//! been read again.
+//!
+//! A `note` line says what the script made happen that no call returns:
+//! `note … hang sane_read waits for sane_cancel` (or `… waits for good`)
+//! as a read blocks, `note … abort …` as the process aborts. A scanning
+//! call's `return` line says more: `sane_start`'s the page and frame it
+//! began (`page=2 frame=0`), `sane_get_parameters`' the six fields,
+//! `sane_read`'s the length it claimed and the bytes it gave
+//! (`length=64 given=64`), `sane_get_select_fd`'s the descriptor.
 //!
 //! A test asserts its log has no `violation` line.
 
@@ -153,6 +209,7 @@
 
 mod exports;
 mod fake;
+mod feed;
 // The bindings' own source, so the exports are declared with the types the
 // bindings' header contract checks; not every declaration is used here.
 #[allow(dead_code)]

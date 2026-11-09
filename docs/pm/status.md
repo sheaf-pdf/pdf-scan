@@ -4,7 +4,8 @@ As of 2026-11-08.
 
 **Building S0 slice 1.** On its branch, the workspace, then `sane-dl`'s bindings, loading, device listing
 and handles, with the fake libsane's first cut and the header contract, then typed options with the fake's
-backend profiles and hostile descriptors (step 3 of 5). It's a
+backend profiles and hostile descriptors, then scanning: frames assembled into pages, batches, and a
+cancel token any thread can use (step 4 of 5). It's a
 git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; `master`), holding
 `docs/pm/` alone.
 

@@ -18,6 +18,18 @@
 //! than wait, and a handle dropped meanwhile leaves its `sane_close` to the
 //! listing's thread, which runs it when the listing returns, before giving
 //! the token back.
+//!
+//! **Cancelling.** `sane_cancel` is the one call that may overlap others, so
+//! it never takes the call token: a [`CancelToken`] calls it from any thread
+//! while the handle's own thread is blocked in a read. It holds the handle's
+//! own lock while it does, and calls only while the handle's alive flag
+//! says the handle is open; a handle clears the flag under that lock before
+//! its `sane_close`, so a cancel that comes late does nothing, and one in
+//! flight finishes before the close begins. (The pattern of airbridge's
+//! SANE backend, github.com/tobhoster/airbridge, MIT OR Apache-2.0, written
+//! here in this crate's own code.) The token also sets a flag the handle's
+//! scanning calls check, so a backend that ignores `sane_cancel` still
+//! stops being read.
 
 #![allow(unsafe_code)]
 
@@ -36,8 +48,8 @@ use crate::options::{
     constraint_member, option_count, prepare, read_value, still_current, word_list_length,
 };
 use crate::{
-    Call, Device, DeviceName, Error, Limits, LoadError, OptionDescriptor, SetInfo, Status, Value,
-    Version, ffi,
+    Call, Device, DeviceName, Error, Limits, LoadError, OptionDescriptor, Parameters, ReadOutcome,
+    SetInfo, Status, Value, Version, ffi,
 };
 
 /// SANE's 14 functions, looked up in a library that's never unloaded, so
@@ -52,19 +64,14 @@ struct Api {
     strstatus: ffi::SaneStrstatusFn,
     get_option_descriptor: ffi::SaneGetOptionDescriptorFn,
     control_option: ffi::SaneControlOptionFn,
-    // Looked up with the rest, so a library without them is refused when
-    // it's loaded; called by the scanning calls.
-    #[allow(dead_code)]
     get_parameters: ffi::SaneGetParametersFn,
-    #[allow(dead_code)]
     start: ffi::SaneStartFn,
-    #[allow(dead_code)]
     read: ffi::SaneReadFn,
-    #[allow(dead_code)]
     cancel: ffi::SaneCancelFn,
-    #[allow(dead_code)]
     set_io_mode: ffi::SaneSetIoModeFn,
-    #[allow(dead_code)]
+    // Looked up everywhere, so a library without it is refused when it's
+    // loaded; called only where a select fd means something (Unix).
+    #[cfg_attr(not(unix), allow(dead_code))]
     get_select_fd: ffi::SaneGetSelectFdFn,
 }
 
@@ -181,6 +188,116 @@ struct RawHandle(ffi::SANE_Handle);
 // every call made with a handle holds the call token, whichever thread makes
 // it.
 unsafe impl Send for RawHandle {}
+
+/// What a [`CancelToken`] shares with its handle: the handle and
+/// `sane_cancel`, the alive flag under the handle's own lock, and the flag
+/// that a cancel was asked for.
+struct CancelState {
+    cancel: ffi::SaneCancelFn,
+    raw: CancelHandle,
+    /// Whether the handle is open: cleared, under this lock, before its
+    /// `sane_close`.
+    alive: Mutex<bool>,
+    /// Set by a token's cancel, taken by the call that returns
+    /// [`Error::Cancelled`] for it.
+    requested: AtomicBool,
+}
+
+/// The handle a cancel is for.
+struct CancelHandle(RawHandle);
+
+// SAFETY: the handle is an opaque token, never dereferenced here, and the
+// only call made through a shared `CancelHandle` is `sane_cancel`, which the
+// standard allows from any thread at any time, overlapping any other call
+// ("safe to call this function asynchronously"); `CancelState::call` makes
+// it only while the handle is open.
+unsafe impl Sync for CancelHandle {}
+
+impl CancelState {
+    fn new(api: &Api, raw: RawHandle) -> CancelState {
+        CancelState {
+            cancel: api.cancel,
+            raw: CancelHandle(raw),
+            alive: Mutex::new(true),
+            requested: AtomicBool::new(false),
+        }
+    }
+
+    /// `sane_cancel`, if the handle is still open.
+    fn call(&self) {
+        // Nothing panics while holding it, but a poisoned flag is still
+        // the truth.
+        let alive = self.alive.lock().unwrap_or_else(PoisonError::into_inner);
+        if *alive {
+            // SAFETY: the handle is open: `alive` is cleared, under this
+            // lock, before the handle's `sane_close`, so it can't be closed
+            // while this call runs. SANE is initialised, since an open
+            // handle keeps its `Shared`, and so SANE, alive. `sane_cancel`
+            // may overlap any other call and come from any thread (the
+            // standard), so it takes no call token; the library is never
+            // unloaded, so the function stays valid.
+            unsafe { (self.cancel)(self.raw.0.0) };
+        }
+    }
+
+    /// The handle is closing: no cancel reaches it from here on, and one in
+    /// flight has returned when this does.
+    fn close(&self) {
+        *self.alive.lock().unwrap_or_else(PoisonError::into_inner) = false;
+    }
+
+    /// Takes the cancel asked for, if there is one.
+    fn take_request(&self) -> bool {
+        self.requested.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// Cancels a handle's scan from any thread ([`Handle::cancel_token`]).
+///
+/// [`cancel`](Self::cancel) calls `sane_cancel` at once, without waiting for
+/// the handle's thread, which may be blocked in a read: SANE allows that
+/// one call to overlap the others. A token outlives its handle harmlessly:
+/// once the handle is closed, a cancel does nothing, and a cancel in flight
+/// finishes before `sane_close` begins.
+///
+/// It also sets a flag the handle's scanning calls check, so a scan stops
+/// even if the backend ignores `sane_cancel` and goes on answering: the
+/// next [`Handle::start`] or [`Handle::read`] (and so the next read of a
+/// [`Batch`](crate::Batch)'s page) returns [`Error::Cancelled`], and so does
+/// a read in flight when it returns. The flag stays set until a call
+/// returns `Cancelled` for it, so a cancel between pages stops the next
+/// one, and a cancel after a batch has ended stops the next batch's first
+/// page. Stopping after the page in flight is the caller's: it starts no
+/// next page.
+#[derive(Clone)]
+pub struct CancelToken {
+    state: Arc<CancelState>,
+}
+
+impl CancelToken {
+    /// Cancels the handle's scan, now (`sane_cancel`), and marks it
+    /// cancelled for the handle's next scanning call. Does nothing to a
+    /// closed handle.
+    pub fn cancel(&self) {
+        // Set first, so a call that returns because of this cancel finds it.
+        self.state.requested.store(true, Ordering::SeqCst);
+        self.state.call();
+    }
+
+    /// Whether a cancel is waiting for a call to return
+    /// [`Error::Cancelled`] for it.
+    pub fn is_requested(&self) -> bool {
+        self.state.requested.load(Ordering::SeqCst)
+    }
+}
+
+impl fmt::Debug for CancelToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CancelToken")
+            .field("requested", &self.is_requested())
+            .finish_non_exhaustive()
+    }
+}
 
 /// Who may call SANE.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -973,10 +1090,12 @@ impl Sane {
         // initialised; `raw` was just opened, and nothing else has it.
         match unsafe { read_descriptors(&self.shared.api, raw, guard.limits) } {
             Ok(options) => Ok(Handle {
+                token: Arc::new(CancelState::new(&self.shared.api, raw)),
                 shared: Arc::clone(&self.shared),
                 raw,
                 name: DeviceName::from(name),
                 options,
+                scanning: false,
             }),
             Err(error) => {
                 // SAFETY: this caller still holds the call token; `raw` came
@@ -1041,12 +1160,27 @@ impl fmt::Debug for Sane {
 /// value, and a value of another type or length, or a string too long for
 /// the option's size. Whether a value fits the option's constraint is the
 /// backend's to say.
+///
+/// **Scanning.** A page at a time, assembled, through a
+/// [`batch`](Self::batch); or step by step, as SANE gives it:
+/// [`start`](Self::start), [`parameters`](Self::parameters),
+/// [`read`](Self::read) until `EOF`, [`start`](Self::start) again for a
+/// page's next frame or the next page, and [`cancel`](Self::cancel) once
+/// the batch is done, which SANE asks of every batch. After an error status
+/// from a start, the parameters or a read, `sane_cancel` has been called
+/// already. A [`CancelToken`] cancels from another thread.
 pub struct Handle {
     shared: Arc<Shared>,
     raw: RawHandle,
     name: DeviceName,
     /// The descriptors as last read; empty if a re-read failed.
     options: Vec<OptionDescriptor>,
+    /// What the cancel tokens share.
+    token: Arc<CancelState>,
+    /// Whether a `sane_start` has answered `GOOD` and no `sane_cancel` has
+    /// followed it yet: a scan is pending, which SANE ends with
+    /// `sane_cancel`.
+    scanning: bool,
 }
 
 impl Handle {
@@ -1173,6 +1307,238 @@ impl Handle {
 
     /// Closes the device, as dropping the handle does.
     pub fn close(self) {}
+
+    /// The caps this handle's calls check, as its [`Sane`] has them now.
+    pub(crate) fn limits(&self) -> Limits {
+        self.shared.lock().limits
+    }
+
+    /// A token that cancels this handle's scan from any thread
+    /// ([`CancelToken`]).
+    pub fn cancel_token(&self) -> CancelToken {
+        CancelToken {
+            state: Arc::clone(&self.token),
+        }
+    }
+
+    /// Ends what's in progress (`sane_cancel`), on this thread: a frame
+    /// being read, or a batch whose last page has been read, which SANE
+    /// asks a frontend to end this way even after `EOF`. A
+    /// [`Batch`](crate::Batch) calls it however it ends, and the scanning
+    /// calls after any error status; a scan still pending when the handle
+    /// closes is ended first. It doesn't touch a [`CancelToken`]'s flag.
+    pub fn cancel(&mut self) {
+        self.token.call();
+        self.scanning = false;
+    }
+
+    /// Ends a pending scan, if there is one.
+    pub(crate) fn end_scan(&mut self) {
+        if self.scanning {
+            self.cancel();
+        }
+    }
+
+    /// Takes a token's cancel, if one is waiting, ending what's in
+    /// progress: then the call returns [`Error::Cancelled`].
+    fn cancelled(&mut self) -> bool {
+        if self.token.take_request() {
+            self.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Starts a frame (`sane_start`): the next page's first, or the next of
+    /// a page with several (three-pass color).
+    ///
+    /// [`Error::Cancelled`] if a [`CancelToken`] has cancelled the scan, at
+    /// once, without calling SANE, or once `sane_start` returns. Any status
+    /// but `GOOD` is [`Error::Status`] (`NO_DOCS` for an empty feeder), and
+    /// `INVAL`, which says the scan can't start with the options as they're
+    /// set, [`Error::StartInvalid`], once every descriptor has been read
+    /// again, as the standard asks. `sane_cancel` follows every error.
+    pub fn start(&mut self) -> Result<(), Error> {
+        if self.cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let shared = Arc::clone(&self.shared);
+        let guard = shared.acquire(None)?;
+        // SAFETY: this caller holds the call token; SANE is initialised
+        // (this handle keeps `Shared` alive); `raw` is open, since a handle
+        // is closed only when it goes.
+        let status = Status(unsafe { (shared.api.start)(self.raw.0) });
+        if status.is_good() {
+            drop(guard);
+            self.scanning = true;
+            if self.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            return Ok(());
+        }
+        self.cancel();
+        let reload = (status == Status::INVAL).then(|| {
+            // SAFETY: as above; `sane_cancel` has answered the error status,
+            // so a descriptor may be read.
+            unsafe { reload(&shared.api, self.raw, guard.limits, &mut self.options) }
+        });
+        drop(guard);
+        if self.token.take_request() {
+            return Err(Error::Cancelled);
+        }
+        Err(match reload {
+            Some(reloaded) => Error::StartInvalid {
+                reload: reloaded.err().map(Box::new),
+            },
+            None => Error::Status {
+                status,
+                call: Call::Start,
+            },
+        })
+    }
+
+    /// The parameters of the frame being read, or before [`start`](Self::start)
+    /// the backend's estimate of the next one (`sane_get_parameters`), as
+    /// SANE gives them: [`Parameters::check`] says whether they can stand
+    /// for a frame. Any status but `GOOD` is [`Error::Status`], after
+    /// `sane_cancel`.
+    pub fn parameters(&mut self) -> Result<Parameters, Error> {
+        let shared = Arc::clone(&self.shared);
+        let guard = shared.acquire(None)?;
+        let mut raw = ffi::SANE_Parameters {
+            format: ffi::SANE_FRAME_GRAY,
+            last_frame: ffi::SANE_FALSE,
+            bytes_per_line: 0,
+            pixels_per_line: 0,
+            lines: 0,
+            depth: 0,
+        };
+        // SAFETY: as for `start`; `raw` is valid for SANE's write.
+        let status = Status(unsafe { (shared.api.get_parameters)(self.raw.0, &mut raw) });
+        drop(guard);
+        if !status.is_good() {
+            self.cancel();
+            return Err(Error::Status {
+                status,
+                call: Call::GetParameters,
+            });
+        }
+        Ok(Parameters::from_raw(raw))
+    }
+
+    /// Reads the frame's next bytes into `buffer` (`sane_read`): how many
+    /// SANE gave, or `EOF` at the frame's end.
+    ///
+    /// SANE is asked for no more than `buffer` holds, nor
+    /// [`Limits::read_chunk`] or `i32::MAX`; an empty `buffer` reads
+    /// nothing and calls nothing. A length SANE gives below 0 or above what
+    /// was asked for is [`Error::BadReadLength`], never trusted. In
+    /// blocking mode (the default) a read waits for at least a byte; in
+    /// non-blocking mode ([`set_io_mode`](Self::set_io_mode)) it may give
+    /// none. Any other status is [`Error::Status`]; and once a
+    /// [`CancelToken`] has cancelled the scan, the next read returns
+    /// [`Error::Cancelled`] without calling SANE, as does a read in flight,
+    /// whatever SANE answers. `sane_cancel` follows every error.
+    pub fn read(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, Error> {
+        if buffer.is_empty() {
+            return Ok(ReadOutcome::Bytes(0));
+        }
+        if self.cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let shared = Arc::clone(&self.shared);
+        let guard = shared.acquire(None)?;
+        let asked = buffer
+            .len()
+            .min(guard.limits.read_chunk.max(1))
+            .min(i32::MAX as usize);
+        // At most `i32::MAX`, just above.
+        let asked = ffi::SANE_Int::try_from(asked).unwrap_or(ffi::SANE_Int::MAX);
+        let mut length: ffi::SANE_Int = 0;
+        // SAFETY: as for `start`; `buffer` holds at least `asked` bytes and
+        // stays put for the call; `length` is valid for SANE's write.
+        let status = Status(unsafe {
+            (shared.api.read)(self.raw.0, buffer.as_mut_ptr(), asked, &mut length)
+        });
+        drop(guard);
+        if status.is_good() {
+            let Some(given) = usize::try_from(length).ok().filter(|_| length <= asked) else {
+                self.cancel();
+                return Err(Error::BadReadLength { length, asked });
+            };
+            if self.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            return Ok(ReadOutcome::Bytes(given));
+        }
+        if status == Status::EOF {
+            if self.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            return Ok(ReadOutcome::Eof);
+        }
+        // A backend need not set `length` with an error, and the `test`
+        // backend doesn't: it isn't read.
+        self.cancel();
+        if self.token.take_request() {
+            return Err(Error::Cancelled);
+        }
+        Err(Error::Status {
+            status,
+            call: Call::Read,
+        })
+    }
+
+    /// Reads blocking or not (`sane_set_io_mode`), once a frame has
+    /// started: SANE resets it with each [`start`](Self::start). Blocking
+    /// is the default and every backend supports it; one that can't read
+    /// without blocking answers `UNSUPPORTED`, in [`Error::Status`].
+    pub fn set_io_mode(&mut self, non_blocking: bool) -> Result<(), Error> {
+        let shared = Arc::clone(&self.shared);
+        let guard = shared.acquire(None)?;
+        // SAFETY: as for `start`.
+        let status = Status(unsafe {
+            (shared.api.set_io_mode)(self.raw.0, ffi::SANE_Bool::from(non_blocking))
+        });
+        drop(guard);
+        if !status.is_good() {
+            return Err(Error::Status {
+                status,
+                call: Call::SetIoMode,
+            });
+        }
+        Ok(())
+    }
+
+    /// A file descriptor that's readable when a read would give bytes
+    /// (`sane_get_select_fd`), once a frame has started: for `poll` or
+    /// `select`, and nothing else.
+    ///
+    /// The descriptor is the backend's, valid only until the next
+    /// [`start`](Self::start) or [`cancel`](Self::cancel), or the frame's
+    /// `EOF`: never close it, read it, or keep it past then. A backend
+    /// without one answers `UNSUPPORTED`, in [`Error::Status`]; a negative
+    /// descriptor is [`Error::BadSelectFd`].
+    #[cfg(unix)]
+    pub fn select_fd(&mut self) -> Result<std::os::fd::RawFd, Error> {
+        let shared = Arc::clone(&self.shared);
+        let guard = shared.acquire(None)?;
+        let mut fd: ffi::SANE_Int = -1;
+        // SAFETY: as for `start`; `fd` is valid for SANE's write.
+        let status = Status(unsafe { (shared.api.get_select_fd)(self.raw.0, &mut fd) });
+        drop(guard);
+        if !status.is_good() {
+            return Err(Error::Status {
+                status,
+                call: Call::GetSelectFd,
+            });
+        }
+        if fd < 0 {
+            return Err(Error::BadSelectFd { fd });
+        }
+        Ok(fd)
+    }
 }
 
 /// The type, size and capabilities option `index`'s descriptor has now, or
@@ -1195,6 +1561,10 @@ unsafe fn descriptor_shape(api: &Api, raw: RawHandle, index: usize) -> Option<(i
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        // A scan pending is ended first, as SANE asks of every batch; then
+        // no cancel can reach the handle; then it's closed.
+        self.end_scan();
+        self.token.close();
         self.shared.close(self.raw);
     }
 }
@@ -1219,6 +1589,7 @@ mod tests {
     fn the_library_and_handles_cross_threads() {
         assert_send_sync::<Sane>();
         assert_send::<Handle>();
+        assert_send_sync::<CancelToken>();
     }
 
     #[test]

@@ -622,6 +622,26 @@ else the steps find.
     `BOOL` word other than 0 or 1, a string with no `NUL`, a call before every descriptor is read again
     after `RELOAD_OPTIONS`) is a violation in its log, beyond SANE's own rules, so every test that uses
     options holds `sane-dl` to them.
+41. **A cancel wins over what SANE answers** (step 4): once a token has cancelled, the next start or read
+    returns `Cancelled` without calling SANE, and a read in flight returns `Cancelled` whatever it answers,
+    a page's last `EOF` and a jam included; the page is dropped.
+42. **A batch may go on after an error or `NO_DOCS`** (step 4): `next_page` then starts again (SANE's way to
+    carry on after a jam is `sane_cancel`, then `sane_start`); the batch reports, and the caller decides.
+43. **`Handle::cancel` leaves a token's flag alone, and the flag outlives a batch** (step 4): a cancel that
+    comes after a batch has ended stops the next batch's first page (decision 24, taken as written).
+44. **`sane_cancel` before `sane_close` while a scan is pending** (step 4): a handle closed mid-batch ends
+    the batch first, as SANE asks of every batch; none when nothing is pending.
+45. **`INVAL` from a start is `StartInvalid`**, carrying the re-read's failure, not `Status { INVAL, Start
+    }` (step 4), so the call says the descriptors were read again.
+46. **Three-pass frames may differ in padding** (step 4), not in pixels, lines or depth; frames of unknown
+    height must end at the same row.
+47. **An empty buffer reads nothing** (step 4): `read` returns `Bytes(0)` and calls nothing, since the
+    `test` backend takes a zero length as the frame's end.
+48. **The tests pace the `test` backend** (step 4): 64-byte reads and a pause after each frame's first read,
+    against its deadlock; a cancel at once after a start is the fake's to test.
+49. **The fake takes a sheet at the start that begins its page, whatever that start answers, and counts
+    `at` by pages** (step 4: two a sheet in duplex); its checks go beyond the standard's words (a close with a
+    scan pending, a start before the frame's `EOF`, a read before any start), as decisions 30 and 40 did.
 
 ## For Greg (security)
 
@@ -1133,4 +1153,166 @@ Commit: the one that carries this account.
     design's rules, as decision 30's were.
   - *Crate READMEs and changelogs* wait for step 5, as in steps 1 and 2.
 - **Decisions taken alone:** 32 to 40 above.
-- **No new check records** to carry: step 2's check and its repair are in step 2's account above.
+- **Checked** (`scratch/work/s0-1/flow/checks.md`, "Step 3"), at `2cde32f`, all passed: `just ci` with both
+  require variables (128 tests in 10 harnesses, none skipped; the gates read 10 binaries; `sane-dl-msrv`, 97
+  tests on 1.89); the test list (128; the 71 of step 2 kept, 57 new); the `scanimage -A` comparison reproduced,
+  and an oracle reading libsane straight through Python's ctypes agreeing with every field of all 57 of
+  `test:0`'s descriptors and 27 of `pnm:0`'s; the 33 make-fails run again on the committed tree, each failing
+  its test; 1.89 building every target; the new harnesses passing 60 repeated runs; upstream `test.c` and
+  `pnm.c` laying out their options the same at 1.2.1 (Ubuntu 24.04's) as at 1.4.0 (Risk 1). Noted for the
+  code review, not a fault: no cap on a descriptor's total (one option's string list could copy
+  65,536 × 64 KiB from a backend pointing every entry at one string), within every cap the design names.
+
+### Step 4: scanning: frames, batches, cancel (2026-11-08)
+
+Commit: the one that carries this account.
+
+- **What it does:**
+  - `sane-dl`'s scan module (safe code): `Parameters` (the six fields as SANE gives them; `is_last_frame`,
+    `height` (`Height::Known` or `Unknown`), `channels`, `pixel_bytes`, and `check`, the design's every
+    refusal, `BadParameters` carrying the parameters and the reason); `Image` (`format`, `depth`, `width`,
+    `height`, `stride`, `data`, `frames`); `Progress` (the page's bytes read, and expected where known);
+    `Page` (`Image`, or `NoDocs { from, pages }`); `ReadOutcome` (`Bytes(n)` or `Eof`); the assembly: rows'
+    padding dropped as they come, a frame's end checked (`ShortFrame`, `LongFrame` where it runs past,
+    `PartialRow`, `FrameTooLarge` past the cap as it reads), a page's frames checked against each other (a
+    gray or RGB frame after a single-channel one, a channel twice, another size or depth, an image that ends
+    short of three channels or goes on past them, a three-pass page of unknown height whose frames end at
+    different rows), three-pass frames put in red, green, blue order and interleaved a sample at a time (two
+    bytes at 16 bits, a byte of eight pixels at 1); `Batch` (`Handle::batch`, `next_page(on_progress)`,
+    `pages`), reading blocking after each start, `NO_DOCS` from a start or a page's first read a
+    `Page::NoDocs`, `sane_cancel` on every error and when the batch goes. Unit-tested from chunks.
+  - In the one unsafe module: `Handle::start` (`INVAL` re-reads every descriptor, after the `sane_cancel`,
+    and is `Error::StartInvalid`, carrying the re-read's failure if it failed), `parameters`, `read` (the
+    length asked capped at the buffer, `Limits::read_chunk` and `i32::MAX`; one below 0 or past it
+    `BadReadLength`; an empty buffer calls nothing), `set_io_mode`, `select_fd` (`cfg(unix)`, a `RawFd`,
+    negative `BadSelectFd`), `cancel`, `cancel_token`; `sane_cancel` after every error status from a start,
+    the parameters or a read, and before `sane_close` while a scan is pending. `CancelToken` (`Clone`,
+    `Send + Sync`; `cancel`, `is_requested`): `sane_cancel` from any thread with no call token, under the
+    handle's own lock, only while its alive flag says the handle is open (cleared under that lock before
+    `sane_close`), and a flag that `start` and `read` check before they call SANE and after it returns, taken
+    by the call that returns `Cancelled`. `Limits` gains `frame_bytes` (1 GiB), `line_bytes` (16 MiB) and
+    `read_chunk` (256 KiB); `Error` gains `StartInvalid`, `BadReadLength`, `BadParameters`, `ShortFrame`,
+    `LongFrame`, `PartialRow`, `FrameTooLarge`, `Cancelled`, `BadSelectFd`.
+  - The fake: scanning played (a `feed` module, the script lines in its crate docs): `frame` (any
+    parameters, and the bytes sent, or `endless`), `sheets`, `duplex` (pages marked `F` and `B` in their
+    first byte, every byte else a formula of page, frame, line and column, padding `0xEE`), `at PAGE start
+    STATUS`, `at PAGE read STATUS [BYTES]`, `at PAGE hang`, `hang-forever` and `ignore-cancel`, `at PAGE
+    abort`, `read-max`, `read-length N|past`, `non-blocking`, `select-fd`, `parameters-status`,
+    `start-inval-deactivates`. A read that hangs waits for a cancel outside the fake's lock. New checks: a
+    close with a scan pending (a batch not ended by `sane_cancel`), a start before the frame's `EOF`, a read
+    with no frame started, the null pointers of the scanning calls; and after a start that answers `INVAL`,
+    a call on an option before every descriptor is read again.
+  - Tests, 212 here (128 before, all kept; 84 new): `sane-dl` 40 unit (13 new), `tests/scan_fake.rs` 39 (a
+    feeder's sheets then `NO_DOCS` with the calls and progress, a batch dropped after a page, duplex marks,
+    a jam at a start and an open cover mid-page with the batch going on after, `NO_DOCS` from a first read
+    and later, `INVAL` from a start re-reading the descriptors, the step-by-step calls, select fds, an
+    endless stream at an 8 MiB cap holding under 64 MiB, three-pass from the fake, and 28 hostile frames,
+    statuses and lengths, each an error carrying what SANE said and followed by `sane_cancel`),
+    `tests/cancel.rs` 6, `tests/scan_real.rs` 11 and `tests/scan_pnm.rs` 3 (below); `fake-libsane` 43 unit
+    (12 new). `tests/common/` gains `Child::aborts` (the child must end by `SIGABRT` on Unix, by exit code
+    `0xC0000409` on Windows, and the parent says how it ended), `fake_pixels` and `peak_memory`.
+  - **Through the `test` backend:** the feeder's 10 sheets then `NO_DOCS`, again after reopening; gray and
+    color at 1, 8 and 16 bits, solid black and white, every sample checked; the hand scanner alone and from
+    the feeder (`lines = -1`, 10 pages); short reads (7 bytes) giving the image 64-byte reads give, a progress
+    call each; three-pass in all six orders at 8 bits, and at 16 and 1, equal to one pass; `ppl-loss` (the
+    bytes a line kept, three pixels fewer, each row the first 28 of the plain scan's); `invert-endianess`
+    (every 16-bit sample's bytes swapped); every status `read-return-value` forces (`EOF` an immediate end);
+    non-blocking reads with the select fd (the backend's pipe, `/proc/self/fd`), the same bytes as blocking;
+    `fuzzy-parameters` (the estimate kept as it came, the frame's own after the start). **Through `pnm`:** a
+    PBM, a PGM and a PPM the test writes, scanned byte for byte, the PPM in three passes (green, blue, red),
+    each as a hand scanner. **Through the fake** (`tests/cancel.rs`): a cancel from another thread during a
+    blocked read returns `Cancelled`, the read answering `CANCELLED` and the reading thread then ending the
+    scan; a cancel between pages stops the next with no `sane_start` after it, and the page after comes; a
+    cancel after the close reaches nothing; 10,000 rounds of cancels racing a close, none reaching a closed
+    handle (140,000 to 170,000 a run reaching open ones); a backend that ignores the cancel stopped by the flag, at most
+    one read after it; a read that hangs for good still blocked after a cancel (the watchdog's, slice 4); the
+    abort at page 2 ending the child by `SIGABRT`, said by the test.
+- **Checked here:** `cargo fmt --check`; `cargo clippy --locked --workspace --all-targets -D warnings`, and
+  `-p sane-dl -p fake-libsane --all-targets` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`; `cargo doc
+  -D warnings` for those two and Linux (no doc link reaches `select_fd`); `cargo test --locked --workspace`
+  with both require variables, 212 passing, three times in a row.
+  - **Make-fails** (`scratch/work/s0-1/step-4/make-fail.md`, on a worktree under `step-4/`, the step's files
+    copied in; removed after, branch and stash unchanged): 41 breaks, each failing its test. Assembly:
+    padding kept (two tests), three-pass frames left in their order (the `test` backend's and `pnm`'s),
+    16-bit samples interleaved a byte at a time, short and long frames and partial rows taken, the frame cap
+    doubled, 1-bit rows' bytes rounded down, progress not heard or expected for one frame of three, no
+    blocking mode after a start, `NO_DOCS` from a first read taken as an error. Parameters: a depth of 3,
+    `2500x0`, a `last_frame` of 2, a reserved format, too few bytes a line, a frame past its cap, a gray frame
+    that isn't last, a missing channel, a channel twice, frames of other sizes, gray after a single channel.
+    The handle: a read length past what was asked, no `sane_cancel` after a read's error, a batch or a
+    handle dropped without ending its scan, no re-read on `INVAL`, the read chunk uncapped. The token: a
+    cancel past the alive flag, the flag cleared after the close (the race test catches both), the cancel's
+    flag not set, not checked before a start, not checked by reads (the ignoring backend then spins until
+    the child's timeout). The fake's new checks off one at a time, and its abort not made.
+  - **Pages beside `scanimage`'s** (`scratch/work/s0-1/step-4/compare/compare.md`; a probe crate scanning
+    `test:0` at 50 dpi, "Color pattern", through the same private configuration): gray 8, 1-bit gray,
+    `ppl-loss` (scanimage's padded rows cut to sane-dl's width) and the hand scanner from the feeder (three
+    pages) byte for byte the same. scanimage 1.4.0 can't scan color 16 in three passes (it asserts three-pass
+    frames are 8-bit, and aborts), so sane-dl's 16-bit three-pass page was set beside scanimage's one-pass
+    16-bit page of the same picture, after its byte order: the same; and 8-bit three-pass beside scanimage's
+    own three-pass page: the same.
+  - **ThreadSanitizer** (`scratch/work/s0-1/step-4/tsan/`): `tests/cancel.rs` on nightly (1.101.0-nightly,
+    2026-10-15) with `-Zsanitizer=thread -Zbuild-std`, the fake built plain by the helper (no TSan symbol in
+    it, 49 in the test binary): all 6 pass, no report (TSan's exit code would fail the child).
+  - **The memory cap:** the endless stream stops at an 8 MiB cap after 33 reads, the child's peak under 64
+    MiB (asserted from `VmHWM`), the memory scope untouched.
+- **What it learned of SANE, for slice 2** (the seam's unknowns):
+  - **Names:** nothing beyond step 2's (`test:0`, `test:1`, `pnm:0`, `pnm:1`: the backend's name, then an
+    index it gives in order). New: the `test` backend keeps its options' values from one `sane_open` to the
+    next in a process (a `ppl-loss` set on one handle was there on the next), and its feeder counts every
+    start since the device opened, a flatbed's too (a page scanned before choosing the feeder leaves nine).
+  - **Stopping after the page in flight:** SANE lets a frontend do it: read the page to its `EOF`, start no
+    next page, end the batch with `sane_cancel`. The `test` backend takes a sheet only at a start, so a batch
+    ended after its third page leaves the fourth in the feeder: the next batch gives 7 pages, then `NO_DOCS`;
+    after `NO_DOCS` it fills again, 10 more. Whether a real feeder has already pulled the next sheet in by
+    then is its backend's and its hardware's: slice 6's fi-6130.
+- **Found in SANE's own code** (not reported: that waits on review; backlog items with step 5;
+  `scratch/work/s0-1/step-4/README.md`):
+  - *The `test` backend 1.4.0 can deadlock* (built with threads, as Ubuntu builds it): it ends each frame's
+    reader thread with an asynchronous cancel, and one that lands while the thread is in the allocator leaves
+    the allocator's lock held, so the next frame's thread blocks for good (gdb: in `malloc`). Seen at a
+    cancel at once after a start (1 in about 2,000), and at the reads that end frames (1 to 4 processes in
+    12 or 24 reading 3,000 pages each in parallel). The tests pace the backend (reads of 64 bytes, a 1 ms
+    pause after each frame's first read: none in 144,000 pages), and leave a cancel at once after a start to
+    the fake. A worker meets the same backend only in tests; for any backend that hangs, slice 4's watchdog.
+  - *The `test` backend reads an empty pipe as the frame's end in non-blocking mode*, answering `GOOD` with
+    a length of -1: `BadReadLength`, as it should be.
+  - *`scanimage` 1.4.0 aborts on 16-bit three-pass color* (above).
+- **Departures from the plan, and why:**
+  - *Renamed and added:* `read`'s answer is `ReadOutcome`; `next_page` is `Batch`'s, from `Handle::batch`;
+    `Page::NoDocs` carries the pages delivered; `StartInvalid` says `INVAL` from a start and its re-read (the
+    design's "said in what the call returns"); `BadSelectFd`; `Height`, `Progress`, `CancelToken::is_requested`.
+  - *`read-return-value` read step by step:* each forced status is read after a start and a pause, so the
+    backend's reader isn't cancelled mid-allocation (its deadlock, above); a batch's `NoDocs` from a read and
+    `ShortFrame` at an immediate `EOF` are the fake's tests. *`fuzzy-parameters`:* the estimate is checked
+    for its format and depth only, since it may be anything (here a line count of 0).
+  - *No 16-bit image through `pnm`:* `pnm` 1.4.0 reads only P4, P5 and P6, and takes any P5 or P6 as 8-bit
+    whatever its maximum.
+  - *16-bit three-pass beside `scanimage`'s one-pass page*, as scanimage can't do it.
+  - *airbridge, read in full where it touches SANE* (its SANE backend, its backend trait, its jobs' and
+    pages' cancel paths, at `530074da`), not its eSCL server, mDNS or HTTP. What it does: an `alive` flag
+    under a mutex, held across `sane_cancel` and cleared before `sane_close` (the pattern followed, in our
+    own code, credited in `library.rs`); a cancel before every close. What it doesn't, which `sane-dl` does:
+    `sane_cancel` after an error, a check of the length a read gives, caps on word lists.
+  - *Crate READMEs and changelogs* wait for step 5, as in steps 1 to 3.
+- **Decisions taken alone:** 41 to 49 below.
+- **Checked** (`scratch/work/s0-1/flow/checks.md`, "Step 4"), at `f8370fa`: `just ci` with both require
+  variables (212 tests in 14 harnesses, none skipped; the gates read 14 binaries; `sane-dl-msrv`, 169 tests
+  on 1.89); the test list (212; the 128 of step 3 kept, 84 new); clippy and docs with `-D warnings` for
+  `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, and 1.89 checking every target; the make-fails, the
+  ThreadSanitizer run and the `scanimage` comparison run again on the commit, since `library.rs` changed
+  after them (the 10 `library.rs` make-fails each failing its test; of 14 more the check made, 7 failing
+  theirs and 7 unseen, test gaps for the code review; the 6 cancel tests clean under ThreadSanitizer, the
+  race 10,000 rounds; every page the same as `scanimage`'s); the endless stream stopping at its 8 MiB cap;
+  the scan harnesses passing 60 runs in a row and 80 more pinned to 1 and to 4 CPUs; the new code read
+  where the job named it, no fault found (`CancelHandle`'s `Sync` comment quoting the standard truly); the
+  commit's message and diff; the user's cargo home unchanged. All passed but one, repaired in this commit:
+  1. *The maintainer named in two lines this commit wrote* (minor): step 3's "Checked" and step 4's "Found
+     in SANE's own code", written after the control file's note against anything new that names the
+     maintainer. Fix: both reworded as the note says, their meaning kept ("noted for the code review, not a
+     fault"; "not reported: that waits on review"). The mentions from before this step stay for the fix
+     to clear, as the note has it.
+  - *Checked again:* on the committed tree, `git grep -i` for the maintainer's name outside the root
+    `LICENSE-MIT` finds the 79 lines it found at `2cde32f`, and the diff from `2cde32f` adds none. The tree
+    differs from `f8370fa` in this file alone, which no build, test or gate reads (the gates leave out
+    `docs/pm`), so `just ci` and the step's other checks weren't run again.

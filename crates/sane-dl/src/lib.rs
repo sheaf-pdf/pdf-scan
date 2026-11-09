@@ -20,7 +20,23 @@
 //!     let resolution = resolution.index;
 //!     println!("resolution: {:?}", handle.get(resolution)?);
 //! }
+//! // A cancel button elsewhere holds a token.
+//! let token = handle.cancel_token();
+//! let mut batch = handle.batch();
+//! loop {
+//!     match batch.next_page(|progress| println!("{progress:?}"))? {
+//!         sane_dl::Page::Image(image) => {
+//!             println!("{} by {}, depth {}", image.width, image.height, image.depth);
+//!         }
+//!         sane_dl::Page::NoDocs { pages, .. } => {
+//!             println!("{pages} pages");
+//!             break;
+//!         }
+//!     }
+//! }
+//! drop(batch);
 //! handle.close();
+//! # drop(token);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -45,19 +61,33 @@
 //!   whenever SANE says they changed. [`Handle::get`], [`Handle::set`] and
 //!   [`Handle::set_auto`] take and give a [`Value`], and refuse a call
 //!   SANE's rules don't allow before the backend sees it.
+//! - **Scanning, step by step:** [`Handle::start`], [`Handle::parameters`]
+//!   ([`Parameters`], as SANE gives them), [`Handle::read`] (each read's
+//!   status), [`Handle::set_io_mode`], `Handle::select_fd` (on Unix) and
+//!   [`Handle::cancel`], each status said with the call that answered it,
+//!   and `sane_cancel` after every error, as SANE's frontends do.
+//! - **Pages, assembled:** [`Handle::batch`] gives a [`Batch`], whose
+//!   [`next_page`](Batch::next_page) reads every frame of a page to its end
+//!   and assembles them ([`Image`]): rows top down, padding dropped, a
+//!   three-pass image's frames interleaved, the samples as SANE encodes
+//!   them; or says the feeder is empty ([`Page::NoDocs`], from either call
+//!   that can say so). Parameters that make no sense, frames that end early
+//!   or late, and streams past the caps are errors, never pages.
+//! - **Cancel from any thread:** a [`CancelToken`] calls `sane_cancel` while
+//!   the handle's thread is blocked in a read, never reaches a closed
+//!   handle, and flags the cancel so a backend that ignores it still stops
+//!   being read.
 //! - **What crosses from C is checked:** statuses and frame formats are
 //!   integers ([`Status`], [`FrameFormat`]) that keep codes SANE doesn't
-//!   define; null pointers, lists and strings are refused or capped
+//!   define; null pointers, lists, strings and lengths are refused or capped
 //!   ([`Limits`]) before they become values; a descriptor holding what SANE
 //!   doesn't allow makes its option unusable, and a constraint is read only
 //!   as the member its type allows.
 //!
 //! **Run SANE in a process of its own.** Backends are C code running in the
 //! process that loads them; some corrupt memory and some crash, and nothing
-//! this crate checks can stop that.
-//!
-//! Planned: frames assembled into images; a cancel token any thread can
-//! use.
+//! this crate checks can stop that. Some hang, too, past any cancel: only a
+//! watchdog that ends the process stops them.
 
 // Only the module that loads and calls the library may hold unsafe code.
 #![deny(unsafe_code)]
@@ -68,15 +98,17 @@ mod error;
 pub mod ffi;
 mod library;
 mod options;
+mod scan;
 mod status;
 
 pub use config::{CONFIG_DIR_VARIABLE, ConfigDir, ConfigError, Search, backend_of};
 pub use device::{Device, DeviceName};
 pub use error::{Call, Error, LoadError};
-pub use library::{Handle, Sane};
+pub use library::{CancelToken, Handle, Sane};
 pub use options::{
     Capabilities, Constraint, Fixed, OptionDescriptor, SaneString, SetInfo, Unit, Value, ValueType,
 };
+pub use scan::{Batch, Height, Image, Page, Parameters, Progress, ReadOutcome};
 pub use status::{FrameFormat, Status, Version};
 
 /// Caps on what this crate accepts from SANE, each checked before the work
@@ -101,6 +133,16 @@ pub struct Limits {
     pub list_entries: usize,
     /// Bytes in an option's value, as its size gives them (default 1 MiB).
     pub option_bytes: usize,
+    /// Bytes in a frame, padding included: a known frame's, from its
+    /// parameters, before it's read; a frame of unknown height's, as it's
+    /// read (default 1 GiB; a 1200 dpi 16-bit color Letter page is about
+    /// 0.75 GiB).
+    pub frame_bytes: usize,
+    /// Bytes in a frame's line, padding included (default 16 MiB).
+    pub line_bytes: usize,
+    /// Bytes asked for in one read, and the buffer a page is read through
+    /// (default 256 KiB).
+    pub read_chunk: usize,
 }
 
 impl Default for Limits {
@@ -111,6 +153,9 @@ impl Default for Limits {
             options: 4096,
             list_entries: 65_536,
             option_bytes: 1024 * 1024,
+            frame_bytes: 1024 * 1024 * 1024,
+            line_bytes: 16 * 1024 * 1024,
+            read_chunk: 256 * 1024,
         }
     }
 }

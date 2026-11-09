@@ -13,7 +13,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use std::collections::BTreeMap;
 
-use crate::fake::{Fake, Given, Log, show};
+use crate::fake::{Fake, Given, Log, Wait, show};
+use crate::feed::ReadAnswer;
 use crate::ffi;
 use crate::options::{ConstraintSpec, Descriptor, RawValue};
 use crate::script::{Script, Text};
@@ -595,53 +596,196 @@ pub unsafe extern "C" fn sane_control_option(
 }
 const _: ffi::SaneControlOptionFn = sane_control_option;
 
-/// No scanning yet: always `UNSUPPORTED`.
+/// The parameters of the frame in progress, or of the next, as the script
+/// has them. A null `params` is a violation, answered `INVAL`.
 ///
 /// # Safety
 ///
-/// None beyond SANE's own rules, which the fake checks: no pointer is
-/// followed.
+/// `params` is null or valid for a write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_get_parameters(
     handle: ffi::SANE_Handle,
-    _params: *mut ffi::SANE_Parameters,
+    params: *mut ffi::SANE_Parameters,
 ) -> ffi::SANE_Status {
-    unsupported(handle, "sane_get_parameters", "")
+    let thread = thread();
+    let id = handle_id(handle);
+    with_fake(|fake| {
+        fake.enter(
+            &thread,
+            "sane_get_parameters",
+            Some(id),
+            &format!("handle={id:#x}"),
+        );
+        if params.is_null() {
+            fake.null_argument(&thread, "sane_get_parameters", "params");
+            fake.leave(
+                &thread,
+                "sane_get_parameters",
+                Some(id),
+                Some(ffi::SANE_STATUS_INVAL),
+                "",
+            );
+            return ffi::SANE_STATUS_INVAL;
+        }
+        let (status, given) = fake.parameters(id);
+        // SAFETY: not null, and valid for a write (the caller's contract).
+        unsafe { params.write(given) };
+        fake.leave(
+            &thread,
+            "sane_get_parameters",
+            Some(id),
+            Some(status),
+            &format!(
+                "format={} last_frame={} bytes_per_line={} pixels_per_line={} lines={} depth={}",
+                given.format,
+                given.last_frame,
+                given.bytes_per_line,
+                given.pixels_per_line,
+                given.lines,
+                given.depth
+            ),
+        );
+        status
+    })
 }
 const _: ffi::SaneGetParametersFn = sane_get_parameters;
 
-/// No scanning yet: always `UNSUPPORTED`.
+/// Starts the next frame of the page, or the next page, as the script has
+/// them; aborts the process where the script says.
 ///
 /// # Safety
 ///
 /// None beyond SANE's own rules, which the fake checks.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_start(handle: ffi::SANE_Handle) -> ffi::SANE_Status {
-    unsupported(handle, "sane_start", "")
+    let thread = thread();
+    let id = handle_id(handle);
+    let status = with_fake(|fake| {
+        fake.enter(&thread, "sane_start", Some(id), &format!("handle={id:#x}"));
+        let status = fake.start(&thread, id);
+        match status {
+            Some(status) => {
+                let position = fake.position(id);
+                fake.leave(&thread, "sane_start", Some(id), Some(status), &position);
+            }
+            None => fake.note(
+                &thread,
+                "abort sane_start aborts the process, as the script says",
+            ),
+        }
+        status
+    });
+    status.unwrap_or_else(|| std::process::abort())
 }
 const _: ffi::SaneStartFn = sane_start;
 
-/// No scanning yet: always `UNSUPPORTED`, nothing read.
+/// What a read does once the fake has decided.
+enum Reading {
+    Data(Vec<u8>, ffi::SANE_Int),
+    Done(ffi::SANE_Status),
+    Wait(Wait),
+    Forever,
+}
+
+/// Reads the frame's next bytes, as the script has them; or blocks until
+/// `sane_cancel`, or for good, where the script says, outside the fake's
+/// lock, so a cancel from another thread gets in. A null `data` or `length`
+/// is a violation, answered `INVAL`.
 ///
 /// # Safety
 ///
-/// `length` is null or valid for a write.
+/// `data` is null or valid for writes of `max_length` bytes; `length` is
+/// null or valid for a write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_read(
     handle: ffi::SANE_Handle,
-    _data: *mut ffi::SANE_Byte,
+    data: *mut ffi::SANE_Byte,
     max_length: ffi::SANE_Int,
     length: *mut ffi::SANE_Int,
 ) -> ffi::SANE_Status {
+    let thread = thread();
+    let id = handle_id(handle);
+    let reading = with_fake(|fake| {
+        fake.enter(
+            &thread,
+            "sane_read",
+            Some(id),
+            &format!("handle={id:#x} max_length={max_length}"),
+        );
+        let leave = |fake: &mut Fake, status: i32, more: &str| {
+            fake.leave(&thread, "sane_read", Some(id), Some(status), more);
+        };
+        if data.is_null() || length.is_null() {
+            let what = if data.is_null() { "data" } else { "length" };
+            fake.null_argument(&thread, "sane_read", what);
+            leave(fake, ffi::SANE_STATUS_INVAL, "");
+            return Reading::Done(ffi::SANE_STATUS_INVAL);
+        }
+        match fake.read(&thread, id, max_length) {
+            (ReadAnswer::Data { bytes, claim }, _) => {
+                leave(
+                    fake,
+                    ffi::SANE_STATUS_GOOD,
+                    &format!("length={claim} given={}", bytes.len()),
+                );
+                Reading::Data(bytes, claim)
+            }
+            (ReadAnswer::Status(status), _) => {
+                leave(fake, status, "");
+                Reading::Done(status)
+            }
+            (ReadAnswer::Hang, Some(wait)) => {
+                fake.note(&thread, "hang sane_read waits for sane_cancel");
+                Reading::Wait(wait)
+            }
+            (ReadAnswer::HangForever, _) => {
+                fake.note(&thread, "hang sane_read waits for good");
+                Reading::Forever
+            }
+            (ReadAnswer::Hang | ReadAnswer::NotStarted, _) => {
+                leave(fake, ffi::SANE_STATUS_INVAL, "");
+                Reading::Done(ffi::SANE_STATUS_INVAL)
+            }
+        }
+    });
+    let status = match reading {
+        Reading::Data(bytes, claim) => {
+            // SAFETY: not null (checked above), and valid for `max_length`
+            // bytes (the caller's contract), which `bytes` doesn't pass: the
+            // fake gives no more than it's asked for.
+            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len()) };
+            // SAFETY: not null (checked above), and valid for a write.
+            unsafe { length.write(claim) };
+            return ffi::SANE_STATUS_GOOD;
+        }
+        Reading::Done(status) => status,
+        Reading::Wait((signal, seen)) => {
+            signal.wait_past(seen);
+            with_fake(|fake| {
+                fake.leave(
+                    &thread,
+                    "sane_read",
+                    Some(id),
+                    Some(ffi::SANE_STATUS_CANCELLED),
+                    "",
+                )
+            });
+            ffi::SANE_STATUS_CANCELLED
+        }
+        Reading::Forever => loop {
+            std::thread::park();
+        },
+    };
     if !length.is_null() {
         // SAFETY: not null, and valid for a write (the caller's contract).
         unsafe { length.write(0) };
     }
-    unsupported(handle, "sane_read", &format!("max_length={max_length}"))
+    status
 }
 const _: ffi::SaneReadFn = sane_read;
 
-/// Cancels; logged and checked, as the one call that may overlap others.
+/// Cancels: the page in flight is dropped, and a read waiting for a cancel
+/// returns. Logged and checked, as the one call that may overlap others.
 ///
 /// # Safety
 ///
@@ -652,12 +796,14 @@ pub unsafe extern "C" fn sane_cancel(handle: ffi::SANE_Handle) {
     let id = handle_id(handle);
     with_fake(|fake| {
         fake.enter(&thread, "sane_cancel", Some(id), &format!("handle={id:#x}"));
+        fake.cancel(id);
         fake.leave(&thread, "sane_cancel", Some(id), None, "");
     });
 }
 const _: ffi::SaneCancelFn = sane_cancel;
 
-/// No scanning yet: always `UNSUPPORTED`.
+/// Blocking always; non-blocking where the script says, else
+/// `UNSUPPORTED`; `INVAL` with no frame in progress.
 ///
 /// # Safety
 ///
@@ -667,26 +813,63 @@ pub unsafe extern "C" fn sane_set_io_mode(
     handle: ffi::SANE_Handle,
     non_blocking: ffi::SANE_Bool,
 ) -> ffi::SANE_Status {
-    unsupported(
-        handle,
-        "sane_set_io_mode",
-        &format!("non_blocking={non_blocking}"),
-    )
+    let thread = thread();
+    let id = handle_id(handle);
+    with_fake(|fake| {
+        fake.enter(
+            &thread,
+            "sane_set_io_mode",
+            Some(id),
+            &format!("handle={id:#x} non_blocking={non_blocking}"),
+        );
+        let status = fake.io_mode(id, non_blocking);
+        fake.leave(&thread, "sane_set_io_mode", Some(id), Some(status), "");
+        status
+    })
 }
 const _: ffi::SaneSetIoModeFn = sane_set_io_mode;
 
-/// No scanning yet: always `UNSUPPORTED`.
+/// The script's descriptor, else `UNSUPPORTED`; `INVAL` with no frame in
+/// progress. A null `fd` is a violation, answered `INVAL`.
 ///
 /// # Safety
 ///
-/// None beyond SANE's own rules, which the fake checks: no pointer is
-/// followed.
+/// `fd` is null or valid for a write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sane_get_select_fd(
     handle: ffi::SANE_Handle,
-    _fd: *mut ffi::SANE_Int,
+    fd: *mut ffi::SANE_Int,
 ) -> ffi::SANE_Status {
-    unsupported(handle, "sane_get_select_fd", "")
+    let thread = thread();
+    let id = handle_id(handle);
+    with_fake(|fake| {
+        fake.enter(
+            &thread,
+            "sane_get_select_fd",
+            Some(id),
+            &format!("handle={id:#x}"),
+        );
+        if fd.is_null() {
+            fake.null_argument(&thread, "sane_get_select_fd", "fd");
+            fake.leave(
+                &thread,
+                "sane_get_select_fd",
+                Some(id),
+                Some(ffi::SANE_STATUS_INVAL),
+                "",
+            );
+            return ffi::SANE_STATUS_INVAL;
+        }
+        let (status, given) = fake.select_fd(id);
+        if let Some(given) = given {
+            // SAFETY: not null, and valid for a write (the caller's
+            // contract).
+            unsafe { fd.write(given) };
+        }
+        let more = given.map(|given| format!("fd={given}")).unwrap_or_default();
+        fake.leave(&thread, "sane_get_select_fd", Some(id), Some(status), &more);
+        status
+    })
 }
 const _: ffi::SaneGetSelectFdFn = sane_get_select_fd;
 
@@ -712,29 +895,6 @@ pub unsafe extern "C" fn sane_strstatus(status: ffi::SANE_Status) -> ffi::SANE_S
     })
 }
 const _: ffi::SaneStrstatusFn = sane_strstatus;
-
-/// A call on a handle that the fake doesn't play yet: logged, checked, and
-/// answered `UNSUPPORTED`.
-fn unsupported(handle: ffi::SANE_Handle, function: &'static str, args: &str) -> ffi::SANE_Status {
-    let thread = thread();
-    let id = handle_id(handle);
-    with_fake(|fake| {
-        fake.enter(
-            &thread,
-            function,
-            Some(id),
-            format!("handle={id:#x} {args}").trim_end(),
-        );
-        fake.leave(
-            &thread,
-            function,
-            Some(id),
-            Some(ffi::SANE_STATUS_UNSUPPORTED),
-            "",
-        );
-    });
-    ffi::SANE_STATUS_UNSUPPORTED
-}
 
 #[cfg(test)]
 mod tests {

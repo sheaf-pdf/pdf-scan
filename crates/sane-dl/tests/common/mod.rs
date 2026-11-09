@@ -115,6 +115,8 @@ pub struct Child {
     prepare: Vec<Preparation>,
     timeout: Duration,
     require: Option<&'static str>,
+    /// Whether the child is to end by aborting, rather than pass.
+    aborts: bool,
 }
 
 impl Default for Child {
@@ -124,7 +126,35 @@ impl Default for Child {
             prepare: Vec::new(),
             timeout: Duration::from_secs(60),
             require: None,
+            aborts: false,
         }
+    }
+}
+
+/// Signal 6, which `abort` raises on Unix.
+#[cfg(unix)]
+const SIGABRT: i32 = 6;
+
+/// The exit code a process that aborts ends with on Windows: Rust's abort
+/// is a fast fail there, `STATUS_STACK_BUFFER_OVERRUN`.
+#[cfg(windows)]
+const ABORTED: i32 = 0xC000_0409_u32 as i32;
+
+/// How a child that was to abort ended, if it did: by `SIGABRT` on Unix, by
+/// its exit code on Windows.
+fn aborted(status: &rusty_fork::ExitStatusWrapper) -> Option<String> {
+    #[cfg(unix)]
+    {
+        (status.unix_signal() == Some(SIGABRT)).then(|| format!("by SIGABRT (signal {SIGABRT})"))
+    }
+    #[cfg(windows)]
+    {
+        (status.code() == Some(ABORTED)).then(|| format!("with exit code {ABORTED:#x}"))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = status;
+        None
     }
 }
 
@@ -160,6 +190,14 @@ impl Child {
         self
     }
 
+    /// The child is to end by aborting (`SIGABRT` on Unix, its exit code on
+    /// Windows): anything else fails the test, and the parent says how it
+    /// ended on its own standard error.
+    pub fn aborts(mut self) -> Child {
+        self.aborts = true;
+        self
+    }
+
     /// Runs `body` in a child process, through [`in_child!`].
     pub fn run(self, test: &str, id: rusty_fork::RustyForkId, body: impl FnOnce()) {
         let Child {
@@ -167,6 +205,7 @@ impl Child {
             prepare,
             timeout,
             require,
+            aborts,
         } = self;
         // rusty-fork calls this in the parent alone, just before it spawns
         // the child.
@@ -187,6 +226,18 @@ impl Child {
             let Some(status) = status else {
                 panic!("{test}: the child ran past its timeout of {timeout:?}")
             };
+            if aborts {
+                let Some(how) = aborted(&status) else {
+                    panic!(
+                        "{test}: the child was to abort, but ended {status}; its output is above"
+                    )
+                };
+                let _ = writeln!(
+                    io::stderr(),
+                    "{test}: the child aborted, as it was to: it ended {how}"
+                );
+                return;
+            }
             if status.code() == Some(SKIP) {
                 let mut text = String::new();
                 let _ = output.seek(SeekFrom::Start(0));
@@ -481,4 +532,36 @@ pub fn load_real() -> Sane {
         )),
         Err(error) => panic!("couldn't load libsane: {}", chain(&error)),
     }
+}
+
+/// The fake's bytes of a frame, its padding dropped, as its crate docs say
+/// it sends them: page `page` (from 1), a back if `back`, frame `frame`
+/// (from 0), `rows` rows of `pixel_bytes` bytes.
+pub fn fake_pixels(
+    page: usize,
+    back: bool,
+    frame: usize,
+    pixel_bytes: usize,
+    rows: usize,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(rows * pixel_bytes);
+    for row in 0..rows {
+        for column in 0..pixel_bytes {
+            bytes.push(if row == 0 && column == 0 {
+                if back { b'B' } else { b'F' }
+            } else {
+                ((page * 31 + frame * 7 + row * 3 + column) % 251) as u8
+            });
+        }
+    }
+    bytes
+}
+
+/// In the child: the most memory this process has held, in bytes, where
+/// the system says (Linux).
+pub fn peak_memory() -> Option<u64> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmHWM:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }

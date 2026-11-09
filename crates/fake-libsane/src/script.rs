@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use crate::feed::Feed;
 use crate::ffi;
 use crate::options::{Builder, Layout};
 
@@ -49,6 +50,8 @@ pub struct Script {
     pub strstatus_null: bool,
     /// The options every handle has, after option 0.
     pub layout: Layout,
+    /// What scanning gives.
+    pub feed: Feed,
 }
 
 impl Default for Script {
@@ -65,6 +68,7 @@ impl Default for Script {
             opens: Vec::new(),
             strstatus_null: false,
             layout: Layout::default(),
+            feed: Feed::default(),
         }
     }
 }
@@ -204,7 +208,9 @@ impl Script {
                     script.strstatus_null = true;
                 }
                 other => {
-                    if !options.line(other, args).map_err(at)? {
+                    if !options.line(other, args).map_err(at)?
+                        && !script.feed.line(other, args).map_err(at)?
+                    {
                         return Err(at(format!("{other:?} isn't a keyword")));
                     }
                 }

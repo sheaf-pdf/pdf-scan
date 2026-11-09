@@ -8,8 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::feed::{ReadAnswer, ScanState, StartAnswer};
 use crate::ffi;
 use crate::options::{
     Change, ConstraintSpec, Descriptor, OptionSpec, RawValue, fit, sized, well_formed,
@@ -58,18 +60,60 @@ impl Log {
     }
 }
 
+/// Counts a handle's cancels, so a read that hangs until one comes can wait
+/// for it outside the fake's lock.
+#[derive(Default)]
+pub struct Signal {
+    cancels: Mutex<u64>,
+    wake: Condvar,
+}
+
+impl Signal {
+    /// The cancels so far.
+    pub fn count(&self) -> u64 {
+        *self.cancels.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits until a cancel comes after the `seen`th.
+    pub fn wait_past(&self, seen: u64) {
+        let mut cancels = self.cancels.lock().unwrap_or_else(PoisonError::into_inner);
+        while *cancels == seen {
+            cancels = self
+                .wake
+                .wait(cancels)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn bump(&self) {
+        *self.cancels.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.wake.notify_all();
+    }
+}
+
+/// What a read that waits for a cancel waits on: the signal, and the count
+/// it waits past.
+pub type Wait = (Arc<Signal>, u64);
+
 /// A handle the fake gave.
 struct HandleState {
     open: bool,
     /// The call whose error status the next call must answer with
     /// `sane_cancel` or `sane_close`, and the status.
     must_cancel: Option<(&'static str, i32)>,
+    /// Whether a `sane_start` answered `GOOD` with no `sane_cancel` since:
+    /// a scan is pending, which a batch ends with `sane_cancel`.
+    scanning: bool,
+    scan: ScanState,
+    signal: Arc<Signal>,
     /// Its options, option 0 first, each with how many times its descriptor
     /// changed.
     options: Vec<(OptionSpec, u64)>,
     /// The options whose descriptors haven't been read since a set said
-    /// `RELOAD_OPTIONS`.
+    /// `RELOAD_OPTIONS`, or `sane_start` returned `INVAL`.
     stale: BTreeSet<usize>,
+    /// Which of the two made them stale.
+    stale_after: &'static str,
 }
 
 /// What a set gave the fake, read from the caller's buffer as the option's
@@ -222,6 +266,8 @@ impl Fake {
                     );
                 }
                 Some(state) => {
+                    let unended =
+                        function == "sane_close" && state.scanning && state.must_cancel.is_none();
                     if let Some((after, status)) = state.must_cancel.take()
                         && function != "sane_cancel"
                         && function != "sane_close"
@@ -231,6 +277,13 @@ impl Fake {
                             thread,
                             function,
                             format!("came after {after} returned {status}, with no sane_cancel"),
+                        );
+                    }
+                    if unended {
+                        self.violation(
+                            thread,
+                            function,
+                            "came with a scan pending: a batch ends with sane_cancel".to_owned(),
                         );
                     }
                 }
@@ -360,8 +413,12 @@ impl Fake {
                     HandleState {
                         open: true,
                         must_cancel: None,
+                        scanning: false,
+                        scan: ScanState::default(),
+                        signal: Arc::default(),
                         options,
                         stale: BTreeSet::new(),
+                        stale_after: "RELOAD_OPTIONS",
                     },
                 );
                 (ffi::SANE_STATUS_GOOD, Some(id))
@@ -431,7 +488,8 @@ impl Fake {
                 thread,
                 FUNCTION,
                 format!(
-                    "came after RELOAD_OPTIONS before every descriptor was read again (not {})",
+                    "came after {} before every descriptor was read again (not {})",
+                    handle.stale_after,
                     stale.join(", ")
                 ),
             );
@@ -622,6 +680,7 @@ impl Fake {
         if changed && !quiet {
             info |= ffi::SANE_INFO_RELOAD_OPTIONS;
             handle.stale = (0..handle.options.len()).collect();
+            handle.stale_after = "RELOAD_OPTIONS";
         }
         info
     }
@@ -631,6 +690,137 @@ impl Fake {
         if let Some(state) = self.handles.get_mut(&id) {
             state.open = false;
             state.must_cancel = None;
+            state.scanning = false;
+        }
+    }
+
+    fn open_handle(&mut self, id: usize) -> Option<&mut HandleState> {
+        self.handles.get_mut(&id).filter(|handle| handle.open)
+    }
+
+    /// Where an open handle's scan is, for the log: its page and frame.
+    pub fn position(&self, id: usize) -> String {
+        match self
+            .handles
+            .get(&id)
+            .and_then(|handle| handle.scan.page.as_ref())
+        {
+            Some(page) => format!("page={} frame={}", page.number, page.frame),
+            None => String::new(),
+        }
+    }
+
+    /// `sane_start`'s status, or `None` if the script aborts the process
+    /// here.
+    pub fn start(&mut self, thread: &str, id: usize) -> Option<i32> {
+        let feed = &self.script.feed;
+        let Some(handle) = self.handles.get_mut(&id).filter(|handle| handle.open) else {
+            return Some(ffi::SANE_STATUS_INVAL);
+        };
+        let status = match handle.scan.start(feed) {
+            StartAnswer::Abort => return None,
+            StartAnswer::Early => {
+                self.violation(
+                    thread,
+                    "sane_start",
+                    "came before the frame in progress reached EOF, with no sane_cancel".to_owned(),
+                );
+                return Some(ffi::SANE_STATUS_INVAL);
+            }
+            StartAnswer::Status(status) => status,
+        };
+        if status == ffi::SANE_STATUS_GOOD {
+            handle.scanning = true;
+        }
+        if status == ffi::SANE_STATUS_INVAL {
+            // Options changed behind it, as the script says, and every
+            // descriptor must be read again, as the standard asks.
+            for name in &feed.inval_deactivates {
+                let wanted = Text::Bytes(name.clone());
+                for (spec, version) in &mut handle.options {
+                    if spec.descriptor.name == wanted {
+                        spec.descriptor.cap |= ffi::SANE_CAP_INACTIVE;
+                        *version += 1;
+                    }
+                }
+            }
+            handle.stale = (0..handle.options.len()).collect();
+            handle.stale_after = "sane_start returned INVAL";
+        }
+        Some(status)
+    }
+
+    /// `sane_get_parameters`'s status and parameters.
+    pub fn parameters(&self, id: usize) -> (i32, ffi::SANE_Parameters) {
+        let feed = &self.script.feed;
+        let zero = ffi::SANE_Parameters {
+            format: 0,
+            last_frame: 0,
+            bytes_per_line: 0,
+            pixels_per_line: 0,
+            lines: 0,
+            depth: 0,
+        };
+        let Some(handle) = self.handles.get(&id).filter(|handle| handle.open) else {
+            return (ffi::SANE_STATUS_INVAL, zero);
+        };
+        match feed.parameters_status {
+            Some(status) => (status, zero),
+            None => (ffi::SANE_STATUS_GOOD, handle.scan.parameters(feed)),
+        }
+    }
+
+    /// `sane_read`'s answer, asked for at most `asked` bytes, and for a
+    /// read that waits for a cancel, what to wait on.
+    pub fn read(&mut self, thread: &str, id: usize, asked: i32) -> (ReadAnswer, Option<Wait>) {
+        let feed = &self.script.feed;
+        let Some(handle) = self.handles.get_mut(&id).filter(|handle| handle.open) else {
+            return (ReadAnswer::Status(ffi::SANE_STATUS_INVAL), None);
+        };
+        let answer = handle.scan.read(feed, asked);
+        let wait = (answer == ReadAnswer::Hang)
+            .then(|| (Arc::clone(&handle.signal), handle.signal.count()));
+        if answer == ReadAnswer::NotStarted {
+            self.violation(thread, "sane_read", "came with no frame started".to_owned());
+            return (ReadAnswer::Status(ffi::SANE_STATUS_INVAL), None);
+        }
+        (answer, wait)
+    }
+
+    /// `sane_cancel`: the page in flight dropped, a read waiting for it
+    /// woken.
+    pub fn cancel(&mut self, id: usize) {
+        if let Some(handle) = self.open_handle(id) {
+            handle.scan.cancel();
+            handle.scanning = false;
+            handle.signal.bump();
+        }
+    }
+
+    /// `sane_set_io_mode`'s status.
+    pub fn io_mode(&mut self, id: usize, non_blocking: i32) -> i32 {
+        let takes = self.script.feed.non_blocking;
+        match self.open_handle(id) {
+            Some(handle) if handle.scan.frame_open() => {
+                if non_blocking != ffi::SANE_FALSE && !takes {
+                    ffi::SANE_STATUS_UNSUPPORTED
+                } else {
+                    ffi::SANE_STATUS_GOOD
+                }
+            }
+            _ => ffi::SANE_STATUS_INVAL,
+        }
+    }
+
+    /// `sane_get_select_fd`'s status, and the descriptor with `GOOD`.
+    pub fn select_fd(&mut self, id: usize) -> (i32, Option<i32>) {
+        let fd = self.script.feed.select_fd;
+        match self.open_handle(id) {
+            Some(handle) if handle.scan.frame_open() => match fd {
+                Some(fd) => (ffi::SANE_STATUS_GOOD, Some(fd)),
+                None => (ffi::SANE_STATUS_UNSUPPORTED, None),
+            },
+            _ => (ffi::SANE_STATUS_INVAL, None),
         }
     }
 
@@ -1198,6 +1388,150 @@ mod tests {
         read_all(&mut fake, id);
         assert_eq!(control(&mut fake, id, 3, GET, Given::Nothing).status, 0);
         assert_eq!(fake.violations.len(), 1);
+    }
+
+    /// A scanning call as the export makes it: logged around the fake's
+    /// answer.
+    fn start(fake: &mut Fake, id: usize) -> Option<i32> {
+        fake.enter("t1", "sane_start", Some(id), "");
+        let status = fake.start("t1", id);
+        fake.leave("t1", "sane_start", Some(id), status, "");
+        status
+    }
+
+    fn read(fake: &mut Fake, id: usize) -> ReadAnswer {
+        fake.enter("t1", "sane_read", Some(id), "");
+        let (answer, _) = fake.read("t1", id, 1000);
+        let status = match &answer {
+            ReadAnswer::Data { .. } => ffi::SANE_STATUS_GOOD,
+            ReadAnswer::Status(status) => *status,
+            _ => ffi::SANE_STATUS_CANCELLED,
+        };
+        fake.leave("t1", "sane_read", Some(id), Some(status), "");
+        answer
+    }
+
+    fn cancel(fake: &mut Fake, id: usize) {
+        fake.enter("t2", "sane_cancel", Some(id), "");
+        fake.cancel(id);
+        fake.leave("t2", "sane_cancel", Some(id), None, "");
+    }
+
+    #[test]
+    fn a_batch_ended_with_a_cancel_breaks_no_rule() {
+        let mut fake = initialised("device fake:0 a b c\nsheets 2\n");
+        let id = opened(&mut fake);
+        for _ in 0..2 {
+            assert_eq!(start(&mut fake, id), Some(ffi::SANE_STATUS_GOOD));
+            assert!(matches!(read(&mut fake, id), ReadAnswer::Data { .. }));
+            assert_eq!(
+                read(&mut fake, id),
+                ReadAnswer::Status(ffi::SANE_STATUS_EOF)
+            );
+        }
+        assert_eq!(start(&mut fake, id), Some(ffi::SANE_STATUS_NO_DOCS));
+        cancel(&mut fake, id);
+        call(&mut fake, "t1", "sane_close", Some(id), None);
+        fake.close(id);
+        assert_eq!(fake.violations, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_batch_closed_without_a_cancel_is_caught() {
+        let mut fake = initialised(SCRIPT);
+        let id = opened(&mut fake);
+        start(&mut fake, id);
+        read(&mut fake, id);
+        read(&mut fake, id);
+        call(&mut fake, "t1", "sane_close", Some(id), None);
+        assert_eq!(
+            fake.violations,
+            ["sane_close: came with a scan pending: a batch ends with sane_cancel"]
+        );
+    }
+
+    #[test]
+    fn a_start_before_the_frames_end_and_a_read_before_any_start_are_caught() {
+        let mut fake = initialised(SCRIPT);
+        let id = opened(&mut fake);
+        assert_eq!(
+            read(&mut fake, id),
+            ReadAnswer::Status(ffi::SANE_STATUS_INVAL)
+        );
+        cancel(&mut fake, id);
+        start(&mut fake, id);
+        assert_eq!(start(&mut fake, id), Some(ffi::SANE_STATUS_INVAL));
+        assert_eq!(
+            fake.violations,
+            [
+                "sane_read: came with no frame started",
+                "sane_start: came before the frame in progress reached EOF, with no sane_cancel",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_start_answering_inval_changes_options_and_wants_them_read_again() {
+        let mut fake = initialised(
+            "device fake:0 a b c\noption height INT 4 soft-select+soft-detect\nat 1 start INVAL\nstart-inval-deactivates height\n",
+        );
+        let id = opened(&mut fake);
+        let (_, before) = fake.descriptor(id, 1).unwrap();
+        assert_eq!(start(&mut fake, id), Some(ffi::SANE_STATUS_INVAL));
+        cancel(&mut fake, id);
+        let (height, after) = fake.descriptor(id, 1).unwrap();
+        assert_ne!(height.cap & ffi::SANE_CAP_INACTIVE, 0);
+        assert_eq!(after, before + 1);
+        // Option 1 has been read again, but option 0 hasn't.
+        control(&mut fake, id, 1, ffi::SANE_ACTION_GET_VALUE, Given::Nothing);
+        assert_eq!(
+            fake.violations,
+            [
+                "sane_control_option: came after sane_start returned INVAL before every descriptor was read again (not 0)"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cancel_wakes_a_read_that_waits_for_one() {
+        let mut fake = initialised("device fake:0 a b c\nat 1 hang\n");
+        let id = opened(&mut fake);
+        start(&mut fake, id);
+        fake.enter("t1", "sane_read", Some(id), "");
+        let (answer, wait) = fake.read("t1", id, 10);
+        assert_eq!(answer, ReadAnswer::Hang);
+        let (signal, seen) = wait.unwrap();
+        let waiter = std::thread::spawn(move || signal.wait_past(seen));
+        cancel(&mut fake, id);
+        waiter.join().unwrap();
+        fake.leave(
+            "t1",
+            "sane_read",
+            Some(id),
+            Some(ffi::SANE_STATUS_CANCELLED),
+            "",
+        );
+        cancel(&mut fake, id);
+        assert_eq!(fake.violations, Vec::<String>::new());
+    }
+
+    #[test]
+    fn io_modes_and_select_fds_are_given_as_scripted() {
+        let mut fake = initialised("device fake:0 a b c\nselect-fd 7\n");
+        let id = opened(&mut fake);
+        assert_eq!(fake.io_mode(id, 0), ffi::SANE_STATUS_INVAL);
+        assert_eq!(fake.select_fd(id), (ffi::SANE_STATUS_INVAL, None));
+        start(&mut fake, id);
+        assert_eq!(fake.io_mode(id, 0), ffi::SANE_STATUS_GOOD);
+        assert_eq!(fake.io_mode(id, 1), ffi::SANE_STATUS_UNSUPPORTED);
+        assert_eq!(fake.select_fd(id), (ffi::SANE_STATUS_GOOD, Some(7)));
+        let mut other =
+            initialised("device fake:0 a b c\nnon-blocking\nparameters-status IO_ERROR\n");
+        let id = opened(&mut other);
+        start(&mut other, id);
+        assert_eq!(other.io_mode(id, 1), ffi::SANE_STATUS_GOOD);
+        assert_eq!(other.select_fd(id), (ffi::SANE_STATUS_UNSUPPORTED, None));
+        assert_eq!(other.parameters(id).0, ffi::SANE_STATUS_IO_ERROR);
     }
 
     #[test]

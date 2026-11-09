@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::{Status, ValueType, Version};
+use crate::{Parameters, Status, ValueType, Version};
 
 /// A source error, kept without naming the type of the crate it came from.
 type Source = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -254,5 +254,82 @@ pub enum Error {
         option: usize,
         /// Why.
         reason: String,
+    },
+    /// `sane_start` answered `INVAL`: the scan can't start with the options
+    /// as they're set. The standard says the device's options may have
+    /// changed, so every descriptor was read again before this was
+    /// returned ([`Handle::options`](crate::Handle::options)); `reload` is
+    /// why that failed, if it did, leaving no descriptors.
+    #[error("sane_start returned INVAL: the scan can't start with the options as set{}", match reload {
+        None => "; the descriptors were read again",
+        Some(_) => ", and the descriptors couldn't be read again",
+    })]
+    StartInvalid {
+        /// Why the descriptors couldn't be read again, if they couldn't.
+        #[source]
+        reload: Option<Box<Error>>,
+    },
+    /// `sane_read` said it gave fewer than 0 bytes, or more than it was
+    /// asked for: not trusted, and the scan was cancelled.
+    #[error("sane_read said it gave {length} bytes, asked for at most {asked}")]
+    BadReadLength {
+        /// The length SANE gave.
+        length: i32,
+        /// The length asked for.
+        asked: i32,
+    },
+    /// A frame's parameters can't stand for a frame, alone or among the
+    /// page's frames ([`Parameters::check`](crate::Parameters::check)): the
+    /// page was dropped and the scan cancelled.
+    #[error("the frame's parameters make no sense: {reason} ({parameters})")]
+    BadParameters {
+        /// The parameters, as SANE gave them.
+        parameters: Parameters,
+        /// What's wrong with them.
+        reason: String,
+    },
+    /// The frame ended (`EOF`) before the bytes its parameters promised.
+    #[error("the frame ended after {read} of its {expected} bytes")]
+    ShortFrame {
+        /// The bytes its parameters promised, padding included.
+        expected: u64,
+        /// The bytes read.
+        read: u64,
+    },
+    /// The frame went on past the bytes its parameters promised; reading
+    /// stopped there.
+    #[error("the frame ran past its {expected} bytes")]
+    LongFrame {
+        /// The bytes its parameters promised, padding included.
+        expected: u64,
+    },
+    /// A frame of unknown height ended partway into a row.
+    #[error(
+        "the frame ended {extra} bytes into a row, after {rows} rows of {bytes_per_line} bytes"
+    )]
+    PartialRow {
+        /// The whole rows read.
+        rows: u64,
+        /// The bytes of the row it ended in.
+        extra: usize,
+        /// The bytes in a row, padding included.
+        bytes_per_line: usize,
+    },
+    /// A frame of unknown height ran past
+    /// [`Limits::frame_bytes`](crate::Limits::frame_bytes); reading stopped
+    /// there.
+    #[error("the frame ran past {limit} bytes, the limit")]
+    FrameTooLarge {
+        /// The limit.
+        limit: usize,
+    },
+    /// The scan was cancelled through a [`CancelToken`](crate::CancelToken).
+    #[error("the scan was cancelled")]
+    Cancelled,
+    /// `sane_get_select_fd` answered `GOOD` with a negative descriptor.
+    #[error("sane_get_select_fd gave {fd}, which isn't a file descriptor")]
+    BadSelectFd {
+        /// What it gave.
+        fd: i32,
     },
 }
