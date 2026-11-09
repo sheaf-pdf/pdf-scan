@@ -1602,7 +1602,7 @@ standard read again). All held, and all are fixed; none refuted, none deferred. 
 20. *Local home paths in public docs, from before the branch* (major; 16 in 8 files, and six dead
     `file://` links). `9b8bd5a`, with the maintainer's name (the control file's note): 78 lines reworded,
     `git grep -i` for it finds only `LICENSE-MIT`; the checkouts by their public repositories, files in them
-    by their repository paths, and the surveys' "session scratchpad" and cargo-registry paths reworded.
+    by their repository paths, and the surveys' temporary download and cargo-registry paths reworded.
 21. *`crates/sane-dl.md` gave the plan's decisions as 49* (minor). This commit: no count given.
 22. *`status.md` said step 5's check was next* (minor). This commit: `status.md` rewritten.
 
