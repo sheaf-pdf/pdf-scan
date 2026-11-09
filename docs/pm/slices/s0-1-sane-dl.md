@@ -506,7 +506,7 @@ else the steps find.
 - **`sane.h` 1.4.0:** installed here by `libsane-dev` (`/usr/include/sane/sane.h`), byte for byte the header
   at sane-backends' tag 1.4.0 (commit `c7e4b5e3`, also fetched 2026-11-08 to `scratch/work/s0-1/sane-h/`; both
   SHA-256 `28833486…`): the bindings' source and the header contract's local run. CI's run uses Ubuntu's
-  `libsane-dev`, whatever version `ubuntu-latest` has.
+  `libsane-dev`, whatever version `ubuntu-latest` has: 1.4.0-1ubuntu1, as here, at CI's first run (Risk 1).
 - **`scanimage`** (sane-utils 1.4.0, run as a separate process): the reference frontend for step 4's
   byte-for-byte check and step 3's descriptor listing.
 - **The fake's logs:** each scenario's expected call sequence, asserted by the tests.
@@ -642,6 +642,29 @@ else the steps find.
 49. **The fake takes a sheet at the start that begins its page, whatever that start answers, and counts
     `at` by pages** (step 4: two a sheet in duplex); its checks go beyond the standard's words (a close with a
     scan pending, a start before the frame's `EOF`, a read before any start), as decisions 30 and 40 did.
+50. **The package recipe removes only its own directory** (step 5): `sane-dl-package` under `target/`, or
+    under `CARGO_TARGET_DIR` where one is set, rather than `CARGO_TARGET_DIR` itself, so a target directory
+    shared by every build (a common setting) survives `just ci`. The check's `CARGO_TARGET_DIR` at a fresh
+    `scratch/work/s0-1/package/` puts it at `package/sane-dl-package/`.
+51. **The package's list is held both ways** (step 5): nothing but sources, README, changelog, manifest and
+    lock (pdf-lint's check), and `src/lib.rs`, the README, the changelog, the manifest and the lock each
+    there, which nothing else would see missing. cargo adds a README it finds whatever `include` says, so
+    only a README gone altogether trips that one (make-fails M7 and M7b).
+52. **The changelog's entry is `0.1.0-alpha.1 (unreleased)`** (step 5), dated when the version is
+    published, which waits on review; a unit test holds that the changelog has an entry for the manifest's
+    version, so a version bump can't go unsaid.
+53. **The README's licence links are the repository's URLs on `master`**, held by a unit test, as pdf-lint's
+    are on its branch (the package holds no licence file, and a relative link would climb out of it); the
+    README's example is compiled as a doctest (`no_run`, since it needs libsane), written as a whole `main`
+    so crates.io, which shows a doctest's hidden lines, shows none (step 5).
+54. **Keywords and categories** (step 5): `sane`, `scanner`, `scanning`, `libsane`, `ffi`; `api-bindings`,
+    `external-ffi-bindings`, `hardware-support`, `os::unix-apis`. `documentation` is docs.rs.
+55. **`fake-libsane` has a spec file of its own** (`crates/fake-libsane.md`, step 5), as every crate does,
+    and a row in `plan.md`'s table: the family is eleven crates, nine published (decision 1).
+56. **The new backlog items** (step 5) are TEST-7 (Homebrew's sane-backends on macOS), FEAT-11 (an
+    authorization callback) and UP-7 to UP-10 (the `test` backend's resolution default, its hang, its -1
+    length, and `scanimage`'s 16-bit three-pass abort), each read against sane-backends' master first; the
+    upstream ones "waiting on review", as the control file's note words what waits.
 
 ## For Greg (security)
 
@@ -675,13 +698,20 @@ else the steps find.
 1. **CI's libsane isn't this machine's:** `ubuntu-latest` may ship an older sane-backends than 1.4.0, whose
    `test` or `pnm` backend behaves differently (hand-scanner with the feeder, the resolution bug, `pnm` built
    at all). The require variables make it a failure, not a skip; the tests then follow the older behaviour,
-   or the fake covers it, said.
+   or the fake covers it, said. *CI's first run (step 1's push, step 5's account) found the same SANE as
+   here: `ubuntu-latest` is `ubuntu-26.04`, with `libsane1` and `libsane-dev` 1.4.0-1ubuntu1 and both
+   backends. The risk returns only if the image moves to another sane-backends; its printed versions would
+   show it.*
 2. **The nested build of the fake** may be slow the first time, contend for cargo's package cache lock, or
    pick the wrong toolchain under `cargo +1.89`; `env!("CARGO")` and a target directory of its own are the
    answers, the first CI run the proof.
 3. **`just` on Windows** runs recipes, and the justfile's backtick variables, under Git's `sh`; S1 slice 1's
    CI never ran, and pdf-lint's CI has no Windows runner to learn from (it lints for Windows from Ubuntu).
-   If it fails, the Windows job runs the recipes' cargo lines directly.
+   If it fails, the Windows job runs the recipes' cargo lines directly. *Answered by CI's first run (step
+   1's push, step 5's account): on `windows-latest`, `just fmt`, `clippy`, `test` and `doc` ran under Git's
+   `sh`, the `doc` recipe's `RUSTDOCFLAGS` prefix and the justfile's backtick variable (`just` evaluates it
+   even for recipes that don't use it) included. The recipes added since (`sane-dl-package`) run on Ubuntu
+   only.*
 4. **rusty-fork may not fit** (its child's test name, its environment hook, output relayed); then a small
    re-execution helper of our own, said in "So far".
 5. **The cancel token's synchronization** is concurrency code over C: the race test, the fake's checks and
@@ -1316,3 +1346,105 @@ Commit: the one that carries this account.
     `LICENSE-MIT` finds the 79 lines it found at `2cde32f`, and the diff from `2cde32f` adds none. The tree
     differs from `f8370fa` in this file alone, which no build, test or gate reads (the gates leave out
     `docs/pm`), so `just ci` and the step's other checks weren't run again.
+
+### Step 5: sane-dl ready to publish; the plan's files; the slice's end (2026-11-08)
+
+Commits `5255df9` (the crate made ready to publish, its package checked) and the one that carries this account
+(the plan's files).
+
+- **What it does:**
+  - `sane-dl` 0.1.0-alpha.1, publish allowed: `documentation` (docs.rs), `keywords`, `categories` (decision
+    54) and `include = ["/src", "/README.md", "/CHANGELOG.md"]`; the lock changes only in its own version.
+    Its README: what it is (SANE alone, loaded at run time, its own bindings, everything from C checked), an
+    example, what it does, loading and each `LoadError`, the rules for threads and cancelling (one call at a
+    time, a handle on one thread, a late listing, the token and its flag, stopping after the page in
+    flight), the caps with their defaults, why SANE belongs in a process of its own (and that SANE opens any
+    installed backend by name), the platforms, and the licences at the root by the repository's URLs, with
+    `sane.h`'s public-domain notice kept in the bindings. Its `CHANGELOG.md`: the first alpha, what it holds,
+    and how to depend on an alpha (`=0.1.0-alpha.1`). Two unit tests (the licence links reach the files; the
+    changelog has an entry for the manifest's version) and the README's example as a doctest.
+  - `just sane-dl-package`, after pdf-lint's `_package`: a fresh directory of its own (decision 50),
+    `cargo publish --dry-run --locked -p sane-dl`, `cargo package --list` into `files.txt`, held to
+    sources, README, changelog, manifest and lock, and `src/lib.rs`, the README, the changelog, the manifest
+    and the lock each there (decision 51). In `just ci` (before `msrv`), and CI's `sane-dl-package` job on
+    Ubuntu, read-only and without credentials as the others. The root README says the crate is built and
+    ready to publish.
+  - The plan's files: `status.md`; `decisions.md` (the fake's home, `sane-dl`'s MSRV); `crates/sane-dl.md`
+    as built; `crates/fake-libsane.md`, new; `crates/scan-fixtures.md`, `crates/README.md`, `plan.md` (eleven
+    crates, the fake's row and place in the graph, the MSRV measured per crate) and
+    `milestones/s0-devices.md`'s slice 1 (the fake its own crate; slice 1 built); `slices/README.md`; the
+    backlog: TEST-2 with what's left (CI's run of the tests, and what it's to show), TEST-7, FEAT-11, UP-7
+    to UP-10, the table counted again with `rg` (38 open: 8 for S0, 15 for S1, 7 for S2, 8 later; 9 waiting).
+  - Tests, 215 here (212 before, all kept; 3 new: `sane-dl` unit 42, the README's doctest).
+- **Checked here:** `cargo fmt --check`; `cargo clippy --locked --workspace --all-targets -D warnings`;
+  `cargo doc -D warnings` (the recipe's); `cargo test --locked -p sane-dl` with both require variables, 172
+  passing (the fake's 43 untouched); the test list (215, the 212 of step 4 kept); `just gates` (14 binaries,
+  the new files read for the name); `cargo +1.89 check -p sane-dl --all-targets`. `just sane-dl-package` with
+  `CARGO_TARGET_DIR` at a fresh `scratch/work/s0-1/package/`, on `5255df9` (its `.cargo_vcs_info.json`
+  names it): the dry run passes, and the list read: 15 files, `.cargo_vcs_info.json`, `CHANGELOG.md`,
+  `Cargo.lock`, `Cargo.toml`, `Cargo.toml.orig`, `README.md` and the nine sources; the packaged manifest
+  inlines the workspace's lints and drops the test targets (a warning per test, expected). A check: nothing
+  was published. Every commit message of the branch read (`137be1a..HEAD`) for the downstream app's name,
+  the maintainer's, local paths and `scratch/`: none. `git grep -i` for the maintainer's name outside the
+  root `LICENSE-MIT` finds 78 lines, one fewer than step 4 left (a line of `crates/sane-dl.md` rewritten as
+  built), none added.
+  - **Make-fails** (`scratch/work/s0-1/step-5/make-fail.md`, on a detached worktree under `step-5/`, the
+    step's files committed there, since the dry run refuses uncommitted changes; removed after, the branch,
+    stash and worktree list unchanged): a licence link on `blob/main`, a relative link climbing out, the
+    changelog a version behind, the README's example broken, each failing its test or doctest; `/tests`
+    included, the changelog left out, the README deleted, `publish = false`, a stray `src/notes.txt`, each
+    failing the recipe, saying why. One couldn't fail: `include` without the README, as cargo adds the
+    README it finds (decision 51). The gates are unchanged, so step 1's make-fails stand.
+- **What CI has shown already:** its first run, on step 1's push (`db62336`, run 42550930498, 2026-11-08,
+  all five jobs green; its logs read at this step's check), before any test existed. `ubuntu-latest` is the
+  `ubuntu-26.04` image: it installs `libsane1` and `libsane-dev` 1.4.0-1ubuntu1, the version here (CI's
+  in the `amd64v3` build), and `libsane1` holds the `test` and `pnm` backends (Risk 1). `windows-latest`
+  (`windows-2025-vs2026`) ran `just fmt`, `clippy`, `test` and `doc` under Git's `sh`, the `RUSTDOCFLAGS`
+  prefix and the justfile's backtick variable included (Risk 3). `macos-latest` is `macos-26-arm64`. The
+  MSRV job installs 1.89.0.
+- **What only CI shows** (it waits on the push): the tests and the header contract against Ubuntu's
+  1.4.0-1ubuntu1 (they assert 1.4.0's behaviour, and pass here on the same version); the gates' count of
+  binaries (3 at that run, 14 here); the MSRV job with these tests (172 here on 1.89; there without libsane,
+  so its libsane tests say they skipped, decision 16); the package job, which asks crates.io; and Windows and
+  macOS building and testing this code (the fake as a DLL and a dylib, its nested build, rusty-fork's
+  children there, the abort's exit code `0xC0000409` on Windows; Risks 2 and 6).
+- **Found, correcting step 4's account:** step 4 gave the `test` backend's hang as "an asynchronous cancel"
+  landing in the allocator, but sane-backends' `sanei_thread` cancels its threads in deferred mode, glibc's
+  default, by its own comment (master at `a113b257`, read for UP-8), and the gdb backtraces step 4's notes
+  name weren't kept. The hang and its rates stand (its runs' logs are kept), and so does the tests' pacing;
+  its cause is unconfirmed, and UP-8 says so.
+- **Departures from the plan, and why:**
+  - *The package's directory under `CARGO_TARGET_DIR`*, not `CARGO_TARGET_DIR` itself (decision 50).
+  - *Added beyond the step's list:* `crates/fake-libsane.md` (decision 55); the root README's line on the
+    crate, and `README.md`'s row for `slices/`; the two unit tests and the README's doctest; the list's check
+    that those five files are there.
+  - *No README or changelog for `fake-libsane`*, which is never published: its crate docs say what it is
+    and how to drive it, and `crates/fake-libsane.md` points at them.
+- **Decisions taken alone:** 50 to 56 above.
+- **Checked** (`scratch/work/s0-1/flow/checks.md`, "Step 5", at `0767885`): `just ci` with both require
+  variables (215 tests in 14 harnesses, none skipped; the gates read 14 binaries; `sane-dl-package` 15 files;
+  `sane-dl-msrv`, 172 tests on 1.89); the test list (215; the 212 of step 4 kept, 3 new);
+  `just sane-dl-package` in a fresh directory, its file list, packaged manifest and lock read, nothing
+  published; the recipe and its CI job read, the make-fails' logs spot-read; `cargo tree` and the lock
+  unchanged but the version; the README and changelog against the code; UP-7 to UP-10 and the correction
+  against sane-backends' master at `a113b257`, fetched again; the backlog's counts; every commit message of
+  the branch; the user's cargo home unchanged. All passed but one, repaired in this commit:
+  1. *TEST-2 and this step's account of what only CI shows were out of date* (minor, docs only). CI had run
+     on step 1's push (`db62336`, run 42550930498, all five jobs green) four hours before this step, and its
+     logs answer what TEST-2, the account and Risks 1 and 3 still gave as waiting: the versions
+     `ubuntu-latest` installs (1.4.0-1ubuntu1, as here; TEST-2 still cited 24.04's 1.2.1), both backends in
+     its `libsane1`, and `just` under Git's `sh` on Windows. Cause: the step wrote CI's part from the plan
+     without looking at the run already there. Fix: TEST-2 says what that run showed and leaves the tests and
+     the header contract against Ubuntu's 1.4.0-1ubuntu1; the account above is split into what CI has shown
+     and what only it shows (those tests, the gates' count, the MSRV job with these tests, the package job,
+     Windows and macOS on this code); Risks 1 and 3 and the `sane.h` baseline say what the run found; and
+     the lines that called the run to come "CI's first run" (`crates/sane-dl.md`, `crates/fake-libsane.md`,
+     `backlog/README.md`, the milestone's slice 1) now call it CI's run of this code.
+  - *Checked again:* each fact written read again in the run's logs, saved at the check
+    (`scratch/work/s0-1/step-5/check/ci-db62336-*.log`), and the run's head, jobs and conclusion through
+    `gh run view`. A probe (`scratch/work/s0-1/step-5/repair/just-probe/`) showed `just` 1.59, the version
+    CI installs, evaluating a backtick variable when the recipe run doesn't use it, so the Windows job ran
+    the justfile's under Git's `sh`. The tree differs from `0767885` in `docs/pm` alone, which no build, test
+    or gate reads (the gates leave out `docs/pm`), so `just ci` and the step's other checks weren't run
+    again. `git grep -i` for the maintainer's name outside the root `LICENSE-MIT` finds the 78 lines it
+    found, none added.

@@ -23,7 +23,7 @@ never do (ask 7; `just gates` checks it). The repository is public, so nothing p
 | `asks.md` | Questions waiting on Greg, the recommended answer first | When work waits on a ruling |
 | `crates/` | `README.md`: the layers and an index; then a file per crate: what it does, its boundary, its dependencies, its prior art, how it's tested, what's open | Planning or building a crate |
 | `milestones/` | `README.md`, then a file per milestone (S0, S1, S2, `later.md`): its slices, what each builds and how it's checked | Planning or running a slice |
-| `slices/` | The plans of slices while they run, one file each; none yet | Running a slice |
+| `slices/` | The plans of slices while they run, one file each: S0 slice 1's, `s0-1-sane-dl.md` | Running a slice |
 | `backlog/` | Everything open, a file per kind: BUG, FEAT, DOC, TEST, Q (the plan's questions), UP (contributions to other projects) | Planning a slice; when something turns up |
 | `research/` | Surveys and assessments, a folder each (`README.md` the document, `notes/` behind it): `prior-art/` | Before deciding to build anything |
 | `pdf-lint/` | Upstream: the PDF family as pdf-scan consumes it (versions, exact pins, keeping up) and how its shortcomings are proposed back; the proposals themselves are local, in `scratch/pdf-lint/` | Before touching a family crate; when one falls short |

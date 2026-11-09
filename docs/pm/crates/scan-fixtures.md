@@ -18,7 +18,9 @@ Never published, as pdf-fixtures isn't; crates take it by path as a dev-dependen
   lay them out.
 - G3 and Modified Huffman TIFFs for BUG-2, from libtiff run as a separate process (as image-tiff made its
   own), and libtiff's sample images `fax2d.tif` and `g3test.tif`. Nothing in Rust encodes G3 or MH.
-- The fake libsane (`cdylib`), narrowed to what SANE's `test` and `pnm` backends can't do (`sane-dl`), and
-  `fake` device scripts.
+- `fake` device scripts, for `scan-device`'s `fake` backend.
+- Not the fake libsane: it was planned here, and S0 slice 1 made it `fake-libsane`, a crate of its own for
+  good (`crates/fake-libsane.md`; `decisions.md`, "Made here"). It's a shared object tests load by its path,
+  so it must carry none of the image codecs this crate takes, and no crate may depend on it.
 - Licenses checked before any outside image is vendored: zxing-cpp's sample and false-positive sets,
   BarBeR, DIBCO, DISEC'13, DocUNet (TEST-5, TEST-6).

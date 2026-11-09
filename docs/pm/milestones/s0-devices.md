@@ -21,12 +21,15 @@ S1 back: S1 can start once the Linux slices are done.
    `clippy`, `test`, `doc`, `gates`, the MSRV recipes), CI on Ubuntu, Windows and macOS, and the gates for
    what exists (the devices layer takes no image codec, imageproc, PDF crate or GUI toolkit; nothing links
    libsane; no file outside `docs/pm/` names sheaf). Then `sane-dl`: loading, bindings, the safe handle, the
-   cancel token (synchronized with close), options, frames, and the fake libsane, a never-published `cdylib`
-   of its own (`scan-fixtures`, its planned home, comes with S1), narrowed to what SANE's own backends can't
-   do. It exposes what the seam needs (`crates/sane-dl.md`, "For the seam") as SANE gives it. Its MSRV
-   measured as S1 slice 1 measured the pixel crates'. Checked: `just ci`; SANE's `test` and `pnm` backends in
-   CI and the bindings against the installed `sane.h` (TEST-2); the fake's cases; missing libsane said, not
-   a crash; each gate failing on a violation made for the check.
+   cancel token (synchronized with close), options, frames, and the fake libsane, `fake-libsane`, a
+   never-published `cdylib` crate of its own for good (not moved into `scan-fixtures` with S1:
+   `crates/fake-libsane.md`, `decisions.md`), narrowed to what SANE's own backends can't do. It exposes what
+   the seam needs (`crates/sane-dl.md`, "For the seam") as SANE gives it. Its MSRV measured as S1 slice 1
+   measured the pixel crates'. Checked: `just ci`; SANE's `test` and `pnm` backends in CI and the bindings
+   against the installed `sane.h` (TEST-2); the fake's cases; missing libsane said, not a crash; each gate
+   failing on a violation made for the check.
+   **Built** (`slices/s0-1-sane-dl.md`): `sane-dl` 0.1.0-alpha.1, ready to publish and not published, MSRV
+   1.89; its code review, and CI's run of it on the push, close the slice.
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the

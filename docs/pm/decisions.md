@@ -117,3 +117,15 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   - ask 7, the standing rules: pdf-lint's, with the first narrowed: code, crate docs, crate READMEs and commit
     messages never name sheaf (the org's name in a URL aside); `docs/pm/` may, keeping nothing private.
     `just gates` checks the files.
+- **The fake libsane is `fake-libsane`, a crate of its own for good** (S0 slice 1, 2026-11-08, its decision 1,
+  taken alone and open to review): `/crates/fake-libsane/`, a `cdylib`, never published, which no crate
+  depends on, of any kind (`just gates` checks both). It isn't moved into `scan-fixtures` with S1, where it
+  was planned: `scan-fixtures` will be a library of pages that crates take as a dev-dependency, with image
+  codecs behind it, while the fake is a shared object tests build and load by its path, and must carry none
+  of them into the process that loads it. So the family is eleven crates, ask 2's ten and this one, nine
+  published (`plan.md`, `crates/fake-libsane.md`).
+- **`sane-dl`'s MSRV is 1.89** (S0 slice 1, 2026-11-08, measured as S1 slice 1 measured the pixel crates'):
+  the highest `rust-version` in its own graph (`cargo tree -p sane-dl`, normal, build and dev, on every
+  target) is libloading 0.9.0's 1.88, below the family's floor, so 1.89. CI tests it on 1.89
+  (`sane-dl-msrv`, its pin kept in step with the manifest's `rust-version`). `fake-libsane`, with no
+  dependencies, takes the same.

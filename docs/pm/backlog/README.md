@@ -11,17 +11,19 @@ settles, and its upstream contributions.
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on Greg |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | | 5 | 1 | | 6 | |
-| feature (FEAT) | `features.md` | 1 | 2 | 2 | 5 | 10 | |
+| feature (FEAT) | `features.md` | 1 | 2 | 2 | 6 | 11 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 2 | 2 | 1 | 1 | 6 | |
+| test (TEST) | `tests.md` | 3 | 2 | 1 | 1 | 7 | |
 | question (Q) | `questions.md` | | 1 | 2 | | 3 | |
-| upstream (UP) | `upstream.md` | | 4 | 1 | 1 | 6 | 5 |
-| **all** | | **3** | **15** | **7** | **7** | **32** | **5** |
+| upstream (UP) | `upstream.md` | 4 | 4 | 1 | 1 | 10 | 9 |
+| **all** | | **8** | **15** | **7** | **8** | **38** | **9** |
 
 ## Where to start
 
-- **S0:** TEST-2 (SANE in CI) with slice 1; TEST-3 (TWAIN's sample source) with slice 7; FEAT-5 (patch
-  codes the driver reports) with the Windows backends.
+- **S0:** TEST-2 (SANE in CI), built in slice 1, closes with CI's first run of its tests; TEST-7 (Homebrew's
+  SANE on macOS) when a slice next touches `sane-dl`'s CI; TEST-3 (TWAIN's sample source) with slice 7;
+  FEAT-5 (patch codes the driver reports) with the Windows backends; UP-7 to UP-10, defects slice 1 found in
+  SANE's own `test` backend and `scanimage`, wait on review.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

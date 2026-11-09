@@ -2,12 +2,13 @@
 
 As of 2026-11-08.
 
-**Building S0 slice 1.** On its branch, the workspace, then `sane-dl`'s bindings, loading, device listing
-and handles, with the fake libsane's first cut and the header contract, then typed options with the fake's
-backend profiles and hostile descriptors, then scanning: frames assembled into pages, batches, and a
-cancel token any thread can use (step 4 of 5). It's a
-git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; `master`), holding
-`docs/pm/` alone.
+**S0 slice 1's five steps are built.** On its branch, the workspace, then `sane-dl`'s bindings, loading,
+device listing and handles, with the fake libsane's first cut and the header contract, then typed options
+with the fake's backend profiles and hostile descriptors, then scanning: frames assembled into pages,
+batches, and a cancel token any thread can use; last, `sane-dl` made ready to publish as 0.1.0-alpha.1
+(its README, changelog and package checked by `just sane-dl-package` and a CI job) and the plan's files
+brought up to date. Not published. It's a git repository at github.com/sheaf-pdf/pdf-scan (`master`
+pushed on 2026-11-08 at the slice's step 1, so another machine can start TWAIN work from it).
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -42,8 +43,10 @@ git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; 
     `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it; 6
     and 7 taken as S0 slice 1 starts.
 - **Running: S0 slice 1, `sane-dl` and the workspace it starts**, on branch `s0-1-sane-dl`, through the
-  `scan-slice` workflow (`.claude/workflows/scan-slice.js`, local): its plan in `slices/`, a commit per step
-  on the branch, nothing pushed.
+  `scan-slice` workflow (`.claude/workflows/scan-slice.js`, local): its plan in `slices/s0-1-sane-dl.md`, a
+  commit per step on the branch, the branch not pushed. Its five steps are built, the first four checked
+  here (the fifth's check next); the backlog has its new items (TEST-7, FEAT-11, and UP-7 to UP-10, four
+  upstream reports that wait on review) and TEST-2's rest, CI's run.
 - **Next:** the slice's run, its code review and fixes; then Greg's review, and on his word the push and the
   pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note revised.
 - **Waiting on Greg:** the slice's review and its push; `asks.md`, ask 5 (ask 2 taken as S0 slice 1 started,
