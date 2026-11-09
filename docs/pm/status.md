@@ -2,12 +2,12 @@
 
 As of 2026-11-08.
 
-**S0 slice 1 is done on its branch, `s0-1-sane-dl`,** waiting on review and the push. The workspace, then
-`sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`, devices under a
-deadline, typed options, frames assembled into pages, batches, a cancel token any thread can use), ready to
-publish and not published, with `fake-libsane` for its tests; its code review's 22 findings all fixed. It's a
-git repository at github.com/sheaf-pdf/pdf-scan (`master` pushed on 2026-11-08 at the slice's step 1, so
-another machine could start TWAIN work from it).
+**S0 slice 1 is done on its branch, `s0-1-sane-dl`, pushed, in pull request #2,** waiting on review. The
+workspace, then `sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`,
+devices under a deadline, typed options, frames assembled into pages, batches, a cancel token any thread can
+use), ready to publish and not published, with `fake-libsane` for its tests; its code review's 22 findings all
+fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged (pull request #1). It's a git
+repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -42,14 +42,17 @@ another machine could start TWAIN work from it).
     twelve slices, Linux then Windows; S1 and S2 follow. The workspace S1 slice 1 had built (stashed; copied
     into `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it;
     6 and 7 taken as S0 slice 1 starts.
-- **Done on the branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
-  `137be1a` to the branch's head), through the `scan-slice` workflow (local): five steps, each checked, and
-  the code review's fixes. Not pushed.
+- **Done: S0 slice 7, the TWAIN spike** (`slices/s0-7-twain-spike.md`), on the Windows machine, merged
+  with pull request #1: the sample source installed silently (there and on `windows-latest`), TWAIN walked
+  from state 1 to 7 and back in both bitnesses, native and memory transfers equal pixel for pixel, a cancel
+  from another thread; the seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
+- **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
+  `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
+  (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
 - **Waiting on review:** the slice (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10), then on the maintainer's word the push and the pull request, and CI's run on Ubuntu,
-  Windows and macOS, which closes TEST-2 and TEST-8. GitHub's `master` has moved past `db62336` since the
-  push (the TWAIN spike's branch merged there), so the push takes that history in. Also: `asks.md`, ask 5;
-  UP-7 to UP-11, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK; PL-4, which first
-  needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 2, the seam note revised from what slice 1 learned of SANE (its plan's "So far", steps 2
-  and 4, and "Code review").
+  (security)", 10), and CI's run on Ubuntu, Windows and macOS, which closes TEST-2 and TEST-8. Also:
+  `asks.md`, ask 5; UP-7 to UP-11, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
+  PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
+- **Next:** S0 slice 2, the seam note's SANE rows revised from what slice 1 learned of SANE (its plan's "So
+  far", steps 2 and 4, and "Code review"), on top of slice 7's TWAIN rows; then slices 3 and 4 on Linux.
+  Slice 8 (`twain-dsm`) can follow slice 7 on Windows.

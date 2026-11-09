@@ -81,6 +81,10 @@ Driver-reported patch codes are a small optional addition. TWAIN 2.5 defines `IC
 
 ### twain-dsm: definitions from MIT TWAIN.cs, the state machine's shape from RSWebTWAIN
 
+**Correction** (S0 slice 7, 2026-11-08): the definitions are in `TWAINH.cs`, twain-cs's translation of
+`twain.h`, under the same MIT notice; `TWAIN.cs` is the wrapper over them. Read "`TWAINH.cs`" for "`TWAIN.cs`"
+where this survey means the definitions (`crates/twain-dsm.md`).
+
 Nothing in Rust is usable. `twain` 0.1.0 (2021) loads `./lib/windows/TWAINDSM.dll` relative to the working directory. It passes an immutable local as the out-pointer the data source writes through, and never calls `GlobalLock`. It also bundles the DSM and Qt's `qwindows.dll` inside an MIT crate, without their LGPL text ([crate source](https://static.crates.io/crates/twain/twain-0.1.0.crate)).
 
 RSWebTWAIN, an alpha Tauri tray app with no stars, is the only Rust code with the planned shape: a 64-bit app plus a 32-bit sidecar speaking JSON lines. Its seven state structs, which consume `self` and step down on `Drop`, are worth porting as a design ([RSWebTWAIN](https://github.com/seancampbell3161/RSWebTWAIN)). Its code is not. It keeps two hand-copied bindings files from `twain.h` 2.3, which its own test says "have silently diverged before". It passes a Rust `Box` pointer as `hContainer`, where TWAIN expects a handle from `GlobalAlloc`. Its memory transfer is uncompressed only and ignores tile offsets. And it needed a fix to six wrong constants as recently as September 2026.

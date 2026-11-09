@@ -5,6 +5,7 @@ resolver = "3"
 members = [
     "crates/sane-dl",
     "crates/fake-libsane",
+    "crates/twain-spike",
 ]
 
 # No [workspace.dependencies] yet: it holds what more than one member takes,

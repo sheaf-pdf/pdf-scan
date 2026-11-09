@@ -15,6 +15,7 @@ None is published yet.
 |---|---|
 | `sane-dl` | SANE, the scanner API of Linux and the other Unix-like systems, with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled into images, a cancel token any thread can use. 0.1.0-alpha.1, not yet published ([README](crates/sane-dl/README.md)) |
 | `fake-libsane` | A stand-in for libsane that `sane-dl`'s tests load: scripted devices, hostile values, SANE's calling rules checked (never published) |
+| `twain-spike` | A throwaway program that drives TWAIN on Windows through the TWAIN Working Group's sample data source, in both bitnesses, and checks what it sees; replaced by `twain-dsm`'s own tests (never published) |
 
 Next: `scan-device`, a device model over each system's driver API (SANE, then TWAIN and WIA) with a fake for
 tests; `scan-worker`, which runs drivers in a process of their own; and `twain-dsm`, TWAIN through the

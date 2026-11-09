@@ -189,6 +189,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "twain-spike"
+version = "0.0.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

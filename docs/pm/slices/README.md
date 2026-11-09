@@ -6,5 +6,8 @@ holds them: planned, reviewed, built in steps, code-reviewed, fixed. When a slic
 here says how.
 
 Done on its branch, waiting on review: [`s0-1-sane-dl.md`](s0-1-sane-dl.md), S0 slice 1, `sane-dl` and the
-workspace it starts (its five steps built and checked, its code review's findings fixed; it moves to
-`archive/slices/` once pushed and CI has run).
+workspace it starts (its five steps built and checked, its code review's findings fixed; pull request #2,
+and it moves to `archive/slices/` once merged).
+
+S0 slice 7, the TWAIN spike, [`s0-7-twain-spike.md`](s0-7-twain-spike.md), ran on the Windows machine and is
+merged (pull request #1).
