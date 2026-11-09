@@ -526,6 +526,29 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
 25. **A fake child's loader variable holds no empty entry** (step 2, from step 1's check): `split_paths` of an
     unset variable gives one empty entry, which the loader reads as the working directory, so it's left out; the
     child's search is then the fake's directory and what the parent was given, as security item 1 advises.
+26. **The slot's name holds the pid namespace's device and inode** (step 3), which together identify a
+    namespace (namespaces(7)); the plan had the inode alone. The name, fixed for good:
+    `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>`, or `sane-dl/slot/pidns/none/pid/<pid>` where
+    `/proc/self/ns/pid` can't be read (as planned: two processes with one pid sharing a network namespace then
+    collide, a refusal). The nsfs device is 5 here, so the device isn't a constant to leave out.
+27. **The new variant is `LoadError::SlotRefused(io::Error)`** (step 3), the system's error its source. It exists
+    on every system, so the enum is the same everywhere, and is returned on Linux alone. A name
+    `from_abstract_name` refused would be the same variant; none can be (the longest is 75 bytes of the 107
+    allowed, a unit test).
+28. **Two guards in one `Slot`** (step 3): this copy's atomic (`CopySlot`) taken first, then the process's
+    socket, freed in the reverse order by the fields' drop order. The atomic stays: two threads of one copy
+    never race for the socket, and on macOS and the BSDs it's the only guard.
+29. **The system's refusal tested by exhausting a child's descriptors** (step 3), a fourth integration test
+    beyond the plan's three, since no test can make a sandbox: the child lowers its own `RLIMIT_NOFILE` to 256
+    with util-linux's `prlimit --pid` (std has no `setrlimit`, and the tests take no `unsafe` or dependency for
+    it), opens `/dev/null` until `EMFILE`, and loads: `SlotRefused` carrying `EMFILE`, nothing opened, then the
+    fake loads once descriptors are free. Skipped, saying why, where `prlimit` isn't there or the limit
+    doesn't take.
+30. **The docs no longer say `links` keeps a program to one copy** (step 3): it refuses two versions of the crate
+    in one build, but each shared library built with the crate holds a copy of its own, even two from one build
+    (the probe built its two apart). The crate docs, the README, the changelog and the manifest's comment say
+    so, then the slot on Linux, and the program's rule elsewhere and across what the slot can't see (security
+    item 7).
 
 ## For review (security)
 
@@ -552,6 +575,20 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
    runs, and nothing of it is called.
 6. **The gate reads the host's view only:** items behind another system's `cfg` aren't in its JSON (in `sane-dl`,
    constants); `twain-dsm`'s Windows items wait on TEST-12.
+7. **What the slot can't see** (step 3): the name lives in the process's network namespace and is formed from
+   what `/proc` shows it, so a process that moves itself to another network namespace (`unshare`, `setns`)
+   between two copies' loads, or loses `/proc` (a `chroot`, a mount namespace) so its second copy forms the
+   `none` name, would let SANE start twice. Each takes privilege, or a user namespace, and a deliberate step
+   between the loads, and std's `chroot` is safe: so the program's rule stays for that case, said in
+   `Sane`'s docs and the README. Refusing a load where `/proc` can't be read would close the second half and
+   deny SANE to a process without `/proc`; the first half has no answer here.
+8. **The slot's name is visible within the network namespace** (step 3): any process there can list abstract
+   names (`ss -xl`, `/proc/net/unix`), and so see which pids have SANE loaded; the name says nothing more.
+   Nothing is read from the socket: datagrams sent to it queue unread within the kernel's per-socket bound
+   until it closes.
+9. **A sandbox that mediates socket names** (step 3): AppArmor can deny binding an abstract name, and a strictly
+   confined snap's profile may deny this one. The load is then `SlotRefused` (the error isn't `AddrInUse`),
+   never SANE unguarded, until the profile allows `@sane-dl/slot/**`. Untried here.
 
 ## Risks
 
@@ -788,7 +825,7 @@ item searched and read for a rule asked of the caller:
 | `Sane::load()`, one copy | `links` within a build; across builds still the program's rule, in `Sane`'s docs, until step 3 (Linux) |
 | `Sane`, `Handle`, `CancelToken` | Bound by types: the list's auto line gives `Sane` and `CancelToken` `Send, Sync`, `Handle` `Send, !Sync`, `Batch` `Send, !Sync` |
 | `Handle::select_fd` | A `RawFd` ("never close it, read it, or keep it past then"): advice, since any use of it is the caller's own `unsafe` |
-| `ConfigDir::write` | "must exist and be an absolute path": checked, `ConfigError::BadPath`; "a directory private to the process": advice for security, no soundness at stake |
+| `ConfigDir::write` | "must exist and be an absolute path": absoluteness checked, `ConfigError::BadPath`, and a missing directory `ConfigError::Io` (corrected after step 2's check); "a directory private to the process": advice for security, no soundness at stake |
 | `ffi`'s function types, `SANE_Auth_Callback` | `pub(crate)`: not in the list, and no unsafe function pointer anywhere in it |
 | `ffi`'s structs and union | Raw pointers in public fields, plain data (`!Send, !Sync` in the list); a union's field is read only in `unsafe` |
 | Advice elsewhere | List devices in a process of their own (calls wait, never UB); whether a batch goes on after an error, and stopping after the page in flight, are the caller's (`Batch` and `Handle` end a pending scan with `sane_cancel` when dropped) |
@@ -821,3 +858,71 @@ failing it too; `SaneStrstatusFn`'s return changed to `SANE_String`, which the l
 the header contract failing to compile at its row for it. Left to the step's checking agent: `just ci` whole,
 `clippy --all-targets` and `doc` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, the `SAFETY:` comments
 read against their calls.
+
+**Step 2's check** (2026-11-09, at `53eb916`, by the checking agent; its record is local, `scratch/work/s0-1a/flow/
+checks.md`): passed. `just ci` with both require variables green (246 tests; the gate's first run in `ci`: 1,651
+items read, 129 public by path, 266 functions, none unsafe; `sane-dl` and `twain-dsm` on 1.89; the package's 16
+files); the test list as step 1's but the README doctest's line; the gate's list read whole, and every public
+item's docs for a rule asked of the caller, none whose breach is undefined behaviour; `mem::forget` of each
+owning type a leak at worst; the gate's make-fails redone apart (twelve plants: ten failures named, the two
+`unsafe impl`s listed, and a `pub static mut`, which passed: below), the shape check failing alone; the header
+contract failing on `SaneExitFn`'s return changed; `clippy` and `doc` for `x86_64-pc-windows-gnu` and
+`x86_64-apple-darwin` green; the package and the gate under another `CARGO_TARGET_DIR` green. Low findings, left
+for the code review or a fix: the gate doesn't fail a `pub static mut` or an extern static, every use of which is
+the caller's `unsafe` (`sane-dl` has no public static); the list doesn't mark the compiler's `unsafe impl
+TrivialClone` from `derive(Clone)` on a `Copy` type (no impl fails, so no verdict changes); a failed run leaves
+the last list in place. Nits: a 102-column doc line in `/crates/sane-dl/tests/header_contract.rs`; the table above
+had `ConfigDir::write`'s "must exist" checked as `BadPath` (corrected there).
+
+### Step 3: one SANE per process, whatever copies of the crate it holds (Linux) (2026-11-09)
+
+One commit, this one, which holds this record.
+
+- **The process's slot:** `/crates/sane-dl/src/process_slot.rs`, `#![forbid(unsafe_code)]`, declared in `lib.rs`
+  under `cfg(target_os = "linux")`. `ProcessSlot::take` binds a Unix datagram socket (`UnixDatagram::bind_addr`)
+  to an abstract name (`SocketAddr::from_abstract_name`) formed from `/proc/self/ns/pid`'s device and inode and
+  the pid (decision 26), the rule's comment saying it's fixed for good. `AddrInUse` is `AlreadyLoaded`; any other
+  refusal is the new `LoadError::SlotRefused` (decision 27).
+- **In `library.rs`:** the per-copy atomic's guard is `CopySlot`; `Slot` holds the process's slot (Linux) and
+  this copy's, takes this copy's first, and frees them in reverse (decision 28). `Sane::start` takes it before
+  `Api::load` opens anything; it's a local of `start` until `Shared` takes it, and `Shared` drops it after
+  `sane_exit`, as before, so the socket closes after `sane_exit` and on every failed load. `start`'s `sane_init`
+  `SAFETY:` comment says the slot covers every copy on Linux and one copy elsewhere, by the docs' rule. The
+  step's diff adds no `unsafe`.
+- **Docs:** `AlreadyLoaded` (by this or another copy; on Linux also a forked child's hold, or the name bound
+  first by another process) and `SlotRefused`; `Sane`'s "One per process" (`links` within a build, but each
+  shared library built with the crate a copy of its own; the slot on Linux, and what it can't see; the
+  program's rule on macOS and the BSDs: decision 30, security item 7); the crate docs' loading line; the
+  README's error list and its paragraph on copies; the changelog's loading entry and its "Changed before the
+  release" paragraph; the manifest's comment on `links`.
+- **Tests:** unit tests in `process_slot`: the name's rule for given inputs, pinned; the longest name a valid
+  abstract address; this process's pid namespace readable. Integration tests in
+  `/crates/sane-dl/tests/loading.rs`, Linux only, each in a child, binding the name by the same rule
+  (`bind_slot`): `a_slot_bound_first_refuses_the_load_before_the_library_opens` (`AlreadyLoaded`, nothing by
+  SANE's name in `/proc/self/maps`, no fake log; once the test's socket is dropped the fake loads, and its log
+  holds one `sane_init` and one `sane_exit`); `the_slot_is_held_until_sane_and_its_handles_are_gone` (the
+  test's bind `AddrInUse` while SANE is loaded and while a handle outlives the `Sane`, free once it's gone,
+  and then, held by the test, the next load `AlreadyLoaded`); `a_refused_load_frees_the_slot` (after an `Init`
+  failure and after a refused version); `a_socket_the_system_refuses_refuses_the_load` (decision 29).
+
+**Departed from the plan:** the name holds the namespace's device beside its inode (decision 26); a fourth
+integration test, for the new variant (decision 29); the docs say `links`'s reach more exactly than the plan's
+"cargo within a build" (decision 30), and say what the slot can't see (security item 7).
+
+**Checked here** (records in `scratch/work/s0-1a/step-3/`): `cargo fmt --check`; `cargo clippy --workspace
+--all-targets -D warnings`; `cargo clippy -p sane-dl --all-targets -D warnings` and `cargo doc -D warnings` for
+`x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, and `cargo doc -D warnings` on the host, private items too;
+`sane-dl`'s and `fake-libsane`'s tests with both require variables, 228 passed. The test list: 253, step 2's 246
+and the seven new tests, none lost, the README's doctest now at line 188 of `lib.rs`. `just public-api`: 1,653
+items of the crate's own, 129 public paths, none unsafe; the list differs from step 2's by `variant SlotRefused`
+and its `field 0` alone. The two-copies probe (`scratch/work/s0-1a/step-3/two-copies/`, not committed: two
+`cdylib`s, each its own workspace and target, each taking `sane-dl` by path, and a host that opens both and
+calls each): at `53eb916` both copies loaded, and the fake's log showed a second `sane_init` with its violation,
+"called again before sane_exit"; with the step, the second copy's load is `AlreadyLoaded`, and the log has one
+`sane_init` and no violation. Make-fails, on a worktree removed after (the branch unchanged), each failing at
+least one of the step's tests for the reason planted: the slot's module undone, the per-copy atomic alone (three
+of the four integration tests fail; the fourth checks freeing, which needs a slot to free); the socket leaked,
+never freed; this copy's atomic kept when the process's slot is refused; `AddrInUse` taken as `SlotRefused`;
+another refusal taken as `AlreadyLoaded`; the name's rule changed. Left to the step's checking agent: `just ci`
+whole (the gates, the MSRV build and tests on 1.89, the package), the `SAFETY:` comment changed, read against its
+call.

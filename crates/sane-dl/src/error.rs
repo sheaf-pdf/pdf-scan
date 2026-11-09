@@ -46,10 +46,22 @@ pub enum LoadError {
     /// (`sane_exit`) before this was returned.
     #[error("the library follows SANE {0}, and only SANE 1 is supported")]
     UnsupportedVersion(Version),
-    /// SANE is already loaded in this process: one [`Sane`](crate::Sane) at
-    /// a time, since SANE is started once per process.
+    /// SANE is already loaded in this process, by this or another copy of
+    /// this crate: one [`Sane`](crate::Sane) at a time, since SANE is
+    /// started once per process. Another copy's load is seen on Linux only
+    /// (`Sane`'s "One per process"), where this is also what a load gets
+    /// while a child the process forked holds the slot (until it runs a
+    /// program or ends), or if another process has bound the slot's name
+    /// first.
     #[error("SANE is already loaded in this process")]
     AlreadyLoaded,
+    /// The system refused the socket that keeps SANE to one per process
+    /// across every copy of this crate (Linux), as a sandbox that forbids
+    /// Unix sockets or binding its name would, or a process out of file
+    /// descriptors: so nothing was loaded, rather than SANE loaded
+    /// unguarded. Never on other systems.
+    #[error("couldn't take this process's slot for SANE, so nothing was loaded")]
+    SlotRefused(#[source] std::io::Error),
 }
 
 fn list_paths(paths: &[PathBuf]) -> String {

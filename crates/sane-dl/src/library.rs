@@ -187,26 +187,50 @@ impl Api {
     }
 }
 
-/// Whether this process has a live [`Sane`]: from before its `sane_init`
-/// until after its `sane_exit` has returned.
+/// Whether this copy of the crate has a live [`Sane`]: from before its
+/// `sane_init` until after its `sane_exit` has returned.
 static LOADED: AtomicBool = AtomicBool::new(false);
 
-/// The process's one slot, held from before `sane_init` until after
-/// `sane_exit`, and freed when dropped.
-struct Slot(());
+/// This copy's hold on [`LOADED`], freed when dropped.
+struct CopySlot(());
 
-impl Slot {
-    fn take() -> Result<Slot, LoadError> {
+impl CopySlot {
+    fn take() -> Result<CopySlot, LoadError> {
         LOADED
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .map(|_| Slot(()))
+            .map(|_| CopySlot(()))
             .map_err(|_| LoadError::AlreadyLoaded)
     }
 }
 
-impl Drop for Slot {
+impl Drop for CopySlot {
     fn drop(&mut self) {
         LOADED.store(false, Ordering::Release);
+    }
+}
+
+/// The process's one slot, held from before the library opens until after
+/// `sane_exit`, and freed when dropped: this copy's, and on Linux the
+/// process's across every copy of the crate it holds (`ProcessSlot`).
+/// Elsewhere a copy sees only its own.
+struct Slot {
+    // Fields drop in the order written: the process's slot is freed before
+    // this copy's, the reverse of how they're taken.
+    #[cfg(target_os = "linux")]
+    _process: crate::process_slot::ProcessSlot,
+    _copy: CopySlot,
+}
+
+impl Slot {
+    /// Takes this copy's slot, then the process's; if the second is
+    /// refused, the first is freed again as `copy` drops.
+    fn take() -> Result<Slot, LoadError> {
+        let copy = CopySlot::take()?;
+        Ok(Slot {
+            #[cfg(target_os = "linux")]
+            _process: crate::process_slot::ProcessSlot::take()?,
+            _copy: copy,
+        })
     }
 }
 
@@ -915,10 +939,27 @@ const DEFAULT_LIBRARIES: &[&str] = &[];
 ///
 /// **One per process.** SANE is started once per process, so a second load
 /// while one `Sane` lives is [`LoadError::AlreadyLoaded`]; once the first has
-/// ended, another may load. A program holds one copy of this crate: cargo
-/// refuses two versions of it in one build (its manifest's `links` key), as
-/// each would count its own. `Sane` is `Send` and `Sync`, and clones share
+/// ended, another may load. `Sane` is `Send` and `Sync`, and clones share
 /// the one instance.
+///
+/// That holds across copies of this crate as far as each system lets it be
+/// seen. Cargo refuses two versions of the crate in one build (its
+/// manifest's `links` key), but every shared library built with it holds a
+/// copy of its own, so a process that loads two such libraries holds two
+/// copies. On Linux every copy takes one slot for the whole process before
+/// the library opens: a Unix socket bound to a name formed from the
+/// process's id and pid namespace, in Linux's abstract socket namespace,
+/// which the system frees when SANE has ended or the process ends. So a
+/// second copy's load is `AlreadyLoaded` too, as is a load while a child
+/// this process forked still holds the slot (until the child runs a program
+/// or ends). Where the system refuses the socket (a sandbox that forbids
+/// Unix sockets, or binding that name), the load is
+/// [`LoadError::SlotRefused`], never SANE unguarded. The slot can't see
+/// across a change, between two copies' loads, of the process's network
+/// namespace (where the name lives) or of its view of `/proc` (which the
+/// name is formed from), so a program that makes one keeps to one copy. On
+/// macOS and the BSDs a copy sees only its own loads, so a program there
+/// keeps to one copy of this crate in a process.
 ///
 /// **One call at a time.** SANE lets no call overlap another but
 /// `sane_cancel`, so every call through this instance takes its one lock,
@@ -1008,6 +1049,9 @@ impl Sane {
         // SAFETY: this caller holds the process's slot, so no other `Sane`
         // lives and the last one's `sane_exit` has returned: nothing else
         // calls SANE, and this `sane_init` follows no other unended one.
+        // That holds across every copy of this crate in the process on
+        // Linux, where the slot is the process's; elsewhere within this
+        // copy, and a program holds one copy there (`Sane`'s docs).
         // `code` is valid for SANE's write; no authorization callback is
         // given.
         let status = Status(unsafe { (api.init)(&mut code, None) });
@@ -1816,8 +1860,9 @@ mod tests {
             Err(LoadError::NotFound { tried, .. }) => assert_eq!(tried, names),
             other => panic!("expected NotFound, got {other:?}"),
         }
-        // The slot was freed: a second try gets as far as the loader again,
-        // rather than `AlreadyLoaded`.
+        // The slot (this copy's, and on Linux the process's) was freed: a
+        // second try gets as far as the loader again, rather than
+        // `AlreadyLoaded`.
         // SAFETY: as above.
         let again = unsafe { Sane::start(&names) };
         assert!(
@@ -1853,8 +1898,9 @@ mod tests {
             Err(LoadError::MissingSymbol { name, .. }) => assert_eq!(name, "sane_init"),
             other => panic!("expected MissingSymbol, got {other:?}"),
         }
-        // The slot was freed: a second try is refused for the library again,
-        // rather than `AlreadyLoaded`.
+        // The slot (this copy's, and on Linux the process's) was freed: a
+        // second try is refused for the library again, rather than
+        // `AlreadyLoaded`.
         // SAFETY: as above.
         let again = unsafe { Sane::start(&names) };
         assert!(

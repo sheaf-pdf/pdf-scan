@@ -47,7 +47,9 @@
 //!   chooses another: the process that loads SANE is given the loader's
 //!   search path as it starts ([`Sane::load`] says how, and why loading is
 //!   safe). Then `sane_init`, and a version other than SANE 1 is refused.
-//!   One [`Sane`] per process, since SANE is started once per process.
+//!   One [`Sane`] per process, since SANE is started once per process: on
+//!   Linux whatever copies of this crate the process holds, elsewhere
+//!   within one copy ([`Sane`] says how).
 //! - **Calls never overlap:** every call through a [`Sane`] or its handles
 //!   takes one lock, as SANE requires of every function but `sane_cancel`.
 //! - **Devices under a deadline:** [`Sane::devices`] lists them on a thread
@@ -100,6 +102,8 @@ mod error;
 pub mod ffi;
 mod library;
 mod options;
+#[cfg(target_os = "linux")]
+mod process_slot;
 mod scan;
 mod status;
 

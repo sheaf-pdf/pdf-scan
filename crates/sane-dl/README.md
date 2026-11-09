@@ -87,7 +87,9 @@ Loading happens only when asked for, and fails with a `LoadError`:
 - `MissingSymbol`: the library found under SANE's name lacks one of SANE's functions, so it isn't SANE;
 - `Init`: `sane_init` answered a status other than `GOOD`;
 - `UnsupportedVersion`: the library follows a SANE other than version 1 (it's ended before this returns);
-- `AlreadyLoaded`: SANE is already loaded in this process.
+- `AlreadyLoaded`: SANE is already loaded in this process, by this or another copy of this crate (below);
+- `SlotRefused`: on Linux, the system refused the socket that keeps SANE to one per process (a sandbox that
+  forbids Unix sockets or binding its name, or no file descriptor left), so nothing was loaded.
 
 There's one `Sane` per process, since SANE is started once per process; once it and every handle opened from
 it are gone, SANE is ended (`sane_exit`) and another may load. A load that fails leaves nothing behind. The
@@ -108,8 +110,17 @@ the variable comes too late: the loader reads it as the process starts. So a pro
 worker process sets it on the worker's command, as it sets `SANE_CONFIG_DIR`. The loaders ignore these
 variables in a set-id process, and dyld in a process it restricts, such as one under the hardened runtime.
 
-A program holds one copy of this crate: its manifest's `links` key makes cargo refuse two versions of it in
-one build, since each would start SANE as if it were alone.
+That holds across copies of this crate as far as each system lets it be seen. Its manifest's `links` key
+makes cargo refuse two versions of it in one build, but every shared library built with it holds a copy of
+its own, so a process that loads two such libraries holds two copies, each of which would start SANE as if
+it were alone. On Linux every copy takes one slot for the whole process before the library opens: a Unix
+socket bound to a name in the abstract namespace, formed from the process's id and pid namespace, which the
+system frees when SANE has ended or the process ends. So a second copy's load is `AlreadyLoaded`, as is a
+load while a child the process forked still holds the slot (until it runs a program or ends), and where the
+system refuses the socket the load is `SlotRefused`, never SANE unguarded. The slot can't see across a
+change, between two copies' loads, of the process's network namespace (where the name lives) or of its view
+of `/proc` (which the name is formed from), so a program that makes one keeps to one copy. On macOS and the
+BSDs a copy sees only its own loads, so a program there keeps to one copy of this crate in a process.
 
 ## Threads, and cancelling
 
