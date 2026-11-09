@@ -4,6 +4,7 @@
 ///
 /// A batch that fails keeps the pages it sent before the error.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ScanError {
     /// The feeder was empty as the batch began, before any page; after pages, a batch ends as

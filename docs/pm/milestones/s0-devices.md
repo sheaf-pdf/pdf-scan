@@ -54,9 +54,9 @@ what changed. Checked: `just ci`; the soundness review (the code review's soundn
 and `SAFETY:` comment, the private loader's contract and its call sites, each public item's docs); the gate over
 the public API (no `unsafe` function, method or trait, and no raw or unsafe function pointer in a public
 signature), made to fail on violations made for the check; the publish dry run. Plan:
-`slices/s0-1a-sane-dl-safe-api.md`.
-**Done on the branch** (2026-11-09; `slices/s0-1a-sane-dl-safe-api.md`): branch `s0-1a-sane-dl-safe-api`, from
-`3f33be5`, the code to `1a94bee`: four steps, each checked, then the code review's 22 findings, all fixed. No
+`archive/slices/s0-1a-sane-dl-safe-api.md`.
+**Done, and merged 2026-11-09** (pull request #7, squashed as `42e4227`; `archive/slices/s0-1a-sane-dl-safe-api.md`):
+branch `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`: four steps, each checked, then the code review's 22 findings, all fixed. No
 public item of `sane-dl` is `unsafe`: `Sane::load_from` is gone, the library the system loader's choice alone
 (shape 1 of the eight weighed), another SANE loaded through the loader's own search path; the tests load
 `fake-libsane` through `Sane::load()`, the fake's tests ignored on Windows, saying why; `ffi`'s function types
@@ -68,9 +68,10 @@ code review found what `Sane::load`'s safety rests on beyond the loader: the pro
 environment, kept to two rules its docs now give (the search path's entries absolute; the library path's
 variables never changed inside a process using SANE, whose `dll` reads them at each backend load). To review:
 the plan's "Decisions taken alone, for review" (40; decision 33, that environment rule, above all) and "For
-review (security)" (11), Q-7 and UP-14. Pushed, in pull request #7 (`master` merged in after #6), waiting on
-CI's run on the three systems (TEST-15; macOS's fake tests through `DYLD_LIBRARY_PATH`, TEST-7). Its TEST-12 is TEST-14, slice 3 having merged
-first.
+review (security)" (11), Q-7 and UP-14. CI's run of pull request #7 is green on all eleven jobs (run
+42648083514), which closed TEST-15: on Windows the fake's tests ignored with their reason, on macOS run through
+`DYLD_LIBRARY_PATH` and passing (TEST-7 stays open for Homebrew's SANE). Its TEST-12 is TEST-14, slice 3 having
+merged first.
 
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
@@ -99,9 +100,11 @@ first.
    taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
    row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
    copy (an image codec added to `scan-device`).
-   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), pushed, in pull request #6, waiting on
-   review and CI: branch `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes),
-   then the record, and `master` merged in after #5; four steps, each checked, then its code review's 18 findings (15 distinct, 1 major) all fixed.
+   **Done, merged 2026-11-09** as pull request #6 (squashed `5a4bff2`; `archive/slices/s0-3-scan-device.md`), CI
+   green on it (the run on `master` at `5a4bff2`, 42644985306, all ten jobs: TEST-13 closed): branch
+   `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes), then the record, and
+   `master` merged in after #5; four steps, each checked, then its code review's 18 findings (15 distinct, 1
+   major) all fixed.
    `scan-device` 0.0.0, unpublished, MSRV 1.89: the note's model type for type, nothing renamed, with a
    constructor for each `#[non_exhaustive]` struct, `RawImage::data_len` and `Debug` by hand for `Opened` besides
    (`crates/scan-device.md`); the `fake` feature, turned on for the crate's tests by a dev-dependency on itself,
@@ -129,6 +132,36 @@ first.
    finished, none fed after), a version mismatch, a page cut short; the raw layout across the pipe byte for byte;
    throughput of 300 dpi pages in color and black and white at 2.3 a second (M5 slice 6's gate, its pipe's
    share), measured on every run.
+   **Done on the branch** (2026-11-09; `slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
+   at `5a4bff2`, to `510d349` (the code review's fixes), then the record; five steps, each checked, then its
+   code review's 20 findings (5 major), 18 fixed whole and two in part, their other halves deferred (FEAT-16,
+   FEAT-17), none refuted. Pushed with `master` merged in after #7, in pull request #8, waiting on review and
+   CI. `scan-worker` 0.0.0, unpublished,
+   MSRV 1.89, no `unsafe` (`crates/scan-worker.md`): the protocol as the seam note asks it, the model's types
+   through a new `serde` feature of `scan-device` (every variant round-tripped, a variant added failing the
+   build until it's listed), a page's header, `Event`'s and `Pixels`' variants and a message's level carried
+   by name (Q-8); `serve`, its batch's events through a channel that holds none, the end of its input a
+   cancel and a quit, and an abort 10 s later should a driver's call hang; the client, a worker for each
+   listing and each open device in a private directory (a SANE open's holding the id's one-backend
+   `ConfigDir`), every line and page capped and checked before it's read, its own `Error`, and its watchdog,
+   the kill after a cancel counted from the later of the cancel and the worker's last line; and the fake's
+   `Fault::AwaitCancel`, so a cancel lands mid-page by the script. Checked here through a test worker,
+   `scan-worker-fake`: each check above, the raw layout byte for byte against the fake's `pattern`, and the
+   throughput, asserted on every run, at about 29 pages a second in color in the debug build the tests run
+   (13 times the gate; 15.8 at the lowest, under outside load). On Windows and macOS: CI's run of its pull
+   request (TEST-16). The code review's fixes: a worker's process watched while a call waits, so its end is
+   seen even where a process its driver started holds its pipes (a crash under such a helper had been taken
+   for silence, or held the settings window for good); the worker's input kept open while it quits, so a grace
+   past 10 s doesn't turn a slow close into the worker's abort; a request past 1 MiB `Unsendable`; caps,
+   applied settings, a batch's order, encodings and an open's ids checked against the model's rules (the caps
+   rules now in the model's docs); another protocol's hello read for its protocol; `Stopped`'s `Timeout` and
+   `WorkDir`; each library linted and documented alone, so `scan-device` is built without `serde` again; the
+   `SIGPIPE` requirement documented. Left: the Job object and a tree kill (FEAT-14, slice 9), a stop handle
+   (FEAT-17, slice 9), a worker's end harmless whatever the app's `SIGPIPE` disposition (FEAT-16, before slice
+   11), a spare worker kept warm (FEAT-15), TEST-12 to slice 9's 32-bit job. For review: the plan's
+   "Decisions taken alone, for review" (55, of which 41 to 55 the code review's, and each step's own in its "So
+   far"), above all 41 (how a worker's end is seen), 42 (the input kept open on quit), 43 (`SIGPIPE`) and 46
+   (the model's rules checked, a clamped value against what was asked); and "For review (security)" (11).
 5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its table
    in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty; gray,
    color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error: a jam

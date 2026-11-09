@@ -11,19 +11,19 @@ settles, and its upstream contributions.
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | | 5 | 1 | 1 | 7 | |
-| feature (FEAT) | `features.md` | 2 | 2 | 2 | 7 | 13 | |
+| feature (FEAT) | `features.md` | 5 | 2 | 2 | 8 | 17 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 8 | 2 | 1 | 1 | 12 | |
-| question (Q) | `questions.md` | 4 | 1 | 2 | | 7 | 1 |
+| test (TEST) | `tests.md` | 7 | 2 | 1 | 1 | 11 | |
+| question (Q) | `questions.md` | 5 | 1 | 2 | | 8 | 1 |
 | upstream (UP) | `upstream.md` | 8 | 4 | 1 | 1 | 14 | 13 |
-| **all** | | **22** | **15** | **7** | **10** | **54** | **14** |
+| **all** | | **25** | **15** | **7** | **11** | **58** | **14** |
 
 ## Where to start
 
 - **S0:** TEST-7 (Homebrew's SANE on macOS, and since slice 1a the fake's tests there through
   `DYLD_LIBRARY_PATH`) when a slice next touches `sane-dl`'s CI (TEST-2 and TEST-8, slice 1's, closed by CI's
   run of its pull request: `archive/backlog-done.md`); TEST-15 (slice 1a's code on CI's three systems), closed
-  by CI's run of its pull request; Q-7 (whether `Sane::load` refuses an empty or relative entry of the loader's
+  by CI's run of its pull request, #7 (`archive/backlog-done.md`); Q-7 (whether `Sane::load` refuses an empty or relative entry of the loader's
   search path) and UP-14 (SANE's `dll` and the library path in a set-id process), slice 1a's code review's,
   wait on review; TEST-14 (`twain-dsm`'s public API through the gate, on Windows) when a slice next touches `twain-dsm`'s CI; FEAT-5 (patch codes the driver reports) with the Windows
   backends;
@@ -34,9 +34,15 @@ settles, and its upstream contributions.
   stored-id worker's configuration, tested without the system's) and Q-4 (a device's strings as bytes) in slice
   5; TEST-9 (what only the fi-6130 shows of names and cancels) in slice 6's hand check; UP-12 and UP-13
   (`scanimage`, sane-dll(5)) wait on review. From slice 3: TEST-12 (`scan-device`'s layout tests on a 32-bit
-  `usize` again, in CI) by slice 4 or 9; TEST-13 (its code on CI's Windows and macOS) closed by CI's run of its
-  pull request; Q-5 (the packaged crate's tests without the fake) and Q-6 (what else of the model may grow) in
-  slice 11. BUG-7 (`sane-dl`'s `Image` printing its bytes in `Debug`) was done by slice 1a.
+  `usize` again, in CI) by slice 9's 32-bit worker job, where slice 4 left it; TEST-13 (its code on CI's
+  Windows and macOS) closed by CI's run on `master` after #6 (`archive/backlog-done.md`); Q-5 (the packaged
+  crate's tests without the fake) and Q-6 (what else of the model may grow) in slice 11. From slice 4: FEAT-14
+  (the Windows Job object and a tree kill) and FEAT-17 (a stop handle, for a driver's window that never
+  closes) in slice 9; TEST-16 (its code on CI's Windows and macOS) closed by CI's run of its pull request;
+  FEAT-16 (a worker's end harmless whatever the app's `SIGPIPE` disposition) before slice 11; Q-8 (the serde
+  form, fields added after data is stored, and what the protocol carries by name) and Q-5's question of
+  `scan-worker` in slice 11; FEAT-15 (a spare worker kept warm) later. BUG-7 (`sane-dl`'s `Image` printing its bytes in
+  `Debug`) was done by slice 1a.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

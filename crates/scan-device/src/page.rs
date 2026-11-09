@@ -78,6 +78,7 @@ impl fmt::Debug for Encoded {
 
 /// The form an [`Encoded`] page's bytes are in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum EncodedKind {
     /// A JPEG file.
@@ -102,6 +103,7 @@ pub enum EncodedKind {
 
 /// An encoded form, as the app asks for it and a source offers it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Encoding {
     /// JPEG, for 8-bit gray or color.
@@ -118,6 +120,7 @@ pub enum Encoding {
 
 /// A side of a sheet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Side {
     /// The front, the side scanned first.
     Front,
@@ -127,6 +130,7 @@ pub enum Side {
 
 /// How a page's side is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SideKnown {
     /// The driver said which side the page is.
     Reported,
@@ -150,6 +154,7 @@ pub enum Event {
 
 /// What the user should know while a batch goes on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Status {
     /// The scanner is warming up: the batch waits for it.
@@ -158,6 +163,7 @@ pub enum Status {
 
 /// How a batch ended, when it ended well.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Done {
     /// The feeder emptied, after at least one page.

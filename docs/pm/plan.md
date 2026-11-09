@@ -1,8 +1,9 @@
 # pdf-scan: the plan
 
-As of 2026-11-09. S0 slices 1, 2, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
-tests, the seam note revised, the TWAIN spike and `twain-dsm`. S0 slice 3 has built `scan-device`, provisional,
-done on its branch and waiting on review (`slices/s0-3-scan-device.md`); the rest is planned.
+As of 2026-11-09. S0 slices 1, 2, 3, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
+tests, the seam note revised, `scan-device` provisional (`archive/slices/s0-3-scan-device.md`), the TWAIN spike
+and `twain-dsm`. S0 slice 4 has built `scan-worker` on `scan-device`, done on its branch with its code review's
+findings fixed, waiting on review (`slices/s0-4-scan-worker.md`); the rest is planned.
 
 pdf-scan is a workspace of crates for getting paper into PDF, which sheaf will depend on: scanners driven
 through each system's own driver API, in a worker process; page images cleaned up, judged blank or not, and
@@ -37,7 +38,7 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 | `scan-device` | devices | The device model (devices, what each can do, settings, pages, errors) and backends behind features: `fake`, `sane`, `twain`, `wia` | M5 proposals 5, 7 to 10, 22; the model and `fake` built in S0 slice 3 (0.0.0, provisional, unpublished) |
 | `sane-dl` | devices | SANE loaded at run time: its own bindings from `sane.h`, a safe handle, cancel from another thread, frames assembled | M5 proposal 6; built in S0 slice 1 (0.1.0-alpha.1, unpublished) |
 | `twain-dsm` | devices | TWAIN through the Data Source Manager loaded at run time: bindings, the state machine, a hidden window and its messages, 32- and 64-bit | M5 proposal 7; unbuilt |
-| `scan-worker` | devices | Drivers out of process: the protocol, the worker's loop over any backend, the client with its watchdog | M5 proposal 4; unbuilt |
+| `scan-worker` | devices | Drivers out of process: the protocol, the worker's loop over any backend, the client with its watchdog | M5 proposal 4; built in S0 slice 4 (0.0.0, provisional, unpublished), on `scan-device` and `sane-dl` |
 | `scan-image` | pages | A scanned page's image held as compactly as it allows (a JPEG as its bytes, black and white as CCITT G4), read from and written to image files | `sheaf_image::{io, encode}` |
 | `scan-cleanup` | pages | Scans and photos of paper made clean pages: page finding, lighting, deskew, upright, Sauvola, despeckle, the Photo and Scanner profiles; and blank pages | `sheaf_image::{clean, blank}` |
 | `patch-codes` | pages | Kodak patch codes read along any edge of a page image, and drawn in Kodak's layout | `sheaf_image::codes::patch` |
@@ -49,13 +50,16 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 ```
  devices: no pixel work, no PDF        pages: pixels only                PDF: on pdf-lint's family
  ──────────────────────────────        ──────────────────                ─────────────────────────
- sane-dl ───┐                          scan-image ◄─────────────────────  pdf-scan ──► pdf-structure, pdf-objects,
- twain-dsm ─┼─► scan-device ◄── scan-  scan-cleanup  (image, imageproc,      │         pdf-content-streams,
- windows ───┘   (model, backends,      worker         in-progress)           │         pdf-semantics, pdf-filters
-                fake)                  patch-codes   (image)                 ▼
-                  │                                                      pdf-images ──► pdf-objects, pdf-filters, pdf-color;
-                  ▼                                                                     zune-jpeg, hayro-ccitt,
-                in-progress                                                             hayro-jbig2, hayro-jpeg2000
+ scan-worker ────────┐                 scan-image ◄─────────────────────  pdf-scan ──► pdf-structure, pdf-objects,
+    │                │                 scan-cleanup  (image, imageproc,      │         pdf-content-streams,
+    ▼                │                                in-progress)           │         pdf-semantics, pdf-filters
+ sane-dl ───┐        ▼                 patch-codes   (image)                 ▼
+ twain-dsm ─┼─► scan-device                                              pdf-images ──► pdf-objects, pdf-filters, pdf-color;
+ windows ───┘   (model, backends,                                                       zune-jpeg, hayro-ccitt,
+                fake)                                                                   hayro-jbig2, hayro-jpeg2000
+                  │
+                  ▼
+                in-progress
 
  scan-fixtures (dev-dependency of any)
  fake-libsane (built by sane-dl's tests, loaded as SANE by the loader's path; nothing depends on it)
@@ -131,7 +135,7 @@ pdf-lint's, which the maintainer set for that workspace, and sheaf's on licenses
   harness), where sheaf's output was right; where it wasn't (`backlog/bugs.md`), the fix is the slice's, said.
 - **Libraries:** typed errors with thiserror (sheaf's code uses anyhow); MSRV the family's, 1.89, unless a
   dependency needs more, measured per crate over its own graph (`sane-dl`'s in S0 slice 1, 1.89;
-  `scan-device`'s in S0 slice 3, 1.89; the pixel crates' in S1 slice 1).
+  `scan-device`'s in S0 slice 3, 1.89; `scan-worker`'s in S0 slice 4, 1.89; the pixel crates' in S1 slice 1).
 - **Hostile input:** caps with sane defaults, read before the work they cap: an image's dimensions before
   it's decoded, a worker's message sizes before they're read (a driver's bytes are untrusted, and so is a
   crashed worker's half message). Decoders are fuzzed.

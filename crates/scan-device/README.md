@@ -11,7 +11,7 @@ an [`in-progress`](https://crates.io/crates/in-progress) tracker between sheets,
 finished, front and back. Pages come raw, in one stated layout that `RawImage::new` checks (its length, sizes
 in checked arithmetic against what one buffer can hold, the padding bits of black and white rows), or encoded
 in a form the app asked for. The types are plain data, so they can cross a pipe to a process that runs the
-drivers.
+drivers, encoded through the `serde` feature.
 
 Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits, each behind a feature of its
 own. This version has the model, and a scripted backend for tests; none for a driver API yet.
@@ -29,8 +29,15 @@ None is on by default.
   from a feeder or the glass, clamp their settings and say what they changed, and draw their pages at those
   settings, the same bytes on every system. A sheet's side can be scripted to fault as it's read: a driver's
   error (a jam, a double feed, an open cover, the device gone, ...), the sheet then waiting at the head of the
-  feeder to be scanned again, or a hang, a crash or an exit. For tests only, never for a shipped build: its
-  faults can block a thread for good and end the process.
+  feeder to be scanned again, or a hang, a crash or an exit; or the side can wait for the batch's cancel, so a
+  test puts a cancel mid-sheet by its script rather than by timing. For tests only, never for a shipped build:
+  its faults can block a thread for good and end the process.
+- `serde`: `Serialize` and `Deserialize` for the model's plain data (devices and their ids, what a device can
+  do, the settings asked and applied, formats and encodings, a page's side, a batch's status and how it ended,
+  the errors, the settings window's owner and how it closed), so it crosses a pipe to a process that runs the
+  drivers and an app can store a device to open again later. In serde's default form: Rust's names, an enum
+  tagged by its variant's name. Not a page or an event, which may carry one: a page's bytes travel beside the
+  text, not in it. Provisional, as the model is.
 
 ## License
 

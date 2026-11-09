@@ -23,12 +23,12 @@ never do (ask 7; `just gates` checks it). The repository is public, so nothing p
 | `asks.md` | Questions waiting on review, the recommended answer first | When work waits on a ruling |
 | `crates/` | `README.md`: the layers and an index; then a file per crate: what it does, its boundary, its dependencies, its prior art, how it's tested, what's open | Planning or building a crate |
 | `milestones/` | `README.md`, then a file per milestone (S0, S1, S2, `later.md`): its slices, what each builds and how it's checked | Planning or running a slice |
-| `slices/` | The plans of slices while they run, one file each: S0 slice 3's, `s0-3-scan-device.md` | Running a slice |
+| `slices/` | The plans of slices while they run, one file each: S0 slice 4's, `s0-4-scan-worker.md` | Running a slice |
 | `backlog/` | Everything open, a file per kind: BUG, FEAT, DOC, TEST, Q (the plan's questions), UP (contributions to other projects) | Planning a slice; when something turns up |
 | `research/` | Surveys and assessments, a folder each (`README.md` the document, `notes/` behind it): `prior-art/` | Before deciding to build anything |
 | `pdf-lint/` | Upstream: the PDF family as pdf-scan consumes it (versions, exact pins, keeping up) and how its shortcomings are proposed back; the proposals themselves are local, in `scratch/pdf-lint/` | Before touching a family crate; when one falls short |
 | `sheaf/` | Downstream and origin: the rules for sheaf, `from-sheaf.md` (what each crate takes from it), `swaps.md` (what sheaf takes after each milestone) | Cutting a crate from sheaf; when a milestone ends |
-| `archive/` | Done slices' plans (S0 slices 1, 2 and 7 so far) and milestones, and `backlog-done.md` | Looking back |
+| `archive/` | Done slices' plans (S0 slices 1, 1a, 2, 3, 7 and 8 so far) and milestones, and `backlog-done.md` | Looking back |
 | `scratch/reference/` | Local, not tracked: `scratch/reference/sheaf/`, the sheaf plan files cited here, copied as at `3232a35` and never edited | When a crate's spec is wanted |
 | `scratch/pdf-lint/` | Local, not tracked: the family's fit (`pdf-family-fit/`) and the proposals to pdf-lint (`proposals/`), kept out of the public repository because they cite pdf-lint's own unpublished plan | Before touching a family crate; handing a proposal off |
 

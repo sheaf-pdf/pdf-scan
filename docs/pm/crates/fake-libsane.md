@@ -29,7 +29,7 @@ none of that into the process that loads it.
   script: devices, options, profiles, frames, sheets, faults) and `FAKE_LIBSANE_LOG` (every call, with its
   thread). Both formats are in its crate docs, so `scan-device`'s `sane` backend (S0 slice 5) can drive it as
   `sane-dl`'s tests do.
-- **How tests load it** (S0 slice 1a, `slices/s0-1a-sane-dl-safe-api.md`): through `Sane::load()`, which
+- **How tests load it** (S0 slice 1a, `archive/slices/s0-1a-sane-dl-safe-api.md`): through `Sane::load()`, which
   takes no path, so no route a published API exposes. A test builds the fake, copies it under SANE's file name
   (`libsane.so.1`, `libsane.1.dylib` on macOS) into a directory of its own per test binary, written under a
   temporary name and renamed, and spawns each child with the loader's variable (`LD_LIBRARY_PATH`,

@@ -2,10 +2,12 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 3 (`slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
+**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
 checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish = false`): the model, and the
 `fake` backend; no backend for a driver API yet (`sane` is slice 5's). MSRV 1.89 (`decisions.md`). No `unsafe`
-(`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`).
+(`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`). Changed by S0 slice 4
+for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fake's `Fault::AwaitCancel`
+("Slice 4's changes", below).
 
 - **What:** the device model of [M5 proposal 9](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p09-device-model.md), as `crates/scan-device-seam.md`'s "The model, for slice 3"
   writes its types and traits down (S0 slice 2, for review), built so in S0 slice 3, every name the note's; and
@@ -39,9 +41,11 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
       `SourceCaps::new(source, resolutions, formats)` (no duplex, no encodings, `max_area` `None`, `paper_auto`
       false), `Applied::new(settings, clamped)` and `RawPage::new(pixels, dpi, sheet, side, side_known)`. The
       rules the docs put on these values (a `dpi` finite and above 0; at least one source, each with at least
-      one format; a `Resolutions::List` never empty, a `Range`'s `min` not past its `max`) are each a
-      backend's to keep, the fake's among them, and a decoder's to check (slice 4's client); the
-      constructors don't check them (the code review's wording, `Caps`' and `RawPage`'s docs).
+      one format; resolutions above 0, a `Resolutions::List` never empty, a `Range`'s `min` not past its
+      `max`; a `max_area` finite and above 0, the last two said in the docs by S0 slice 4's code review, as
+      the fake already checked them) are each a backend's to keep, the fake's among them, and a decoder's to
+      check (slice 4's client); the constructors don't check them (the code review's wording, `Caps`' and
+      `RawPage`'s docs).
     - `RawImage::new(format, width, height, data)` refuses, in order: a width or height of 0 (`Empty`); a row's
       bytes or the image's past `u64`, in checked arithmetic, or past what one buffer can hold on the platform,
       `isize::MAX`, the most any allocation can be (`TooLarge`; `usize::MAX` until the code review); a
@@ -56,6 +60,28 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
     - From the code review: `Paper` `#[non_exhaustive]`, a departure from the note's block written into it
       (paper may grow: section 2's "To settle"), and the fake's `When` too; the fake's twelve builder methods
       `#[must_use]`, so a script made on a clone and dropped is warned of.
+  - **Slice 4's changes** (S0 slice 4, its decisions 2, 3 and 30; the seam note's "What slice 4 needs of it"):
+    - **A `serde` feature,** off by default: `Serialize` and `Deserialize` derived on the model's plain data
+      (`DeviceId`, `DeviceInfo`, `Driver`, `Caps`, `SourceCaps`, `Source`, `Resolutions`, `SizeMm`,
+      `Settings`, `Paper`, `Applied`, `Clamped`, `Format`, `Encoding`, `EncodedKind`, `Side`, `SideKnown`,
+      `Status`, `Done`, `ScanError`, `WindowClosed`, `WindowOwner`), in serde's default form (fields and
+      variants by their Rust names, an enum externally tagged), with no attribute; not on `RawImage`,
+      `Encoded`, `Pixels`, `RawPage` or `Event`, whose bytes don't belong in a text format, so a transport
+      carries them beside it, as `scan-worker`'s protocol does. A `NonZeroU32` step of 0 is refused as it's
+      read, and JSON writes a size that isn't finite as `null`, which reading refuses; but `serde_json` reads
+      a number past an `f32`'s range as an infinity (`1e39`), so a reader of sizes another program wrote
+      checks them for being finite itself, as slice 4's client does (its code review). It's how
+      `scan-worker`'s protocol carries the model, and how an app stores a `DeviceInfo`; provisional as the
+      model is, its names and the fields added after data is stored settled before the freeze (Q-8). Its unit
+      tests (`/crates/scan-device/src/round_trip.rs`) take a value of every variant of every enum above,
+      each numbered by an exhaustive `match`, so a variant added fails the build until it's listed, and every
+      struct with each field set, through JSON and back, equal; the `f32` edges bit for bit; the form pinned
+      on literal JSON.
+    - **`Fault::AwaitCancel`** in the fake: at a side's start or midway, as any fault, the side waits, sending
+      nothing and holding no lock, until the batch is cancelled (checked each millisecond), then goes on, so
+      the sheet in flight finishes and a batch from the feeder ends `Done::Cancelled` before the next. A
+      cancel lands mid-page by the script rather than by timing, in a test's process or a worker's. Tested at
+      a duplex front's midway and at a back's start (`fake_faults.rs`).
 - **Backends, each a feature:**
   - `fake`, **built in S0 slice 3**: scripted ([proposal 22](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p22-testing-without-scanner.md)): pages and sides, a jam at sheet 4 then Continue, a
     double feed, an open cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in
@@ -109,7 +135,8 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
       firing once. `Error` ends the batch with the pages before it kept and the sheet put back at the feeder's
       head, so Continue is a batch run again from its number (its front again after a fault on its back);
       `Gone` leaves the device gone to every holder of it; `Hang` parks the batch's thread for good; `Crash`
-      aborts the process and `Exit(code)` exits it, for a test's or a worker's process, never an app's.
+      aborts the process and `Exit(code)` exits it, for a test's or a worker's process, never an app's; and
+      since S0 slice 4, `AwaitCancel` holds the side until the batch is cancelled (above).
   - `sane` (Linux), on `sane-dl`: the batch loop and the backend quirks that are about scanning rather
     than the API (proposal 6): `sane_start` per page until `NO_DOCS`, which on the first page means the
     feeder is empty; one flatbed page per press; `page-height` set after `source`; parameters that make no
@@ -165,20 +192,24 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
   devices-layer loop reads its graph with every feature on, so a dependency a backend's feature brings is read
   as a default one is, and the libsane gate builds every binary with every feature on (S0 slice 3, the latter
   from its code review; 8 packages as built: itself, `in-progress`, `thiserror` and its macro's
-  `thiserror-impl`, `proc-macro2`, `quote`, `syn` and `unicode-ident`).
+  `thiserror-impl`, `proc-macro2`, `quote`, `syn` and `unicode-ident`; 11 since S0 slice 4's `serde` feature,
+  with `serde`, `serde_core` and `serde_derive`).
   Dependencies: `in-progress = "0.1.0"` (cancel and progress, in its public API and re-exported; taken by S0
   slice 3, vetted in S0 slice 2's plan and read again in slice 3's; a caret requirement, since an exact pin
   would keep an app on a later 0.1.x from resolving) and `thiserror` (the workspace's); each backend its
-  binding, behind its feature (`sane-dl` in slice 5, `twain-dsm` in slice 9, `windows` in slice 10). For its
-  tests: the crate itself with `fake`, and `rusty-fork` (the workspace's), whose child processes take the crash
-  and the exit.
+  binding, behind its feature (`sane-dl` in slice 5, `twain-dsm` in slice 9, `windows` in slice 10); `serde`
+  (the workspace's, optional: the `serde` feature, S0 slice 4). For its tests: the crate itself with `fake` and
+  `serde`, `rusty-fork` (the workspace's), whose child processes take the crash and the exit, and `serde_json`
+  (the workspace's).
 - **MSRV:** 1.89, the family's floor (`decisions.md`): the highest `rust-version` in its own graph (`cargo tree
   -p scan-device`, normal, build and dev, on every target; 25 packages) is 1.85, `in-progress` 0.1.0's and
-  `getrandom` 0.4.3's (through `rusty-fork`'s `tempfile`). CI tests it on 1.89 (`scan-device-msrv`).
-- **Tests** (S0 slice 3; 115): units for the layout (each format's, `Empty`, `Length` short and long, the
-  padding bits, `TooLarge` past `u64`, past a 64-bit `isize` and past a 32-bit one through the private limit,
-  `data_len` agreeing with `new`, `Debug` without a byte), the fake's clamping, page sizes and `pattern`'s
-  bytes pinned, its rows as its docs say and its sizes refused as `data_len` refuses them; in
+  `getrandom` 0.4.3's (through `rusty-fork`'s `tempfile`). Measured again by S0 slice 4 with `serde` and
+  `serde_json` in it: 32 packages, still 1.85 (theirs 1.71 at most). CI tests it on 1.89 (`scan-device-msrv`).
+- **Tests** (S0 slice 3; 115, and S0 slice 4's 8: the `serde` feature's 6 units and `AwaitCancel`'s 2): units
+  for the layout (each format's, `Empty`, `Length` short and long, the padding bits, `TooLarge` past `u64`,
+  past a 64-bit `isize` and past a 32-bit one through the private limit, `data_len` agreeing with `new`,
+  `Debug` without a byte), the fake's clamping, page sizes and `pattern`'s bytes pinned, its rows as its docs
+  say and its sizes refused as `data_len` refuses them; in
   `/crates/scan-device/tests/`, from outside the crate, `model.rs` (each constructor, what's `Send`, `Opened`,
   each error's message, a push-shaped device that moves a child progress and a `SyncSender` clone into a thread
   of its own and sees a cancel from a third) and `fake_devices.rs`, `fake_batches.rs` and `fake_faults.rs`

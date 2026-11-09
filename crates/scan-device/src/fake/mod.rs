@@ -126,6 +126,11 @@
 //! - [`Fault::Crash`] aborts the process, and [`Fault::Exit`] exits it with a code: for a test
 //!   run in a process of its own, or a worker process whose client sees how it ended, never an
 //!   app's own process.
+//! - [`Fault::AwaitCancel`] holds the side until the batch's progress is cancelled, sending
+//!   nothing meanwhile, then goes on: the side and the rest of its sheet are scanned and sent, and
+//!   from the feeder no sheet is taken after it ([`Done::Cancelled`]). So a test puts a cancel
+//!   mid-sheet by the script, not by timing, however far ahead of its reader the batch runs (in a
+//!   worker process, say). A batch whose progress is never cancelled waits for good.
 //!
 //! A test of a crash or an exit takes the events on a rendezvous channel (`sync_channel(0)`) and
 //! writes each out, flushed, before it takes the next: a `send` returns only once its event is
@@ -613,6 +618,15 @@ pub enum Fault {
     /// The process exits with this code: [`std::process::exit`]. For a test's own process or
     /// a worker process, never an app's.
     Exit(i32),
+    /// The side waits, sending nothing and holding no lock, until the batch's progress is
+    /// cancelled (checked each millisecond), then goes on as if it hadn't waited: the side is
+    /// finished, its sheet's back too in duplex, and a batch from the feeder ends at the check
+    /// before the next sheet, as [`Done::Cancelled`]. It stands for a scanner slow mid-sheet, so
+    /// a test can put a cancel while a sheet is in flight by its script rather than by timing,
+    /// wherever the batch runs. A batch whose progress is never cancelled waits for good.
+    ///
+    /// [`Done::Cancelled`]: crate::Done::Cancelled
+    AwaitCancel,
 }
 
 impl Default for Sheet {

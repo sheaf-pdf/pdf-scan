@@ -12,6 +12,7 @@
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
 twain_dsm_msrv := `grep -m1 '^rust-version' crates/twain-dsm/Cargo.toml | cut -d'"' -f2`
 scan_device_msrv := `grep -m1 '^rust-version' crates/scan-device/Cargo.toml | cut -d'"' -f2`
+scan_worker_msrv := `grep -m1 '^rust-version' crates/scan-worker/Cargo.toml | cut -d'"' -f2`
 
 # The nightly whose rustdoc writes the JSON `public-api` reads. The JSON's
 # format moves between nightlies, so this moves only on purpose, with the
@@ -33,30 +34,40 @@ ci: fmt clippy test doc gates sane-dl-package public-api msrv
 fmt:
     cargo fmt --all -- --check
 
+# Every member, each built alone (-p) by the clippy and doc recipes below:
+# cargo unifies features across the members one command selects, so a
+# workspace run builds a library with what another member turns on of it
+# (scan-worker turns on scan-device's serde), never as an app's build of
+# that library alone has it. `just gates` checks the list is every member.
+libraries := "sane-dl twain-dsm scan-device scan-worker fake-libsane"
+
 # Every feature on, so a backend behind one (scan-device's fake) is linted
-# as a user who turns it on meets it; then each library alone, its default
-# features alone, as an app's build has it, which the first line never
-# builds where a crate's tests turn a feature on (scan-device's fake,
-# through its dev-dependency on itself).
+# as a user who turns it on meets it; then each library alone, with -p, its
+# default features alone, as an app's build has it, which the first line
+# never builds where a crate's tests turn a feature on (scan-device's fake,
+# through its dev-dependency on itself), and a workspace run never builds
+# where another member turns one on.
 # Lint every crate, with its tests and every feature, and each library as shipped.
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-    cargo clippy --locked --workspace --lib -- -D warnings
+    for crate in {{ libraries }}; do cargo clippy --locked -p "$crate" --lib -- -D warnings || exit 1; done
 
 # Unit tests, integration tests and doctests.
 test:
     cargo test --locked --workspace
 
 # Default features first, as docs.rs and an app's build have them, so a
-# link to an item behind a feature fails here; then every feature on, as a
-# user who turns one on meets them, which is what's left in target/doc.
+# link to an item behind a feature fails here: each library alone, with -p,
+# since a workspace run would build it with what another member turns on of
+# it (`libraries`). Then every feature on, as a user who turns one on meets
+# them, which is what's left in target/doc.
 # Build the API docs, with default features and with every one, failing on warnings.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+    for crate in {{ libraries }}; do RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps -p "$crate" || exit 1; done
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 # Each library tested on its oldest supported Rust.
-msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv
+msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv scan-worker-msrv
 
 # sane-dl's tests on its oldest supported Rust.
 sane-dl-msrv:
@@ -70,6 +81,12 @@ twain-dsm-msrv:
 # scan-device's tests on its oldest supported Rust.
 scan-device-msrv:
     cargo +{{ scan_device_msrv }} test --locked -p scan-device
+
+# Run with -p, the crate alone: its tests ask for scan-device's `fake`
+# themselves, which a workspace run would turn on for them anyway.
+# scan-worker's tests on its oldest supported Rust.
+scan-worker-msrv:
+    cargo +{{ scan_worker_msrv }} test --locked -p scan-worker
 
 # Package sane-dl as a publish would, in a target directory of its own made
 # fresh each time (a stale one passes or fails falsely): sane-dl-package
@@ -220,7 +237,7 @@ gates:
     gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint)$'
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
-    for crate in sane-dl twain-dsm scan-device; do
+    for crate in sane-dl twain-dsm scan-device scan-worker; do
         # The list first, so a `cargo tree` that fails (a crate named here
         # that isn't a member) fails the gate, rather than leaving the loop
         # nothing to read; and the crate itself must be in its own list.
@@ -253,16 +270,18 @@ gates:
     metadata=$(cargo metadata --locked --format-version 1)
     linkers=$(jq -r '.packages[] | select(.links == "sane") | .name' <<< "$metadata")
     [[ -z $linkers ]] || fail "these declare links = \"sane\": $linkers"
-    # ...and no binary built needs it: neither a test binary nor a shared
+    # ...and no binary built needs it: neither a test binary, nor a program
+    # (a `bin` target, such as a worker a crate's tests start), nor a shared
     # library (the fake's cdylib, which only `cargo build` builds), each read
     # for libsane among the NEEDED entries of its dynamic section. Built with
     # every feature on, as the graphs are read, so a backend's feature that
-    # links it is caught.
+    # links it is caught, and a program behind a feature is built.
     binaries=$({
         cargo test --locked --workspace --all-features --no-run --message-format=json
         cargo build --locked --workspace --all-features --message-format=json
     } | jq -r 'select(.reason == "compiler-artifact")
         | if .profile.test then .executable
+          elif (.target.kind | index("bin")) then .executable
           elif (.target.kind | index("cdylib")) then (.filenames[] | select(test("\\.so$")))
           else empty end // empty' | sort -u)
     # Each read whole before it's matched, so a binary readelf can't read
@@ -287,6 +306,11 @@ gates:
     [[ $publish == '[]' ]] || fail "fake-libsane could be published (publish: ${publish:-not a member})"
     users=$(jq -r '.packages[] | select(any(.dependencies[]; .name == "fake-libsane")) | .name' <<< "$members")
     [[ -z $users ]] || fail "these take fake-libsane as a dependency: $users"
+    # The clippy and doc recipes build each member alone, from `libraries`:
+    # a member left out of it would go unbuilt there as an app has it.
+    listed=$(tr ' ' '\n' <<< "{{ libraries }}" | sort)
+    workspace=$(jq -r '.packages[].name' <<< "$members" | sort)
+    [[ $listed == "$workspace" ]] || fail "the justfile's libraries ($(tr '\n' ' ' <<< "$listed")) aren't the workspace's members ($(tr '\n' ' ' <<< "$workspace"))"
     # No file git tracks or would track outside docs/pm uses the downstream
     # app's name (docs/pm/plan.md, "Standing rules"), but as the org in a URL.
     # git grep exits 1 for no match, and above 1 when it couldn't search.

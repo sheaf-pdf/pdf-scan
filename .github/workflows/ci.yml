@@ -201,6 +201,25 @@ jobs:
       - name: Test
         run: just scan-device-msrv
 
+  # The check job runs the crate's tests on all three systems, so one runner
+  # checks what the oldest Rust can break. Its Windows branch (the worker
+  # started with creation_flags, stable since Rust 1.16) is left uncompiled
+  # on that Rust, which is accepted. Its tests run for the crate alone (-p),
+  # as a dependent's build has it, beside the check job's workspace run.
+  scan-worker-msrv:
+    name: scan-worker on its minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Keep in step with rust-version in crates/scan-worker/Cargo.toml,
+      # which `just scan-worker-msrv` reads.
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: extractions/setup-just@v4
+      - name: Test
+        run: just scan-worker-msrv
+
   # sane-dl packaged as a publish would, in a fresh target directory, and
   # what the package holds checked: its sources, README, CHANGELOG, manifest
   # and lock, nothing else. A dry run: nothing is published.

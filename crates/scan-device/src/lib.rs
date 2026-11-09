@@ -8,7 +8,8 @@
 //!
 //! Everything is synchronous: a call blocks until it has its answer, and a batch runs on a thread
 //! of its own until it ends. The types are plain data, with every field public but
-//! [`RawImage`]'s, so they can cross a pipe to a process that runs the drivers. The structs and
+//! [`RawImage`]'s, so they can cross a pipe to a process that runs the drivers: the `serde`
+//! feature (below) gives them, a page's aside, `Serialize` and `Deserialize`. The structs and
 //! enums that may grow are `#[non_exhaustive]`: a variant or a field added later breaks no caller,
 //! and code outside this crate makes the structs by their `new` and then sets their fields.
 //!
@@ -83,9 +84,25 @@
 //! - `fake`: `scan_device::fake`, a scripted backend for tests, on every system and with no
 //!   driver: devices listed and opened as a script says (a renamed one found by its maker and
 //!   model), batches of sheets whose pages it draws at the settings it applies, and faults
-//!   scripted on a sheet's side (a driver's error such as a jam, a hang, a crash, an exit). For
-//!   tests only, never for a shipped build: its faults can block a thread for good and end the
-//!   process.
+//!   scripted on a sheet's side (a driver's error such as a jam, a hang, a crash, an exit, a wait
+//!   for the batch's cancel). For tests only, never for a shipped build: its faults can block a
+//!   thread for good and end the process.
+//! - `serde`: `Serialize` and `Deserialize` for the model's plain data, so it crosses a pipe to a
+//!   process that runs the drivers, and an app can store the [`DeviceInfo`] it opens again later:
+//!   [`DeviceId`], [`DeviceInfo`] and [`Driver`]; [`Caps`], [`SourceCaps`], [`Source`],
+//!   [`Resolutions`] and [`SizeMm`]; [`Settings`], [`Paper`], [`Applied`] and [`Clamped`];
+//!   [`Format`], [`Encoding`] and [`EncodedKind`]; [`Side`] and [`SideKnown`]; [`Status`] and
+//!   [`Done`]; [`ScanError`]; [`WindowOwner`] and [`WindowClosed`]. In serde's default form:
+//!   fields and variants by their Rust names, an enum's value tagged by its variant's name (in
+//!   JSON, `"Feeder"`, or `{"Twain":{"bits":32}}`). Not a page ([`RawPage`], [`Pixels`],
+//!   [`RawImage`], [`Encoded`]) or an [`Event`], which may carry one: a page's bytes don't belong
+//!   in a text format, so whatever carries them carries the rest of the page beside them. A
+//!   [`Resolutions::Range`] step of 0 is refused as it's read. JSON has no `NaN` or infinity, so a
+//!   size in millimetres that isn't finite is written there as `null`, and refused on reading;
+//!   but a number past an `f32`'s range reads as an infinity, so whatever reads sizes written by
+//!   another program checks them for being finite itself.
+//!   Provisional, as the model is: until it's frozen, a change to the model changes the form, and
+//!   what was stored before may not read.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
@@ -160,6 +177,8 @@ mod error;
 pub mod fake;
 mod image;
 mod page;
+#[cfg(all(test, feature = "serde"))]
+mod round_trip;
 
 pub use caps::{Applied, Caps, Clamped, Paper, Resolutions, Settings, SizeMm, Source, SourceCaps};
 pub use device::{
