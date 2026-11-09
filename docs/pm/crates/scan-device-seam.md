@@ -787,8 +787,10 @@ pub trait Device: Send {
 | `Error::Cancelled` (the token's, which the model's cancel doesn't use) | `Done::Cancelled` |
 | Every other `sane_dl::Error`: a page's `ShortFrame`, `LongFrame`, `PartialRow`, `BadReadLength`, `BadParameters` (`2500x0`), `LimitExceeded`; `BadDeviceList`, `BadHandle`, `Thread`; an option's refusals (`Inactive`, `NotSettable`, `WrongType` and the rest) and `ReloadAfterSet` | `Driver { message, shown: false }`, `sane-dl`'s message (for `LimitExceeded`, that a lower resolution asks for less), the page being read dropped and the pages before it kept (section 6) |
 
-**What slice 4 needs of it** (`crates/scan-worker.md`'s protocol predates it; slice 4 writes its protocol from
-this):
+**What slice 4 needs of it** (`crates/scan-worker.md`'s first protocol predated it; slice 4 wrote its protocol
+from this). S0 slice 4 built all of it, as the leanings below have it, in `scan-worker` and in `scan-device`'s
+`serde` feature (`crates/scan-worker.md` and `crates/scan-device.md` as built; the design and its decisions in
+`slices/s0-4-scan-worker.md`):
 
 - every type plain data the worker can encode (decision 36): a `serde` feature of `scan-device` (leaning: the
   app stores `DeviceInfo` with it too, and the client then makes the `#[non_exhaustive]` structs by decoding,

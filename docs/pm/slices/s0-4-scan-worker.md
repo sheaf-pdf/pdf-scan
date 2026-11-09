@@ -1303,3 +1303,81 @@ plan's three mutations failing; `x86_64-pc-windows-gnu` and `x86_64-apple-darwin
   how far the worker ran ahead of the failed `send` before the cancel landed is timing (the sheet in flight, in
   practice); the orphan's abort asserted no sooner than its grace, since a call might yet return; the
   throughput timed from the caller's side, as an app sees it, over one worker for both formats.
+
+**Step 5, the plan's files; the slice's end** (2026-11-09; one commit, "Record S0 slice 4 in the plan:
+scan-worker as built, and what it leaves for later", on `e8f1db5`). The checks before it: step 4's check of
+`e8f1db5` passed (`scratch/work/s0-4/flow/checks.md`): `just ci` green with both `SANE_DL_REQUIRE_*` set (887
+tests, `just scan-worker-msrv` running the 15 new tests on 1.89, `sane-dl-package` run); the test list 450 to
+465, none lost; the gates holding, `scan-worker`'s graph 31 packages, 36 binaries read for libsane (the five new
+test executables, none needing it); the plan's three mutations repeated on a worktree at `e8f1db5`, each
+failing; `x86_64-pc-windows-gnu` and `x86_64-apple-darwin` clippy clean; the throughput in `Rgb8` 29.1 and 29.4
+pages a second in the core's debug runs, the lowest seen 15.8 (6.9 times the gate) while others loaded the
+machine, so decision 33's fallback stays untaken; the timing loop (30 of 30) and the load run (240 of 240)
+read, not repeated. Its remark, for the code review: the plan's third mutation can't be made without a peek
+past the page, which blocks, so it fails two tests beyond its target, whose own line fails all the same.
+
+- **`crates/scan-worker.md` as built:** its header (0.0.0, unpublished, MSRV 1.89, no `unsafe`); the protocol
+  as built (framing, the `hello` and its version, every request and answer, a batch's messages, a page's
+  line, the crate docs holding it whole); `serve` (its threads, the rendezvous channel, the progress poll and
+  its lost messages, the end and the abort); the client (its API, a worker for each listing and open device,
+  the private directory and SANE's configuration, the process group and console, every cap and check, the
+  request's round trip, standard error's tail, `close` and drop); the watchdog's limits and cancel; the
+  hygiene (the pipes drained; the Job object FEAT-14; the spare worker FEAT-15); the test worker; the
+  boundary and the dependencies vetted and weighed; the MSRV; the tests and the throughput measured; and
+  "Open": the `saned` idea kept, FEAT-14 with slice 9's 32-bit worker and the lists' merge, FEAT-15, a
+  worker's stray standard output for slice 5 (Risk 4), Q-5.
+- **`crates/scan-device.md`:** "Slice 4's changes" (the `serde` feature, its types and form, what it leaves out
+  and why, its tests; `Fault::AwaitCancel`), said in the header and among the fake's faults; the boundary's
+  count (11 packages with `serde`), the dependencies, the MSRV probe again (32 packages, still 1.85) and the
+  tests (115 and slice 4's 8).
+- **The seam note:** one sentence at the head of "What slice 4 needs of it": slice 4 built it, as its leanings
+  have it, in `scan-worker` and `scan-device`'s `serde` feature, and where; the head's own clause put in the
+  past. No TWAIN line touched.
+- **`crates/README.md`** (`scan-worker` built, 0.0.0, unpublished); **`plan.md`**: the family's row (built in
+  S0 slice 4, on `scan-device` and `sane-dl`) and the graph, its devices column redrawn with `scan-worker`
+  on `scan-device` and `sane-dl` (it had been split, `scan-` at the column's edge and `worker` under the pages
+  column, with one arrow); **`decisions.md`**: `scan-worker`'s MSRV, after `scan-device`'s.
+- **The milestone's slice 4 entry** (done on the branch, what was built and checked, what's left, 40 decisions
+  and 8 security items for review); **`status.md`**, a running line for slice 4 (and "Next" moved to slice 5);
+  **`slices/README.md`**, a line. Slice 3's lines are left to the fix stage (the control file).
+- **The backlog,** its IDs read again on `origin/master`, fetched as this step began: still `42e4227`, the next
+  free BUG-9, DOC-2, FEAT-14, Q-8, TEST-16 and UP-15, as decision 35 took them. Added: FEAT-14 (S0: the Windows
+  Job object with kill-on-close and a tree kill, for slice 9, with what `process-wrap` and `win32job` lack),
+  FEAT-15 (later: a spare worker kept warm, which a SANE open can't use), TEST-16 (S0: this slice's code on
+  CI's Windows and macOS, closed by CI's run of its pull request), Q-8 (S0: the serde form's names, a field
+  added after data is stored, and the three things carried by name, for slice 11). Changed: TEST-12's line
+  (wanted by slice 4, left to slice 9's 32-bit worker job, decision 34) and the README's "by slice 4 or 9"
+  with it; Q-5 asked of `scan-worker` too ("For later slices"); the README's "Where to start" gains slice 4's
+  items, and its table is counted again (features 3, 2, 2, 7, 14; tests 7, 2, 1, 1, 11; questions 4, 1, 2, 7;
+  all 22, 15, 7, 9, 53, 12 waiting on review). Each file's head names `master`'s slice 1a IDs as well (FEAT-13,
+  TEST-14 and TEST-15, Q-7), which this branch doesn't hold, so it reads right before the merge and after it;
+  those heads, the table and the README's paragraph will meet `master`'s at the merge, the main session's.
+- **Checks here** (`scratch/work/s0-4/step-5/`): every backlog line in the README's format (a script over the
+  six files, every item matched, the table's counts from it); every path the edited files cite found (M5
+  proposal 4 in the copy of sheaf's plan, `process-wrap`'s `src/std/job_object.rs` in the cargo home); `git
+  grep -i` for the maintainer's name finds `LICENSE-MIT` alone; every commit message of the branch read for the
+  maintainer's name, local paths, `scratch/`, the downstream app and pdf-lint's plan, none found, and this
+  step's diff and message the same; `cargo fmt --all -- --check`. No crate is touched, so no build, clippy or
+  test here, and no make-fail (nothing the step adds is code: `step-5/make-fail.md` says so).
+- **Not run, said:** `just ci`, since the diff stays in `docs/pm/`, which no build, test or gate reads; the
+  publish dry run (`publish = false` until slice 11; `sane-dl-package` is the core's whenever `just ci` runs);
+  the gates' make-fails (steps 2 and 3 ran them where each gate changed, and nothing since touched them).
+- **What only CI shows** (TEST-16): both crates' new tests on Windows and macOS: spawning and the pipes, the
+  private directory there and its paths compared resolved, the process group on macOS, `CREATE_NO_WINDOW`, the
+  crash statuses (`SIGABRT` behind macOS's crash reporter, `0xC0000409` behind Windows Error Reporting), the
+  timing tests and the throughput gate on slower runners and through Windows' pipes; `scan-worker-msrv` as
+  CI's own job; and the gates on `ubuntu-latest` reading the test worker's binary.
+- **Departures from the plan:** `plan.md` beyond its graph and row: its "As of" line and its standing rules'
+  MSRV list, a clause each, so neither leaves `scan-worker` unbuilt; `status.md`'s "Next" as well as slice 4's
+  line, since it named slice 4 next; the seam note's head reworded into the past beside its sentence, since
+  `crates/scan-worker.md` now holds the protocol as built; `crates/scan-device.md`'s boundary, dependencies,
+  MSRV and test counts brought up to date with the feature; Q-5 changed, as "For later slices" asks.
+- **Decisions, for review with the plan's:** FEAT-14 for S0 (slice 9's) and FEAT-15 for later (no slice plans
+  it, and it's wanted only once a worker's start is measured to keep a user waiting); the seam note's
+  compressed transfers (section 3's "To settle" and its "Known unknowns" row, TWAIN's and WIA's lines) left as
+  they are, slice 4's half answered in `crates/scan-worker.md` (raw passes the gate at about 13 times here,
+  the pipe the bound) and the rest slice 9's; decision 37's `tempfile` in `[workspace.dependencies]` not a
+  backlog item (no behaviour; the next slice that edits `sane-dl`'s manifest takes it); 1.89's clippy refusing
+  `sane-dl`'s `DEFAULT_LIBRARIES.is_empty()` (step 3) not one either, since CI's clippy is stable's and
+  `sane-dl` is left alone here; a worker's stray standard output kept as an "Open" of `crates/scan-worker.md`
+  for slice 5 rather than an item.

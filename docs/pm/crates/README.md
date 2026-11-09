@@ -24,7 +24,8 @@ in the app's process unless the app asks: `scan-worker` is how sheaf uses them (
   Built in S0 slice 1: 0.1.0-alpha.1, ready to publish, not published.
 - [`twain-dsm`](twain-dsm.md): TWAIN through the system's DSM, its seven states as types, in both bitnesses.
 - [`scan-worker`](scan-worker.md): drivers in a process of their own: the JSON-lines protocol, the worker, the
-  client and its watchdog.
+  client and its watchdog. Built in S0 slice 4, on `scan-device`'s model and fake: 0.0.0, provisional, not
+  published.
 
 ## Pages
 

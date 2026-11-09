@@ -16,6 +16,11 @@ safe, runs beside slice 3 on a branch of its own. It's a git repository at githu
   on:** the maintainer's review (50 decisions, 6 security items); CI's run of pull request #6 on Ubuntu,
   Windows and macOS (TEST-13). Later: TEST-12, Q-5, Q-6; its TEST-12 or slice 1a's is
   renumbered at whichever merge comes second.
+- **Running: S0 slice 4, `scan-worker`, done on `s0-4-scan-worker`** (`slices/s0-4-scan-worker.md`, from
+  `master` at `5a4bff2`): five steps, each checked, its code review and fixes next; `scan-worker` 0.0.0,
+  unpublished, MSRV 1.89 (the protocol, `serve`, the client and its watchdog, through a test worker), and
+  `scan-device`'s `serde` feature and `Fault::AwaitCancel`. **Waits on:** its code review; the maintainer's
+  review (40 decisions, 8 security items); CI's run of its pull request on Windows and macOS (TEST-16).
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
@@ -77,5 +82,5 @@ safe, runs beside slice 3 on a branch of its own. It's a git repository at githu
   3 (50 and 6); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3,
   ready to hand off on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the
   interpreter stays out" line.
-- **Next:** S0 slice 4, `scan-worker`, on Linux, on slice 3's model and fake, once slice 3's pull request is
-  green. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+- **Next:** S0 slice 5, `scan-device`'s `sane` backend, run in a worker the `scan-worker` client starts, once
+  slice 4 is merged. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

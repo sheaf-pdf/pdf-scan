@@ -95,6 +95,23 @@ S1 back: S1 can start once the Linux slices are done.
    finished, none fed after), a version mismatch, a page cut short; the raw layout across the pipe byte for byte;
    throughput of 300 dpi pages in color and black and white at 2.3 a second (M5 slice 6's gate, its pipe's
    share), measured on every run.
+   **Done on the branch** (2026-11-09; `slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
+   at `5a4bff2`, five steps, each checked; its code review and fixes follow. `scan-worker` 0.0.0, unpublished,
+   MSRV 1.89, no `unsafe` (`crates/scan-worker.md`): the protocol as the seam note asks it, the model's types
+   through a new `serde` feature of `scan-device` (every variant round-tripped, a variant added failing the
+   build until it's listed), a page's header, `Event`'s and `Pixels`' variants and a message's level carried
+   by name (Q-8); `serve`, its batch's events through a channel that holds none, the end of its input a
+   cancel and a quit, and an abort 10 s later should a driver's call hang; the client, a worker for each
+   listing and each open device in a private directory (a SANE open's holding the id's one-backend
+   `ConfigDir`), every line and page capped and checked before it's read, its own `Error`, and its watchdog,
+   the kill after a cancel counted from the later of the cancel and the worker's last line; and the fake's
+   `Fault::AwaitCancel`, so a cancel lands mid-page by the script. Checked here through a test worker,
+   `scan-worker-fake`: each check above, the raw layout byte for byte against the fake's `pattern`, and the
+   throughput, asserted on every run, at about 29 pages a second in color in the debug build the tests run
+   (13 times the gate; 15.8 at the lowest, under outside load). On Windows and macOS: CI's run of its pull
+   request (TEST-16). Left: the Job object and a tree kill (FEAT-14, slice 9), a spare worker kept warm
+   (FEAT-15), TEST-12 to slice 9's 32-bit job. For review: the plan's "Decisions taken alone, for review"
+   (40, and each step's own in its "So far") and "For review (security)" (8).
 5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its table
    in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty; gray,
    color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error: a jam

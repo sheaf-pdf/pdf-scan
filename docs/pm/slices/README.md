@@ -13,6 +13,9 @@ Done on its branch, its code review's findings fixed, pushed, in pull request #6
 [`s0-3-scan-device.md`](s0-3-scan-device.md), S0 slice 3, `scan-device` provisional (four steps, each checked,
 then 18 findings fixed; branch `s0-3-scan-device`, from `master` at `3f33be5`).
 
+Done on its branch, its code review next: [`s0-4-scan-worker.md`](s0-4-scan-worker.md), S0 slice 4,
+`scan-worker` (five steps, each checked; branch `s0-4-scan-worker`, from `master` at `5a4bff2`).
+
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).
 
