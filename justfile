@@ -26,17 +26,19 @@ ci: fmt clippy test doc gates sane-dl-package msrv
 fmt:
     cargo fmt --all -- --check
 
-# Lint every crate, with its tests.
+# Every feature on, so a backend behind one (scan-device's fake) is linted
+# and documented as a user who turns it on meets it.
+# Lint every crate, with its tests and every feature.
 clippy:
-    cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
     cargo test --locked --workspace
 
-# Build the API docs, failing on warnings.
+# Build the API docs, every feature on, failing on warnings.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 # Each library tested on its oldest supported Rust.
 msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv

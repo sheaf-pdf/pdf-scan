@@ -161,6 +161,7 @@ name = "scan-device"
 version = "0.0.0"
 dependencies = [
  "in-progress",
+ "scan-device",
  "thiserror",
 ]
 

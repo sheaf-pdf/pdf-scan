@@ -674,6 +674,38 @@ Taken in the steps:
     the limit is `usize::MAX`); `new` calls `data_len`, then checks the length and the padding; `stride()` is
     worked out again from the format and the width, never stored.
 
+27. **More of a script's mistakes panic as they're written** (step 2), beside the caps the plan names:
+    `FakeDevice::new` with an empty name (no stored id could open it), `FakeBackend::with` given a second device
+    of the same id (the opening rules would pick one silently), `Sheet::size` not finite and above 0, and caps
+    holding a resolution of 0 (a list holding it, a range from it), since every page the fake makes has a `dpi`
+    above 0, the model's rule the fake keeps in what it makes.
+28. **The caps' `settings_window` is the device's own** (step 2): `Device::caps` says true where
+    `FakeDevice::settings_window` scripts a window, whatever the `Caps` given say, so the caps and
+    `settings_window()` never disagree, whichever order a script is written in.
+29. **The feeder's emptiness is read before the sheet's number** (step 2; the plan had the number first): both
+    under one lock, the number after the emptiness, so a batch whose last sheet was numbered `u32::MAX` and whose
+    feeder is then empty ends as `Done::FeederEmpty`, not a `Driver` error; past `u32::MAX` with paper left, the
+    `Driver` error, the sheet left in the feeder, as the plan has it.
+30. **A sheet whose page fails goes back at the feeder's head** (step 2): in this step only the 512 MiB cap (and a
+    size `RawImage::data_len` refuses) ends a batch at a side; the sheet wasn't scanned, so it's put back, as step
+    3's faults will put theirs; `fed()` still counts its taking. The cap applies to every page drawn, an
+    encoded stand-in included (the size the page would be), never to a page given on a sheet.
+31. **A flatbed's batch sends `Event::Sheet(first_sheet)`** before its page, as a feeder's sheet does, and its
+    sheet stays on the glass (`fed()` unchanged); duplex, where a test's caps give a flatbed one, reads both
+    sides.
+32. **`pattern`'s bytes** (step 2): a first row from the sheet and side by Marsaglia's xorshift (shifts 13, 7 and
+    17, eight bytes a step), each row after it the one before turned left a pixel, padding bits cleared; pinned in
+    a unit test by values a separate drawing (`scratch/work/s0-3/step-2/pattern-golden.py`, never committed)
+    gives, so a change slice 4's byte-for-byte check would meet is seen here first.
+33. **Small names and forms** (step 2): `NotInstalled`'s `what` "the fake driver"; a USB name
+    `fake:libusb:<bus>:<device>`, each one or more ASCII digits; `DeviceInfo::name` the maker and model joined by a
+    space, an empty one left out; a stand-in's bytes `fake <form> page: sheet <n>, <side>`, a G4 one's kind
+    `black_is_1: true`, the fax convention; `FakeBackend`, `FakeDevice` and `Sheet` derive `Debug` (and `Sheet`
+    `Clone` and `PartialEq`), for a test's messages.
+34. **Step 2's tests take some of what step 3 tests at length** (cancelled before the batch, a receiver gone before
+    it, the number past `u32::MAX`, warming up, the paper read while a batch waits on a rendezvous channel),
+    since step 2's code does them and each needed a make-fail; step 3's scripts of proposal 22 come on top.
+
 ## For review (security)
 
 1. **`RawImage::new` is where a page from a worker becomes a page** (slice 4 decodes through it): its sizes are
@@ -874,3 +906,76 @@ none (the plan review's are in "Plan review"; no step had been checked).
   says the graph is read with every feature on. `master`'s slice 8 changes the control file lists were already
   the plan's (written for `3f33be5`), so nothing there departs.
 - **Decisions:** 23 to 26 ("Taken in the steps").
+
+**Step 2, the fake: devices, listing and opening, and batches that go right** (2026-11-09; one commit, "Add
+scan-device's fake backend: devices and batches", on `566b0ae`). The checks before it: step 1's check passed on
+`566b0ae` (`scratch/work/s0-3/flow/checks.md`): `just ci` green with SANE required, its MSRV recipes on 1.89,
+`scan-device-msrv` among them; 268 tests, the base's 246 at `3f33be5` and scan-device's 22, none lost; the gates
+naming `scan-device` with 8 packages; its MSRV 1.89, `in-progress`'s 1.85 the highest in its graph; the
+`wasm32-wasip1` run, 11 passed; four mutations of `RawImage::new`, each failing a test; both gate make-fails
+(`png` as a normal and as an optional dependency) failing with `scan-device` and `png` named; the model the same
+as the note's block on all 32 items; the push device's tests run 300 times, none failing.
+
+- **The feature and the manifests:** `fake = []` in `/crates/scan-device/Cargo.toml` and the dev-dependency on the
+  crate itself with it; `/Cargo.lock` puts `scan-device` in its own entry's dependencies, nothing else ("Locking
+  0 packages", offline). The justfile's `clippy` and `doc` take `--all-features`, their comments saying why;
+  `test` and `scan-device-msrv` need nothing (the dev-dependency).
+- **`scan_device::fake`** (`src/fake/`: `mod.rs` the backend, its devices, sheets and opening; `clamp.rs`;
+  `batch.rs`; `pattern.rs`), as "The `fake` backend" has it, without faults: `FakeBackend` (`new`, `Default`,
+  `with`, `listing_takes`, `not_installed`); `FakeDevice` (`new`, `info`, `caps`, `unlisted`, `refuses_open`,
+  `reports_sides`, `warms_up`, `settings_window`, `load`, `glass`, `fed`, `in_feeder`), its paper behind one
+  `Arc<Mutex<…>>` that clones share, locked only to take, put back or read a sheet; the device a backend opens a
+  private type of its own; `Sheet` (`new`, `Default`, `size`, `side`); `pattern`. Listing and opening as "Listing
+  and opening" says, read against the note's section 1 and its mapping table a row each
+  (`scratch/work/s0-3/step-2/opening-vs-note.md`); the clamp rules, the batch's order, page sizes, encoded
+  stand-ins, the 512 MiB cap and progress as "A batch" says. Module docs with the rules and an example; `Fault`,
+  `When` and `Sheet::fault` wait for step 3, as planned.
+- **The crate docs** gain "Features" and "Example" (listed, opened, caps read, a duplex batch on its own thread
+  with a `Tracker` and `sync_channel(2)`, the events read), naming the fake's items in code only, so `cargo doc
+  -p scan-device --no-deps` without the feature stays clean under `-D warnings` (run); the README a "Features"
+  section and its clause; the root README's row the fake.
+- **Tests:** 11 units (`fake`: ids of the fake's form, USB names, the name shown; `clamp`: a range's nearest step
+  never past its `max`, at the top of `u32` too, and a list's nearest, ties to the higher; `batch`: a dimension's
+  pixels, a page of exactly 512 MiB drawn and one byte more refused, each encoding's formats, a stand-in's bytes;
+  `pattern`: each row the one before turned a pixel, its bytes pinned), 3 doctests (the crate's example, the
+  module's, `pattern`'s), `tests/fake_devices.rs` (22: listing and its deadline, slower, as long as it, zero;
+  `NotInstalled` first; opened as stored with the listing's info; the milestone's renamed device found by maker
+  and model; a stored name now another model's taken as gone, and found under another USB name where that model
+  is; the fallback needing both maker and model, never to one of two, only from and to a USB name, never to an
+  unlisted device; an unlisted device with the stored info; a name not there; `BadId` before the listing; `Busy`,
+  `AccessDenied`, `Gone` and a `Driver` refusal once found; default and scripted caps; the settings window
+  `Unsupported`, `Accepted`, `Dismissed`; the script's mistakes panicking) and `tests/fake_batches.rs` (35:
+  simplex and duplex, sides inferred and reported, "Scan More" numbered on, `ScanError::FeederEmpty` after
+  `Applied` (and after `WarmingUp`), `Done::FeederEmpty`, the flatbed's `Done::OnePage` from its glass, every
+  clamp rule's `Clamped` and none where nothing changed, all of them at once in the settings' order, a range's
+  `max` off its steps never passed, wild settings on both sources without a panic (`NaN` matched with
+  `is_nan`), page sizes (Letter at 300 dpi 2550 by 3300, A4, Legal, at least a pixel) and `Auto` the sheet's own
+  cut to the largest, drawn pages `pattern`'s, `pattern` the same each run and different by sheet and side, its
+  `Bw1` padding 0 at every width from 1 to 17, a page given delivered as given, encoded pages in the first form
+  that fits and raw where none does, the 512 MiB cap with the pages before kept and the sheet put back, each
+  page's progress (a recording `Progress`) and the tracker finished at the end, a tracker cancelled before the
+  batch, a receiver gone, the number past `u32::MAX`, and the paper read while a batch waits on a rendezvous
+  channel). scan-device's tests: 22 before, 93 now (22 units, 9 + 22 + 35 integration, 5 doctests): 339 in the
+  workspace expected, none lost.
+- **Quick checks, the implementation's:** `cargo fmt --all -- --check`, `cargo clippy --locked --workspace
+  --all-targets --all-features -- -D warnings` and `cargo test --locked -p scan-device` green; `cargo doc -p
+  scan-device --no-deps` with and without `--all-features`, `-D warnings`, clean; `cargo +1.89 check --locked -p
+  scan-device --all-targets`. Make-fails on a worktree of its own (`scratch/work/s0-3/step-2/make-fail.md`, the
+  script `mutate.py` beside it): 49 mutations, each failing a test, among them the plan's two of the fallback
+  (the first match taken among several: `the_fallback_is_never_to_one_of_two`; maker and model not compared:
+  five tests), the maker alone and the model alone compared, the fallback from or to a name of any form, a range
+  clamped past its `max`, either tie to the lower, no check before a sheet, the number wrapping, the sheet not put
+  back, the 512 MiB cap at `>=` and gone, progress a page at once, the paper locked across the sends (two tests
+  failing at a 10 s bound, not hanging), and the pattern's padding, sides and turns; one test sharpened after its
+  mutation was caught only elsewhere; the worktree removed.
+- **The page rate,** for slice 4's throughput gate (2.3 pages a second, 58 MB/s), measured once in a release
+  build from a scratch program (`scratch/work/s0-3/step-2/rate/`, never committed; `rate.txt`): 300 dpi Letter
+  from `pattern`, about 560 pages a second in `Rgb8` (14 GB/s) and 8,000 to 18,000 in `Bw1`; from a whole batch
+  through `sync_channel(1)` with a `Tracker`, about 500 a second in `Rgb8` simplex and 6,000 to 9,800 in `Bw1`,
+  and 49 a second in `Rgb8` duplex, where each page came in memory fresh from the system (1.23 million minor
+  faults for 100 pages against 12,825 simplex, `/usr/bin/time`): the allocator's cost, not the drawing's. The
+  fake is never what limits the gate.
+- **Departures:** the forbidden caps include a resolution of 0, and other script mistakes panic (decision 27); the
+  feeder's emptiness read before the number (decision 29); a sheet whose page fails put back (decision 30); a
+  module example beside the crate's. No other: names as the plan's design has them, nothing renamed.
+- **Decisions:** 27 to 34 ("Taken in the steps").

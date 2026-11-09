@@ -75,6 +75,71 @@
 //! so a 32-bit process refuses what it can't hold rather than wrapping. [`RawImage::data_len`]
 //! gives the length before any byte is read, so a reader caps a page's size and allocates once.
 //!
+//! # Features
+//!
+//! - `fake`: `scan_device::fake`, a scripted backend for tests, on every system and with no
+//!   driver: devices listed and opened as a script says (a renamed one found by its maker and
+//!   model), and batches of sheets whose pages it draws at the settings it applies. For tests
+//!   only, never for a shipped build.
+//!
+//! None is on by default, and a backend for a driver API comes behind a feature of its own.
+//!
+//! # Example
+//!
+//! A device listed, opened and scanned through, here the fake one, as an app would: the batch on
+//! a thread of its own, its events read as they come, a [`Tracker`](in_progress::Tracker) to
+//! cancel it with.
+//!
+//! ```
+//! use std::{sync::mpsc, thread, time::Duration};
+//!
+//! use scan_device::fake::{FakeBackend, FakeDevice, Sheet};
+//! use scan_device::in_progress::Tracker;
+//! use scan_device::{Backend, Done, Event, Format, Pixels, Settings, Side, Source};
+//!
+//! // Three sheets in the feeder of the one scanner the fake finds.
+//! let scanner = FakeDevice::new("desk", "Maker", "Model");
+//! scanner.load([Sheet::new(), Sheet::new(), Sheet::new()]);
+//! let mut backend: Box<dyn Backend> = Box::new(FakeBackend::new().with(scanner));
+//!
+//! // What the app lists, stores, and opens again later.
+//! let stored = backend.list(Duration::from_secs(5))?.remove(0);
+//! let opened = backend.open(&stored, Duration::from_secs(5))?;
+//! assert_eq!(opened.renamed_from, None);
+//! let mut device = opened.device;
+//! let caps = device.caps()?;
+//! assert!(caps.sources.iter().any(|source| source.source == Source::Feeder && source.duplex));
+//!
+//! // Both sides of each sheet, in gray at 300 dpi.
+//! let mut settings = Settings::new(Source::Feeder, 300, Format::Gray8);
+//! settings.duplex = true;
+//! let tracker = Tracker::new();
+//! let (events, received) = mpsc::sync_channel(2);
+//! let batch = {
+//!     let tracker = tracker.clone();
+//!     thread::spawn(move || device.scan(&settings, 1, &events, &tracker))
+//! };
+//! // `tracker.cancel()`, from any thread, would finish the sheet in flight and feed no more.
+//! let mut pages = Vec::new();
+//! for event in received {
+//!     match event {
+//!         Event::Applied(applied) => assert!(applied.clamped.is_empty()),
+//!         Event::Sheet(sheet) => println!("sheet {sheet}"),
+//!         Event::Page(page) => {
+//!             let Pixels::Raw(image) = &page.pixels else { panic!("a raw page") };
+//!             // Letter, 8.5 by 11 inches, at 300 dpi.
+//!             assert_eq!((image.width(), image.height()), (2550, 3300));
+//!             pages.push((page.sheet, page.side));
+//!         }
+//!         _ => {}
+//!     }
+//! }
+//! assert_eq!(batch.join().expect("the batch's thread")?, Done::FeederEmpty);
+//! assert_eq!(pages[..2], [(1, Side::Front), (1, Side::Back)]);
+//! assert_eq!(pages.len(), 6);
+//! # Ok::<(), scan_device::ScanError>(())
+//! ```
+//!
 //! # Stability
 //!
 //! Provisional: 0.0.x and unpublished, while the model is tried against each driver API. It's
@@ -86,6 +151,8 @@
 mod caps;
 mod device;
 mod error;
+#[cfg(feature = "fake")]
+pub mod fake;
 mod image;
 mod page;
 

@@ -13,11 +13,21 @@ in checked arithmetic against what the platform holds, the padding bits of black
 in a form the app asked for. The types are plain data, so they can cross a pipe to a process that runs the
 drivers.
 
-Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits. This version is the model
-alone.
+Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits, each behind a feature of its
+own. This version has the model, and a scripted backend for tests; none for a driver API yet.
 
 Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
 once a second one has been through it. No `unsafe` code.
+
+## Features
+
+None is on by default.
+
+- `fake`: `scan_device::fake`, a scripted backend for tests, on every system and with no driver. Its devices
+  list and open as a script says, a stored one opened as a backend for a driver API would open it (a renamed
+  one found by its maker and model, a name now another model's taken as gone), and its batches take sheets
+  from a feeder or the glass, clamp their settings and say what they changed, and draw their pages at those
+  settings, the same bytes on every system. For tests only, never for a shipped build.
 
 ## License
 
