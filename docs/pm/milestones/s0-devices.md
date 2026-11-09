@@ -60,7 +60,7 @@ S1 back: S1 can start once the Linux slices are done.
    - If it doesn't: a desk check of the seam note against `TWAINH.cs` and NAPS2's notes (study only), and the
      hand checks carry the rest.
    - Either way the seam note is revised, said, before slice 8.
-   - **Done here, 2026-11-08, ahead of slices 2 to 6** (Greg's order; `slices/s0-7-twain-spike.md`): it
+   - **Done here, 2026-11-08, ahead of slices 2 to 6** (ruled 2026-11-08; `slices/s0-7-twain-spike.md`): it
      installed silently, here and on `windows-latest`, and scanned with a hidden window in both bitnesses
      here: native and memory, two delivery modes, a pixel-for-pixel comparison, a cancel from another thread.
      The seam note is revised (its TWAIN rows); CI's scans on `windows-latest` close the slice.

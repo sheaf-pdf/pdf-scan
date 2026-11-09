@@ -13,7 +13,7 @@ slice 2 (after `sane-dl` is written), after the TWAIN spike (S0 slice 7), and wh
 model lacking, each change said. The model it describes is provisional until S0 slice 11 freezes it
 (`milestones/s0-devices.md`).
 
-**Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (Greg ran slice 7 first, on the Windows
+**Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (slice 7 ran first, on the Windows
 machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against
 the TWAIN Working Group's sample data source in both bitnesses, here and on `windows-latest`
 (`slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which signals
@@ -190,7 +190,7 @@ transferred (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops is the d
 sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks (slice 12) say what real
 feeders do, and whether `MSG_STOPFEEDER` helps where a driver has it.
 
-**Proposed, for slice 3 (Greg's to rule; he asked whether `in-progress` fits, 2026-11-08):** the cancel handle
+**Proposed, for slice 3 (for review; asked 2026-11-08 whether `in-progress` fits):** the cancel handle
 and the progress events through `in-progress`, his crate, which `scan-cleanup` already takes. A `Tracker` is the
 `Send + Sync` handle any thread can cancel; each backend calls `check()` between pages, never within one, which
 is "finish the page in flight"; progress is `set_total(Some(page bytes), Unit::Bytes)` and `inc` per buffer;
@@ -265,7 +265,7 @@ Each section's "To settle", gathered, with what settles it:
 | How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; the application's own messages posted to the window, never forwarded (section 8) |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
 | Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
-| The cancel handle and progress through `in-progress` (proposed) | S0 slice 3, Greg's to rule |
+| The cancel handle and progress through `in-progress` (proposed) | S0 slice 3, for review |
 | Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S0 slice 12, the hand checks; the `ica` slice |
 | "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam) |
 | Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S0 slice 4's throughput gate; slice 9 |

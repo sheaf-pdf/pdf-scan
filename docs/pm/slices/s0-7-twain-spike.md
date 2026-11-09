@@ -22,14 +22,14 @@ what it re-checks.
 
 ## Taken as it starts
 
-- **Slice 7 before slices 2 to 6** (Greg, 2026-11-08, on the Windows machine: "we can write a slice plan
+- **Slice 7 before slices 2 to 6** (2026-11-08, on the Windows machine: "we can write a slice plan
   here"). Slice 7 depends on nothing they build: it is a throwaway scan whose findings go into the seam note.
   So the seam note's TWAIN sections are revised here, before slice 2 revises its SANE sections; each says
   which it touched. Slice 8 still waits on this slice's revision; slice 9 still waits on slices 3 and 4.
-- **The process** (Greg, the same day: "it's a different machine, different paths, different build tools";
+- **The process** (the same day: "it's a different machine, different paths, different build tools";
   not the `scan-slice` workflow): this plan, an adversarial review of it (below), the steps (each built, then
   checked), parallel code reviews, and a fix stage. A commit per step on the branch; nothing pushed without
-  Greg's word.
+  approval.
 - **The install** is `scripts/twain-sample.ps1` (written before the slice, 2026-11-08, and run here: the DSM
   2.5.0 and the sample source installed in both bitnesses through the official MSI, `msiexec /qn` elevated).
   Step 1 commits it.
@@ -38,7 +38,7 @@ what it re-checks.
 
 | Unknown (seam note, TEST-3) | How the spike answers it | Step |
 |---|---|---|
-| Whether the sample source installs silently on `windows-latest` and scans with a hidden window, both bitnesses | The CI job: the script's `Install`, then the spike. CI runs only on `master` and pull requests (`ci.yml`), so it's seen on a draft pull request after step 1, on Greg's word; if the MSI fails there, the fallbacks under Risk 1 | 1 |
+| Whether the sample source installs silently on `windows-latest` and scans with a hidden window, both bitnesses | The CI job: the script's `Install`, then the spike. CI runs only on `master` and pull requests (`ci.yml`), so it's seen on a draft pull request after step 1, once approved; if the MSI fails there, the fallbacks under Risk 1 | 1 |
 | `CAP_XFERCOUNT` from the environment sets the page count | Runs with `CAP_XFERCOUNT=3`, and unset (2); the spike counts the transfers | 2 |
 | Tiles or assembled images from `twain-dsm`; what a DIB's palette becomes | The tiles' shapes recorded; tiles assembled and compared pixel for pixel with the native DIB of the same page, for RGB, gray and black and white; the DIB palettes, `ICAP_PIXELFLAVOR` and `ICAP_BITORDER` recorded | 2 |
 | Whether `DAT_CALLBACK2` is enough on Windows without the loop | Two delivery modes, each run in full: every message forwarded through `MSG_PROCESSEVENT`, and a registered callback with messages dispatched but not forwarded. **Settled only for a source that signals synchronously**, as the sample does (inside `MSG_ENABLEDS`); sources that signal later, from their own windows or threads, are slice 12's, and the window and loop stay | 2 |
@@ -270,7 +270,7 @@ the step adds.
    32-bit run lists Windows' `wiatwain.ds` too), walks 1 to 3 and back, and reports the DSM's path, version,
    `Machine` (0x8664, 0x14C) and memory functions; the layout assertions compile on both targets, and one is
    seen to fail when a field is changed (a scratch edit, reverted); the report saved to
-   `scratch/work/s0-7/step-1/`. **Then, on Greg's word:** the branch pushed and a draft pull request opened,
+   `scratch/work/s0-7/step-1/`. **Then, once approved:** the branch pushed and a draft pull request opened,
    so CI's `twain-spike` job reports before step 2; its result recorded in "So far". If the MSI fails there,
    the fallbacks under Risk 1, in order, before step 2.
 2. **States 4 to 7: transfers, image info, the two delivery modes, the comparison.** `image` and its unit
@@ -302,7 +302,7 @@ the step adds.
    **Done when:** the core; every claim in the revised sections traced to a report under `scratch/work/s0-7/`
    or a line of the sources; the docs read for anything private (the repository is public).
 
-**Closing:** the code review (parallel reviewers), the fixes, and then, on Greg's word, the pull request
+**Closing:** the code review (parallel reviewers), the fixes, and then, once approved, the pull request
 marked ready; CI's check job on three systems and the `twain-spike` job green closes the slice (and TEST-3, if
 step 4 couldn't).
 
@@ -320,7 +320,7 @@ own `twain_32\wiatwain.ds` (10.0.26100.8875) and `twain_32.dll` (1.7.1.3). Sourc
 `18352fe4ac6c` (local copies in `scratch/reference/twain/`, each with a README of its pin); the DSM's own
 sources (LGPL) read by the review, never copied.
 
-## Decisions taken alone, for Greg to review
+## Decisions taken alone, for review
 
 1. **The spike is a crate, `twain-spike`, never published**, a binary in the workspace so CI can run it;
    deleted when slice 8's own tests replace it.
@@ -335,11 +335,11 @@ sources (LGPL) read by the review, never copied.
 7. **The CI job runs the script in Windows PowerShell 5.1**, where it was tested; pwsh 7's COM late binding
    wasn't tried.
 8. **The seam note's TWAIN sections are revised before slice 2's SANE revision.**
-9. **A draft pull request after step 1**, on Greg's word, so the runner's answer comes before the work that
+9. **A draft pull request after step 1**, once approved, so the runner's answer comes before the work that
    rests on it; rather than `workflow_dispatch`, which runs only once the workflow is on `master`.
 10. **The watchdog ends the process with `TerminateProcess`**, so a hang can't turn into a deadlock at exit.
 
-## For Greg (security)
+## Security, for review
 
 1. **The install runs an unsigned MSI as administrator**, vouched for only by two SHA-256 pins (the release
    zip and the MSI in it), over TLS from GitHub's release download. On CI the runner is thrown away after;
@@ -387,7 +387,7 @@ checked against the sources before it was acted on (the load-bearing ones re-rea
 **High:**
 
 1. CI doesn't run on a pushed branch, only on `master` and pull requests, so the runner's answer would have
-   come after step 4; and no fallback was planned. Now a draft pull request after step 1, on Greg's word, and
+   come after step 4; and no fallback was planned. Now a draft pull request after step 1, once approved, and
    the fallbacks in Risk 1.
 2. The sample signals `MSG_XFERREADY` once per enable, and with `CAP_XFERCOUNT = -1` its count stays 0xFFFF:
    one transfer per signal would have hung after page 1. Now the loop while the count isn't 0, read as `u16`.
@@ -482,7 +482,7 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   - *`just twain-spike` takes the scenario as an optional second argument*, `all` by default, so the CI job
     runs `all` from now on (just `list` so far) and doesn't change in step 3.
   - *`TWLG_USA`*, not `TWLG_ENGLISH_USA`, which both sources define as an alias of it.
-- **CI:** pushed, and the draft pull request opened (Greg, 2026-11-08); every job passed (Greg: "ci passed
+- **CI:** pushed, and the draft pull request opened (2026-11-08); every job passed ("ci passed
   on GH"): the check job on Ubuntu, Windows and macOS, so the spike's split for other systems holds; and the
   `twain-spike` job, so **the sample source installs silently on `windows-latest`** (`msiexec /qn`, the runner
   elevated) and the DSM loads, opens with the hidden window and lists it in both bitnesses there. TEST-3's
@@ -555,17 +555,17 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   see), for slice 12.
 - **Departures from the plan, and why:** *the pause polls* (`PeekMessageW` every 5 ms) where the plan said it
   pumps: `PeekMessageW` doesn't wait, and a bounded wait on one message range is simplest that way.
-- **Asked meanwhile** (Greg, 2026-11-08: "sheaf uses in-progress for cancellation. is that useful in this
+- **Asked meanwhile** (2026-11-08: "sheaf uses in-progress for cancellation. is that useful in this
   context?"): not in the spike, whose question is how a cancel reaches the TWAIN thread (a flag can't wake
   `GetMessageW`; a posted message can); in the device model, likely: step 4 writes it into the seam note as a
-  proposal for slice 3, Greg's to rule.
+  proposal for slice 3, for review.
 
 ### Step 4: what it found, written down (2026-11-08)
 
 - **What it does:** `crates/scan-device-seam.md` revised: a status paragraph saying slice 7 revised it before
   slice 2, on the sample source only; TWAIN's rows in sections 1 and 3 to 8; section 3's tiles and palette
   settled; section 6's "Continue" left to slice 12; section 7's cancel settled for transfers, the feeder
-  left to slice 12, and the `in-progress` proposal (Greg's question during step 3) for slice 3, his to rule;
+  left to slice 12, and the `in-progress` proposal (the question asked during step 3) for slice 3, for review;
   "Known unknowns" with what's settled and three rows added. `crates/twain-dsm.md` corrected: the DSM the
   application's to install; the signature checked by signer name; what the DSM does (sources loaded at
   `MSG_OPENDSM`, `wiatwain.ds` skipped, the current directory changed); `TWAINH.cs`, `twain.h`'s layouts
