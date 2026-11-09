@@ -447,8 +447,10 @@ impl Value {
 ///
 /// Set with [`set`](crate::Handle::set) or
 /// [`set_auto`](crate::Handle::set_auto); bits SANE doesn't define are
-/// ignored.
+/// ignored. Made outside this crate from [`Default`], its fields then set,
+/// as more may come.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct SetInfo {
     /// The backend chose a value other than the one given (a resolution
     /// rounded to one it has): read the option to learn which.

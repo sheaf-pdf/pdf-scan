@@ -834,7 +834,8 @@ unsafe fn read_descriptors(
 }
 
 /// Reads every descriptor into `options`, or empties it if they can't be
-/// read, so no call is sized from descriptors that may be stale.
+/// read, so no call is sized from descriptors that may be stale; either
+/// way `generation` counts it.
 ///
 /// # Safety
 ///
@@ -844,7 +845,9 @@ unsafe fn reload(
     raw: RawHandle,
     limits: Limits,
     options: &mut Vec<OptionDescriptor>,
+    generation: &mut u64,
 ) -> Result<(), Error> {
+    *generation += 1;
     // SAFETY: the caller's contract.
     match unsafe { read_descriptors(api, raw, limits) } {
         Ok(read) => {
@@ -1125,6 +1128,7 @@ impl Sane {
                 raw,
                 name: DeviceName::from(name),
                 options,
+                options_generation: 0,
                 scanning: false,
                 non_blocking: false,
             }),
@@ -1206,6 +1210,9 @@ pub struct Handle {
     name: DeviceName,
     /// The descriptors as last read; empty if a re-read failed.
     options: Vec<OptionDescriptor>,
+    /// How many times the descriptors have been read again since the
+    /// device opened.
+    options_generation: u64,
     /// What the cancel tokens share.
     token: Arc<CancelState>,
     /// Whether a `sane_start` has answered `GOOD` and no `sane_cancel` has
@@ -1233,6 +1240,21 @@ impl Handle {
         &self.options
     }
 
+    /// How many times the descriptors have been read again since the
+    /// device opened (0 until the first time), whatever the cause.
+    ///
+    /// Besides [`reload_options`](Self::reload_options), a call reads them
+    /// again when SANE says they changed (a set answering `RELOAD_OPTIONS`,
+    /// [`SetInfo::reload_options`]; a start answering `INVAL`,
+    /// [`Error::StartInvalid`]), and before any option call on an option
+    /// whose type, size or capabilities SANE now gives differently than the
+    /// copy, which SANE doesn't say: a [`get`](Self::get) may read them all
+    /// again too. A caller holding a view of [`options`](Self::options)
+    /// compares this before and after a call to know whether it changed.
+    pub fn options_generation(&self) -> u64 {
+        self.options_generation
+    }
+
     /// The option with this name, if any (groups' headings, which have no
     /// name, aren't looked at).
     pub fn find_option(&self, name: &str) -> Option<&OptionDescriptor> {
@@ -1250,7 +1272,15 @@ impl Handle {
         // SAFETY: this caller holds the call token; SANE is initialised
         // (this handle keeps `Shared` alive); `raw` is open, since a handle
         // is closed only when it goes.
-        unsafe { reload(&self.shared.api, self.raw, guard.limits, &mut self.options) }
+        unsafe {
+            reload(
+                &self.shared.api,
+                self.raw,
+                guard.limits,
+                &mut self.options,
+                &mut self.options_generation,
+            )
+        }
     }
 
     /// Reads an option's value.
@@ -1259,7 +1289,10 @@ impl Handle {
     /// active, has a value, and can be read by software; a `BOOL` word that
     /// isn't 0 or 1, or a string with no `NUL` in the option's size, is
     /// [`Error::BadValue`]. Values are as SANE gives them, unchecked against
-    /// the option's constraint.
+    /// the option's constraint. If SANE now describes the option otherwise
+    /// than the copy, every descriptor is read again first, and the request
+    /// checked again ([`options_generation`](Self::options_generation)
+    /// counts it).
     pub fn get(&mut self, option: usize) -> Result<Value, Error> {
         let (buffer, _) = self.control(option, Request::Get)?;
         read_value(&self.options[option], buffer)
@@ -1273,7 +1306,10 @@ impl Handle {
     /// inside). The backend may answer `INVAL` for a value outside the
     /// constraint, or choose a value near it ([`SetInfo::inexact`]); if
     /// other options changed, every descriptor is read again before this
-    /// returns ([`SetInfo::reload_options`]).
+    /// returns ([`SetInfo::reload_options`]), and if that fails, the set
+    /// has still been made: [`Error::ReloadAfterSet`]. As for
+    /// [`get`](Self::get), the descriptors may be read again before the
+    /// call too ([`options_generation`](Self::options_generation)).
     pub fn set(&mut self, option: usize, value: &Value) -> Result<SetInfo, Error> {
         self.control(option, Request::Set(value))
             .map(|(_, info)| info)
@@ -1306,7 +1342,15 @@ impl Handle {
         });
         if !current {
             // SAFETY: as above.
-            unsafe { reload(&shared.api, self.raw, limits, &mut self.options) }?;
+            unsafe {
+                reload(
+                    &shared.api,
+                    self.raw,
+                    limits,
+                    &mut self.options,
+                    &mut self.options_generation,
+                )
+            }?;
             buffer = prepare(&self.options, option, request)?;
         }
         let mut info: ffi::SANE_Int = 0;
@@ -1334,7 +1378,20 @@ impl Handle {
         let info = SetInfo::from_word(info);
         if info.reload_options {
             // SAFETY: as above.
-            unsafe { reload(&shared.api, self.raw, limits, &mut self.options) }?;
+            let reloaded = unsafe {
+                reload(
+                    &shared.api,
+                    self.raw,
+                    limits,
+                    &mut self.options,
+                    &mut self.options_generation,
+                )
+            };
+            // The backend applied the set: say so, with what it said.
+            reloaded.map_err(|reload| Error::ReloadAfterSet {
+                info,
+                reload: Box::new(reload),
+            })?;
         }
         drop(guard);
         Ok((buffer, info))
@@ -1416,7 +1473,15 @@ impl Handle {
         let reload = (status == Status::INVAL).then(|| {
             // SAFETY: as above; `sane_cancel` has answered the error status,
             // so a descriptor may be read.
-            unsafe { reload(&shared.api, self.raw, guard.limits, &mut self.options) }
+            unsafe {
+                reload(
+                    &shared.api,
+                    self.raw,
+                    guard.limits,
+                    &mut self.options,
+                    &mut self.options_generation,
+                )
+            }
         });
         drop(guard);
         if self.token.take_request() {

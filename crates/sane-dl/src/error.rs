@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::{Parameters, Status, ValueType, Version};
+use crate::{Parameters, SetInfo, Status, ValueType, Version};
 
 /// A source error, kept without naming the type of the crate it came from.
 type Source = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -268,6 +268,21 @@ pub enum Error {
         /// Why the descriptors couldn't be read again, if they couldn't.
         #[source]
         reload: Option<Box<Error>>,
+    },
+    /// A set or [`set_auto`](crate::Handle::set_auto) that the backend
+    /// made, answering `GOOD` and saying `RELOAD_OPTIONS`, after which the
+    /// descriptors couldn't be read again: `info` is what SANE said of the
+    /// set, and `reload` why the re-read failed, which leaves no
+    /// descriptors ([`Handle::options`](crate::Handle::options)) until
+    /// [`reload_options`](crate::Handle::reload_options) succeeds. Apart
+    /// from a refusal before SANE saw the call, which made no set.
+    #[error("the set was made, but the descriptors couldn't be read again")]
+    ReloadAfterSet {
+        /// What SANE said of the set.
+        info: SetInfo,
+        /// Why the descriptors couldn't be read again.
+        #[source]
+        reload: Box<Error>,
     },
     /// `sane_read` said it gave fewer than 0 bytes, or more than it was
     /// asked for: not trusted, and the scan was cancelled.

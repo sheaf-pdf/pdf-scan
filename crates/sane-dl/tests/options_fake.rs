@@ -776,23 +776,30 @@ fn a_descriptor_changed_without_a_word_is_read_before_the_call() {
             let info = handle.set(1, &string("wide")).unwrap();
             assert!(!info.reload_options);
             assert_eq!(handle.options()[2].size, 4, "not read again yet");
+            assert_eq!(handle.options_generation(), 0);
             // The get reads t's descriptor first, sees it changed, reads them
-            // all, and sizes its buffer to two words.
+            // all, and sizes its buffer to two words; the count says so.
             assert_eq!(handle.get(2).unwrap(), Value::Int(vec![7, 7]));
             assert_eq!(handle.options()[2].size, 8);
+            assert_eq!(handle.options_generation(), 1);
+            assert_eq!(handle.get(2).unwrap(), Value::Int(vec![7, 7]));
+            assert_eq!(handle.options_generation(), 1, "nothing changed");
             // A set sized from the copy is refused once the copy is current.
             handle.set(1, &string("off")).unwrap();
+            assert_eq!(handle.options_generation(), 1, "a quiet set");
             assert!(matches!(
                 handle.set(2, &Value::Int(vec![1, 2])),
                 Err(Error::Inactive { option: 2 })
             ));
+            // Refused for what the re-read before it found, and counted.
+            assert_eq!(handle.options_generation(), 2);
             assert!(handle.options()[2].capabilities.inactive());
         }
     );
     let log = fake.log();
     log.assert_no_violations();
     let gets = log.controls_of(2);
-    assert_eq!(gets.len(), 2, "{gets:?}");
+    assert_eq!(gets.len(), 3, "{gets:?}");
     assert!(gets[1].ends_with("action=GET"));
 }
 
@@ -813,10 +820,15 @@ fn descriptors_that_cant_be_read_again_leave_none() {
         || {
             let sane = common::load_fake();
             let mut handle = sane.open("fake:0").unwrap();
+            // The set was made, and said so, though the re-read failed.
             match handle.set(1, &string("gone")) {
-                Err(Error::BadDescriptor { option: 2, .. }) => {}
-                other => panic!("expected BadDescriptor, got {other:?}"),
+                Err(Error::ReloadAfterSet { info, reload }) => {
+                    assert!(info.reload_options);
+                    assert!(matches!(*reload, Error::BadDescriptor { option: 2, .. }));
+                }
+                other => panic!("expected ReloadAfterSet, got {other:?}"),
             }
+            assert_eq!(handle.options_generation(), 1);
             assert!(handle.options().is_empty());
             assert!(matches!(
                 handle.get(1),

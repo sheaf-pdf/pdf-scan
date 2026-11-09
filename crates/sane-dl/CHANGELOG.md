@@ -36,9 +36,11 @@ version is published.
   `Capabilities`, `Constraint`), the constraint read only as the member its type allows; one SANE doesn't
   allow makes its option unusable, said. `get`, `set` (`Value`: `Bool`, `Int`, `Fixed`, `String`,
   `Button`) and `set_auto`, each refusing before the backend sees it a call SANE's rules don't allow, and
-  returning `SetInfo`; descriptors read again on `RELOAD_OPTIONS`, before any call on an option SANE now
-  describes differently, and after `sane_start` answers `INVAL` (`Error::StartInvalid`). `Fixed`, SANE's
-  16.16 word, with `to_f64` and a checked `from_f64`. `BOOL` words other than 0 or 1 are `BadValue`.
+  returning `SetInfo` (`#[non_exhaustive]`); descriptors read again on `RELOAD_OPTIONS`, before any call on
+  an option SANE now describes differently, and after `sane_start` answers `INVAL` (`Error::StartInvalid`),
+  each re-read counted by `Handle::options_generation`; a set made whose re-read fails is
+  `Error::ReloadAfterSet`, carrying what SANE said of it. `Fixed`, SANE's 16.16 word, with `to_f64` and a
+  checked `from_f64`. `BOOL` words other than 0 or 1 are `BadValue`.
 - **Scanning.** Step by step: `start`, `parameters` (`Parameters`, as SANE gives them, with checked
   accessors), `read` (`ReadOutcome`; a length below 0 or past what was asked is `BadReadLength`),
   `set_io_mode`, `select_fd` (Unix) and `cancel`, with `sane_cancel` after every error status from a start,

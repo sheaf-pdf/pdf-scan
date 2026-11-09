@@ -63,9 +63,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   process that loads SANE to be given as `SANE_CONFIG_DIR`, so a listing doesn't wait on every backend.
   The crate never sets an environment variable itself: the caller gives the value to the process it starts.
 - **Options, typed.** A device's options are read as it opens, each descriptor's type, unit, size,
-  capabilities and constraint, and read again whenever SANE says they changed. `get`, `set` and `set_auto`
-  take and give a `Value`, and refuse a call SANE's rules don't allow (an inactive option, one software
-  can't set, a value of another type or length, a string too long) before the backend sees it.
+  capabilities and constraint, and read again whenever SANE says they changed, or before a call on an option
+  SANE now describes otherwise, each time counted (`Handle::options_generation`). `get`, `set` and
+  `set_auto` take and give a `Value`, and refuse a call SANE's rules don't allow (an inactive option, one
+  software can't set, a value of another type or length, a string too long) before the backend sees it.
 - **Scanning, step by step** (`start`, `parameters`, `read`, `set_io_mode`, `select_fd` on Unix, `cancel`),
   or **a page at a time:** `Handle::batch` gives a `Batch`, whose `next_page` reads every frame of a page to
   its end and assembles them into an `Image`, or says the feeder is empty (`Page::NoDocs`, from either call
