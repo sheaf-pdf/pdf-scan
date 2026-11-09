@@ -34,10 +34,45 @@ S1 back: S1 can start once the Linux slices are done.
    0.1.0-alpha.1, ready to publish and not published, MSRV 1.89, with `fake-libsane`; its five steps checked
    and its code review's 22 findings fixed. For review: the plan's "Decisions taken alone, for review" (72)
    and "For review (security)" (10), above all the code review's API changes before the first publish
-   (`Sane::load_from` an `unsafe fn`, `DEFAULT_LIBRARIES` with macOS's absolute paths, the `links` key and its
-   empty build script, `LimitExceeded`, `ReloadAfterSet`, `options_generation`, `SetInfo` non-exhaustive,
-   `clear_cancel`); then the merge of its pull request. CI's run on the three systems is green (pull request
-   #2, run 42582929367, 2026-11-09), which closed TEST-2 and TEST-8.
+   (`Sane::load_from` an `unsafe fn`, which slice 1a removed, `DEFAULT_LIBRARIES` with macOS's absolute
+   paths, the `links` key and its empty build script, `LimitExceeded`, `ReloadAfterSet`, `options_generation`,
+   `SetInfo` non-exhaustive, `clear_cancel`). CI's run on the three systems is
+   green (pull request #2, run 42582929367, 2026-11-09), which closed TEST-2 and TEST-8.
+
+**1a. sane-dl's public API made safe.** A follow-up to slice 1, asked for on 2026-11-09 ("i think that we
+should try to define safe apis where possible"), which confirms `decisions.md`'s ruling of 2026-11-08, "Public
+APIs are safe Rust; `unsafe` contracts stay inside a crate", recorded by slice 8 after slice 1's code review had
+made `Sane::load_from` an `unsafe fn`. Every public item of `sane-dl` whose contract a caller keeps given a safe
+shape, the API's shapes weighed in the plan before one is taken, or named as an exception with why: the library
+chosen by the system's loader alone (`Sane::load_from` removed; another SANE loaded through the loader's own
+search path, set as the process starts); the tests loading `fake-libsane` through `Sane::load` itself, the loader
+pointed at it by each child's environment, and what needs a path of its own tested inside the crate; `ffi`'s
+function-pointer types inside the crate; one SANE per process whatever copies of the crate it holds (on Linux a
+process-wide slot); BUG-7 (`Image`'s derived `Debug` printing every byte); and a gate over every public item,
+read from rustdoc's JSON on a pinned nightly. `sane-dl` stays 0.1.0-alpha.1, unpublished, its changelog saying
+what changed. Checked: `just ci`; the soundness review (the code review's soundness lens: every `unsafe` block
+and `SAFETY:` comment, the private loader's contract and its call sites, each public item's docs); the gate over
+the public API (no `unsafe` function, method or trait, and no raw or unsafe function pointer in a public
+signature), made to fail on violations made for the check; the publish dry run. Plan:
+`archive/slices/s0-1a-sane-dl-safe-api.md`.
+**Done, and merged 2026-11-09** (pull request #7, squashed as `42e4227`; `archive/slices/s0-1a-sane-dl-safe-api.md`):
+branch `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`: four steps, each checked, then the code review's 22 findings, all fixed. No
+public item of `sane-dl` is `unsafe`: `Sane::load_from` is gone, the library the system loader's choice alone
+(shape 1 of the eight weighed), another SANE loaded through the loader's own search path; the tests load
+`fake-libsane` through `Sane::load()`, the fake's tests ignored on Windows, saying why; `ffi`'s function types
+inside the crate; on Linux a process-wide slot (an abstract socket named for the process, its name published)
+keeping SANE to one per process across copies of the crate built apart, waiting out a spawned child's moment
+between fork and exec, a probe with two copies showing it; `Image`'s `Debug` by hand (BUG-7 done); `just
+public-api`, the gate over every public item, widened by the code review, in `ci` and a CI job of its own. The
+code review found what `Sane::load`'s safety rests on beyond the loader: the process's
+environment, kept to two rules its docs now give (the search path's entries absolute; the library path's
+variables never changed inside a process using SANE, whose `dll` reads them at each backend load). To review:
+the plan's "Decisions taken alone, for review" (40; decision 33, that environment rule, above all) and "For
+review (security)" (11), Q-7 and UP-14. CI's run of pull request #7 is green on all eleven jobs (run
+42648083514), which closed TEST-15: on Windows the fake's tests ignored with their reason, on macOS run through
+`DYLD_LIBRARY_PATH` and passing (TEST-7 stays open for Homebrew's SANE). Its TEST-12 is TEST-14, slice 3 having
+merged first.
+
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the
@@ -100,7 +135,8 @@ S1 back: S1 can start once the Linux slices are done.
    **Done on the branch** (2026-11-09; `slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
    at `5a4bff2`, to `510d349` (the code review's fixes), then the record; five steps, each checked, then its
    code review's 20 findings (5 major), 18 fixed whole and two in part, their other halves deferred (FEAT-16,
-   FEAT-17), none refuted. Waiting on review, then the push with `master` merged in, the pull request and CI. `scan-worker` 0.0.0, unpublished,
+   FEAT-17), none refuted. Pushed with `master` merged in after #7, in pull request #8, waiting on review and
+   CI. `scan-worker` 0.0.0, unpublished,
    MSRV 1.89, no `unsafe` (`crates/scan-worker.md`): the protocol as the seam note asks it, the model's types
    through a new `serde` feature of `scan-device` (every variant round-tripped, a variant added failing the
    build until it's listed), a page's header, `Event`'s and `Pixels`' variants and a message's level carried

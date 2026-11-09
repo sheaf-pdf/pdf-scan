@@ -30,6 +30,7 @@ fn string(text: &str) -> Value {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn opening_reads_every_descriptor_and_its_count() {
     let script = format!(
         "{DEVICE}{}",
@@ -202,6 +203,7 @@ fn check_profile(handle: &mut Handle, flatbed: Option<&str>, feeder: &str, duple
 macro_rules! profile_test {
     ($test:ident, $profile:literal, $flatbed:expr, $feeder:expr, $duplex:expr) => {
         #[test]
+        #[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
         fn $test() {
             let script = format!("{DEVICE}profile {}\n", $profile);
             let fake = Fake::new(stringify!($test), &script);
@@ -269,6 +271,7 @@ profile_test!(
 );
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_constraint_that_changes_is_read_again() {
     let fake = Fake::new(
         "a_constraint_that_changes_is_read_again",
@@ -304,6 +307,7 @@ fn a_constraint_that_changes_is_read_again() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn each_refusal_reaches_no_backend() {
     let script = format!(
         "{DEVICE}{}",
@@ -410,6 +414,7 @@ fn each_refusal_reaches_no_backend() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn hostile_descriptors_make_options_unusable() {
     let script = format!(
         "{DEVICE}{}",
@@ -578,6 +583,7 @@ fn hostile_descriptors_make_options_unusable() {
 macro_rules! bad_descriptor_test {
     ($test:ident, $script:expr, $option:expr, $reason:expr) => {
         #[test]
+        #[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
         fn $test() {
             let fake = Fake::new(stringify!($test), &format!("{DEVICE}{}", $script));
             in_child!($test, fake.child(), || {
@@ -601,6 +607,7 @@ macro_rules! bad_descriptor_test {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_count_of_a_billion_options_is_refused_unread() {
     let fake = Fake::new(
         "a_count_of_a_billion_options_is_refused_unread",
@@ -660,6 +667,7 @@ bad_descriptor_test!(
 );
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn caps_hold_at_their_limit_and_refuse_one_past() {
     let script = format!(
         "{DEVICE}{}",
@@ -735,6 +743,7 @@ fn caps_hold_at_their_limit_and_refuse_one_past() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_groups_undefined_fields_are_never_read() {
     // The standard defines only a group's title and type: its name and
     // description here point to no memory, which reading would crash on.
@@ -774,6 +783,7 @@ fn a_groups_undefined_fields_are_never_read() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_descriptor_changed_without_a_word_is_read_before_the_call() {
     // Setting `s` makes `t` two words, and the backend doesn't say so.
     let script = format!(
@@ -830,6 +840,7 @@ fn a_descriptor_changed_without_a_word_is_read_before_the_call() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn descriptors_that_cant_be_read_again_leave_none() {
     let script = format!(
         "{DEVICE}{}",
@@ -872,6 +883,7 @@ fn descriptors_that_cant_be_read_again_leave_none() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_count_the_backend_wont_give_is_its_status() {
     let fake = Fake::new(
         "a_count_the_backend_wont_give_is_its_status",
@@ -907,6 +919,7 @@ fn a_count_the_backend_wont_give_is_its_status() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_value_the_backend_refuses_is_its_status() {
     let fake = Fake::new(
         "a_value_the_backend_refuses_is_its_status",
@@ -932,6 +945,7 @@ fn a_value_the_backend_refuses_is_its_status() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn option_calls_say_a_late_listing_holds_sane() {
     let fake = Fake::new(
         "option_calls_say_a_late_listing_holds_sane",

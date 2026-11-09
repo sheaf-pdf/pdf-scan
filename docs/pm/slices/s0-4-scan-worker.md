@@ -2,8 +2,8 @@
 
 Status: **done on branch `s0-4-scan-worker`** (2026-11-09; from `master` at `5a4bff2`): its five steps, each
 checked, then its code review's 20 findings, 18 fixed whole and two fixed in part, their other halves deferred
-(FEAT-16, FEAT-17), none refuted ("Code review"). Waiting on review, then the push (with `master` merged in, the
-main session's), the pull request and CI's run on Ubuntu, Windows and macOS (TEST-16). Milestone:
+(FEAT-16, FEAT-17), none refuted ("Code review"). Pushed, `master` merged in after #7, in pull request #8;
+waiting on review and CI's run on Ubuntu, Windows and macOS (TEST-16). Milestone:
 `milestones/s0-devices.md`, slice 4.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written

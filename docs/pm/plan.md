@@ -45,7 +45,7 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 | `pdf-images` | PDF | An image XObject's or inline image's samples, decoded in its own color space, depth and `/Decode` | entry 33 (unbuilt) |
 | `pdf-scan` | PDF | Scanned pages written to PDF (images as pages, an invisible text layer from words with boxes), and a scanned PDF's page images found and read back | `sheaf_doc::images`, the glyphless text layer |
 | `scan-fixtures` | tests | Seeded synthetic pages, the M5 bench's degradations, codes drawn, device scripts. Never published | `sheaf_image::codes::fixture` |
-| `fake-libsane` | tests | A stand-in for libsane, a `cdylib` that tests load by its path: scripted devices and faults, hostile values, SANE's calling rules checked. Never published, and no crate depends on it | Built in S0 slice 1 |
+| `fake-libsane` | tests | A stand-in for libsane, a `cdylib` that tests load as SANE through the loader's search path (ignored on Windows): scripted devices and faults, hostile values, SANE's calling rules checked. Never published, and no crate depends on it | Built in S0 slice 1; loaded through `Sane::load()` since S0 slice 1a |
 
 ```
  devices: no pixel work, no PDF        pages: pixels only                PDF: on pdf-lint's family
@@ -62,7 +62,7 @@ Eleven crates in three layers, nine published and two for tests (details and bou
                 in-progress
 
  scan-fixtures (dev-dependency of any)
- fake-libsane (built and loaded by path by sane-dl's tests; nothing depends on it)
+ fake-libsane (built by sane-dl's tests, loaded as SANE by the loader's path; nothing depends on it)
 ```
 
 - **The layers don't reach into each other.** No device crate depends on a pixel or PDF crate; no pixel

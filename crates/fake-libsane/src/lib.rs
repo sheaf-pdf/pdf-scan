@@ -1,6 +1,6 @@
 //! A stand-in for libsane, for tests.
 //!
-//! A shared library that exports SANE's C API, loaded by its path in place of
+//! A shared library that exports SANE's C API, loaded as SANE in place of
 //! the system's `libsane`. It plays what SANE's own `test` and `pnm` backends
 //! can't: values no well-behaved backend returns, listings that take their
 //! time, the feeder and duplex options of particular backends and
@@ -10,10 +10,15 @@
 //! Each is scripted by the test that loads it. It logs every call, and
 //! records a violation whenever its caller breaks SANE's calling rules.
 //!
-//! Never published, and no crate depends on it: tests build it and load the
-//! shared object by its path. Its exports are declared with the very types
-//! of `sane-dl`'s bindings (the same source file), and each is checked at
-//! compile time to have its binding's type.
+//! Never published, and no crate depends on it: tests build it, copy the
+//! shared object under SANE's own file name (`libsane.so.1`;
+//! `libsane.1.dylib` on macOS) into a directory of its own, and load it as
+//! SANE, through `sane-dl`'s `Sane::load`, in a process started with the
+//! system loader's search path naming that directory first
+//! (`LD_LIBRARY_PATH`; `DYLD_LIBRARY_PATH` on macOS). Windows has no such
+//! route, so the tests that load it are ignored there. Its exports are
+//! declared with the very types of `sane-dl`'s bindings (the same source
+//! file), and each is checked at compile time to have its binding's type.
 //!
 //! # Driving it
 //!

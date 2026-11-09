@@ -14,9 +14,10 @@ categories = ["api-bindings", "external-ffi-bindings", "hardware-support", "os::
 # stand-in library from the workspace (`just sane-dl-package` checks the
 # list).
 include = ["/src", "/build.rs", "/README.md", "/CHANGELOG.md"]
-# Links nothing (libsane is loaded at run time): the key keeps a program to
-# one copy of the crate, since SANE is started once per process and each
-# copy would count its own. Cargo takes it only with a build script, which
+# Links nothing (libsane is loaded at run time): the key keeps a build to
+# one version of the crate, since SANE is started once per process and each
+# copy would count its own (on Linux the crate's process-wide slot covers
+# copies built apart too). Cargo takes it only with a build script, which
 # builds nothing.
 links = "sane-dl"
 

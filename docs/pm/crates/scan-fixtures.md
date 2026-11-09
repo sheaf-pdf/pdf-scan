@@ -20,7 +20,8 @@ Never published, as pdf-fixtures isn't; crates take it by path as a dev-dependen
   own), and libtiff's sample images `fax2d.tif` and `g3test.tif`. Nothing in Rust encodes G3 or MH.
 - `fake` device scripts, for `scan-device`'s `fake` backend.
 - Not the fake libsane: it was planned here, and S0 slice 1 made it `fake-libsane`, a crate of its own for
-  good (`crates/fake-libsane.md`; `decisions.md`, "Made here"). It's a shared object tests load by its path,
-  so it must carry none of the image codecs this crate takes, and no crate may depend on it.
+  good (`crates/fake-libsane.md`; `decisions.md`, "Made here"). It's a shared object tests load as SANE
+  through the loader's search path (ignored on Windows), so it must carry none of the image codecs this crate
+  takes, and no crate may depend on it.
 - Licenses checked before any outside image is vendored: zxing-cpp's sample and false-positive sets,
   BarBeR, DIBCO, DISEC'13, DocUNet (TEST-5, TEST-6).

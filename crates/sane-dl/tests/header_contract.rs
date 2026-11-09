@@ -19,10 +19,12 @@
 //! The C spellings use the header's own typedef names, since C takes an enum
 //! as compatible with `unsigned int` rather than `int`. Each table row ties
 //! the binding to the row's Rust type at compile time, so the two can't
-//! drift. The header is `/usr/include/sane/sane.h`, or the path in
-//! `SANE_DL_SANE_H`; the compiler `$CC`, or `cc`. Where either is missing the
-//! test says so on standard error and passes, or fails with
-//! `SANE_DL_REQUIRE_HEADER=1`.
+//! drift. The bindings are the crate's own source, `src/ffi.rs`, taken here
+//! by its path, so the function types the crate keeps inside it are checked
+//! too, in the very file the crate compiles. The header is
+//! `/usr/include/sane/sane.h`, or the path in `SANE_DL_SANE_H`; the compiler
+//! `$CC`, or `cc`. Where either is missing the test says so on standard
+//! error and passes, or fails with `SANE_DL_REQUIRE_HEADER=1`.
 
 mod common;
 
@@ -33,7 +35,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
 
-use sane_dl::ffi;
+// The bindings' own source, whose function types are inside the crate; not
+// every declaration is used here.
+#[allow(dead_code)]
+#[path = "../src/ffi.rs"]
+mod ffi;
 
 /// The identity, for tying a binding's type to a row's at compile time.
 fn same<T>(value: T) -> T {

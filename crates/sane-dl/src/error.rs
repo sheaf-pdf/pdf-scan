@@ -14,7 +14,8 @@ type Source = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// No library could be opened by the names tried: missing, or not one
+    /// No library could be opened by the names tried: SANE isn't installed
+    /// where the system's loader looks, or what's there isn't a library
     /// this process can load (`source` says which, for the last one).
     #[error("couldn't open a SANE library (tried {})", list_paths(tried))]
     NotFound {
@@ -24,12 +25,12 @@ pub enum LoadError {
         #[source]
         source: Source,
     },
-    /// This system has no default SANE library (Windows): SANE isn't its
-    /// scanner API. [`Sane::load_from`](crate::Sane::load_from) still loads
-    /// one by its path.
+    /// This system has no default SANE library (Windows, and Apple's systems
+    /// but macOS): SANE isn't its scanner API, so nothing is loaded.
     #[error("there is no default SANE library on this system")]
     NoDefault,
-    /// The library lacks one of SANE's functions, so it isn't SANE's.
+    /// The library found under SANE's name lacks one of SANE's functions,
+    /// so it isn't SANE. None of them was called.
     #[error("the library has no `{name}`, so it isn't SANE")]
     MissingSymbol {
         /// The function missing.
@@ -45,10 +46,35 @@ pub enum LoadError {
     /// (`sane_exit`) before this was returned.
     #[error("the library follows SANE {0}, and only SANE 1 is supported")]
     UnsupportedVersion(Version),
-    /// SANE is already loaded in this process: one [`Sane`](crate::Sane) at
-    /// a time, since SANE is started once per process.
+    /// SANE is already loaded in this process by this copy of the crate:
+    /// one [`Sane`](crate::Sane) at a time, since SANE is started once per
+    /// process. It's free again once the `Sane` and every handle opened
+    /// from it are gone.
     #[error("SANE is already loaded in this process")]
     AlreadyLoaded,
+    /// The process's slot for SANE, which every copy of this crate in a
+    /// process takes (Linux; `Sane`'s "One per process"), is held by
+    /// someone other than this copy: another copy of the crate in the
+    /// process has SANE loaded; a child the process forked holds it, until
+    /// the child runs a program or ends; or another process bound its name
+    /// first. A load tries again for a tenth of a second before this, so a
+    /// child spawned meanwhile, which holds it only until its program
+    /// starts, doesn't cause it. Never on other systems.
+    #[error(
+        "SANE's slot in this process is held elsewhere: by another copy of sane-dl in it, a child it forked, or another process"
+    )]
+    SlotTaken,
+    /// The system refused the socket that keeps SANE to one per process
+    /// across every copy of this crate (Linux), as a sandbox that forbids
+    /// Unix sockets or binding its name would, or a process out of file
+    /// descriptors: so nothing was loaded, rather than SANE loaded
+    /// unguarded. Never on other systems. The name is in the abstract
+    /// namespace, `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` (`Sane`'s
+    /// "One per process"), so a sandbox's profile that allows binding names
+    /// under `sane-dl/slot/` (AppArmor's `@sane-dl/slot/**`) lets it be
+    /// taken.
+    #[error("couldn't take this process's slot for SANE, so nothing was loaded")]
+    SlotRefused(#[source] std::io::Error),
 }
 
 fn list_paths(paths: &[PathBuf]) -> String {

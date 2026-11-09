@@ -383,7 +383,8 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 **SANE, as `sane-dl` gives it** (S0 slice 1): every status with the function that answered it
 (`Error::Status { status, call }`), statuses SANE doesn't define kept as integers. No libsane at all is no
 status but `LoadError::NotFound`, with the names tried: the model's `NotInstalled`, apart from `Gone`. The
-other `LoadError`s (a symbol missing, `sane_init` failing, a version not 1, a second load) are `Driver`.
+other `LoadError`s (a symbol missing, `sane_init` failing, a version not 1, a second load or the process's slot
+held elsewhere, `AlreadyLoaded` and `SlotTaken`, or that slot refused, `SlotRefused`) are `Driver`.
 
 **The model** ("The model, for slice 3"): proposal 9's `ScanError`, with these changes: `Driver` carries whether
 the driver has already shown its own message (`shown`), so the app doesn't say it twice; warming up is waited on

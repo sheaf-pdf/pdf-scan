@@ -2,24 +2,66 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 1 (`slices/s0-1-sane-dl.md`, which has the design, its decisions, what each step
-checked and the code review's fixes): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not published;
-MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends and `fake-libsane`
-(`crates/fake-libsane.md`).
+**As built** in S0 slice 1 (`archive/slices/s0-1-sane-dl.md`, which has the design, its decisions, what each step
+checked and the code review's fixes), its public API made safe in S0 slice 1a
+(`archive/slices/s0-1a-sane-dl-safe-api.md`: the shapes of loading weighed, the process's slot, the gate over the
+public API): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not published; MSRV 1.89
+(`decisions.md`). No public item is `unsafe` (`decisions.md`, "Public APIs are safe Rust"). Its tests drive
+SANE's own `test` and `pnm` backends and `fake-libsane` (`crates/fake-libsane.md`).
 
-- **What:** SANE for Rust, loaded at run time (M5 proposal 6, M5 ask 6, entry 5): `libsane.so.1` opened by
-  `libloading` (0.9, ISC) through the system loader's search (on macOS `libsane.1.dylib` at Homebrew's and
-  MacPorts' absolute paths, never a bare name, which dyld would also seek in the working directory), or a
-  library the caller names (`Sane::load_from`, an `unsafe fn`, since it trusts the library's code and its
-  symbols' types; sheaf's tests would name theirs by `SHEAF_LIBSANE`, an environment variable that's the
-  app's). Nothing fails until SANE is asked for, and then it says so (`LoadError`: `NotFound` with the names
-  tried, `NoDefault` on Windows, `MissingSymbol`, `Init`, `UnsupportedVersion`, `AlreadyLoaded`). Never
-  unloaded; one `Sane` per process, another after it ends; one copy of the crate per program (its manifest's
-  `links = "sane-dl"`, with a build script that builds nothing).
+- **What:** SANE for Rust, loaded at run time (M5 proposal 6, M5 ask 6, entry 5): `Sane::load()` opens
+  `libsane.so.1` with `libloading` (0.9, ISC) through the system loader's search (on macOS `libsane.1.dylib` at
+  Homebrew's and MacPorts' absolute paths, never a bare name, which dyld would also seek in the working
+  directory; none on Windows or Apple's other systems, `NoDefault`). Nothing fails until SANE is asked for,
+  and then it says so (`LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
+  `UnsupportedVersion`, `AlreadyLoaded`, `SlotTaken`, `SlotRefused`). Never unloaded; one `Sane` per process,
+  another after it ends.
+  - **Which library:** the loader's choice alone; no code, the crate's or its caller's, names a path (slice
+    1a removed `Sane::load_from`, an `unsafe fn`). What loads is what the system's loader finds under SANE's
+    name, in the environment the process started with, taken as SANE as a library linked at build time is
+    (the soname names SANE 1's ABI, which the header contract checks the bindings against), and never closed.
+    Another SANE (one an app ships, a build of one's own, the tests' fake) is loaded through the loader's own
+    search path given to the process as it starts, `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS), naming a
+    directory of SANE's libraries alone, or a run path built into the binary or shared library that holds the
+    crate (glibc searches the calling object's). The loaders ignore those variables in a set-id process, and
+    dyld in a process it restricts (the hardened runtime: FEAT-13). So M5 proposal 6's `SHEAF_LIBSANE`
+    becomes, for sheaf's tests, the loader's variable on the test's child, and a worker's client that wants
+    another SANE sets it on the worker's command beside `SANE_CONFIG_DIR`.
+  - **What that rests on** (slice 1a's code review): the process's environment, as every library loaded by
+    name does, kept to two rules `Sane::load`'s docs give its starter and the program. Every entry of the
+    search path (and of a run path) absolute: glibc reads an empty entry as the working directory and looks a
+    relative one up from it as the library loads, and `set_current_dir` is safe, so with one the program's own
+    code would choose (std's name lookups are open to it alike). And `LD_LIBRARY_PATH` (or `SHLIB_PATH`,
+    `LIBPATH`) never changed inside a process using SANE: the system's loader reads it as the process starts,
+    but SANE's `dll` reads the first of the three that's set with `getenv` each time it loads a backend, at a
+    listing or an open, before its own directory, and `set_var` is safe before edition 2024. Said rather than
+    made `unsafe`: a change after `load` reaches `open` and `devices` too, and the Vulkan loader's variables,
+    under ash's and wgpu's safe entries, are the same case (the slice's decision 33, for review). In a set-id
+    process glibc clears `LD_LIBRARY_PATH` but not the other two, which `dll` then reads, so the docs tell a
+    set-id program to run SANE in a process it starts (UP-14, for sane-backends' `dll`).
+  - **One SANE per process, across copies of the crate:** cargo refuses two versions in one build (the
+    manifest's `links = "sane-dl"`, with a build script that builds nothing), but each shared library built
+    with the crate holds a copy of its own. On Linux every copy takes one slot for the whole process before
+    the library opens and holds it until after `sane_exit` (`src/process_slot.rs`, std alone, no `unsafe`): a
+    Unix datagram socket bound to an abstract name formed from the pid namespace (`/proc/self/ns/pid`'s device
+    and inode) and the pid, `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` (`…/pidns/none/pid/<pid>` where
+    `/proc` can't be read), fixed for good so every version finds every other; the kernel frees it however the
+    process ends. A load that finds it bound tries again for 100 ms, since every child the process spawns
+    holds it from its fork until its exec (slice 1a's code review: without the wait, a load beside a thread
+    spawning programs was refused up to half the time); still held (another copy with SANE loaded, a child
+    forked without an exec, a local user binding the name first) is `SlotTaken`, and this copy's own live
+    `Sane` is `AlreadyLoaded`; any other refusal (a sandbox that forbids Unix sockets or that name: a profile
+    allows `@sane-dl/slot/**`) is `SlotRefused`, never SANE unguarded. The name is in the public docs, a
+    promise across versions. It can't see a change of the process's network namespace or of its view of
+    `/proc` between two copies' loads, nor another user of libsane in the process; there, and on every system
+    but Linux, where a copy sees only its own loads (BUG-8), the program keeps to one copy, as the docs
+    say.
   - Bindings of its own (`sane_dl::ffi`, public, types and constants only), from SANE 1.4.0's public-domain
-    `sane.h`: its 14 functions as function-pointer types, its structs, types and constants. The grant asks
-    that the notice be kept and changes marked: both done in the file's header. No bindgen, no build-time
-    link; nothing from `saneopts.h`, which is GPL with SANE's exception.
+    `sane.h`: its structs, types and constants, its function-like macros as `const fn`s; the types of its 14
+    functions and `SANE_Auth_Callback` are `pub(crate)` (slice 1a), since nothing public hands one out, so
+    nothing callable is public. The grant asks that the notice be kept and changes marked: both done in the
+    file's header. No bindgen, no build-time link; nothing from `saneopts.h`, which is GPL with SANE's
+    exception.
   - Statuses and frame types as integers with named constants, never Rust enums (`Status`, `FrameFormat`):
     statuses 12 and 13 and frame types 0x0A to 0x12 are reserved under `#if 0`, and an enum read from FFI is
     undefined behaviour the day a backend returns one. Every status is said with the function that answered
@@ -47,7 +89,9 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
     group's descriptor only its title and type are read, as the standard defines no more.
   - Frames assembled (`Batch::next_page`, `Image`): `lines = -1` read to EOF; padded rows; 1-bit rows with 1
     black and the first pixel in the high bit; 16-bit samples in native order; three-pass frames into one
-    image; `NO_DOCS` from `sane_read` as well as `sane_start` (`Page::NoDocs`, with the pages delivered). A
+    image; `NO_DOCS` from `sane_read` as well as `sane_start` (`Page::NoDocs`, with the pages delivered).
+    `Image`'s `Debug` gives every field but the data, whose length alone it gives (`data: <n> bytes`), and
+    `Page`'s, which derives, prints that (slice 1a, closing BUG-7). A
     page reads blocking as a device opens, setting the mode only where the step-by-step calls changed it,
     since several backends answer `UNSUPPORTED` to either mode; an empty read is made again after a pause of
     up to 10 ms. NAPS2 handles 1- and 8-bit transfers only, so 16-bit, padded and unknown-length frames go
@@ -80,8 +124,13 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
 - **Boundary:** SANE alone; no device model (that's `scan-device`'s `sane` backend), so it's useful to anyone
   who wants SANE. Dependencies: `libloading` and `thiserror`; dev: `rusty-fork` (a child process per test
   that loads a library) and `tempfile`. The devices layer's gate holds its graph; nothing links libsane
-  (`just gates`: no `links = "sane"`, and no binary built with libsane among its `NEEDED` entries).
-- **Tested by** (221 tests on Linux as built; the plan's "So far" and "Code review" count them):
+  (`just gates`: no `links = "sane"`, and no binary built with libsane among its `NEEDED` entries). Its
+  public API is gated (`just public-api`, slice 1a): every public item, read from rustdoc's JSON on a pinned
+  nightly, the crate's own type aliases followed, and none an `unsafe` function, method or trait, an unsafe
+  function pointer, a raw pointer in a public signature, or another crate's item re-exported; an `unsafe
+  impl` is listed, not failed.
+- **Tested by** (221 tests on Linux as slice 1 built it, 230 after slice 1a; each plan's "So far" counts
+  them):
   - SANE's own `test` backend (`libsane1` installed, the child's `SANE_CONFIG_DIR` an isolated `ConfigDir`
     naming `test`): a 10-sheet feeder then `NO_DOCS`; gray and color at 1, 8 and 16 bits; unknown height, alone
     and from the feeder (on 1.4.0 the hand scanner gives `lines = -1` from the feeder too); short reads;
@@ -95,7 +144,21 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
     what those can't do: seven backends' feeder and duplex layouts, duplex pages marked in their pixels, a jam
     or an open cover at sheet N, `2500x0`, descriptors that change after a set, hangs and an abort, a slow
     listing, and hostile values of every kind; and it checks SANE's calling rules, so every test holds
-    `sane-dl` to them.
+    `sane-dl` to them. **Loaded as SANE, through `Sane::load()`** (slice 1a): the tests copy it under SANE's
+    file name into a directory of its own per test binary, written then renamed, and spawn each child with the
+    loader's variable naming that directory first; every load of it is checked by its log, so a test can't pass
+    on the system's libsane. No route a published API exposes. On Windows, where `load()` has no library, the
+    tests that load it are ignored, each saying why; slice 5's `sane` backend reaches it the same way, copying
+    the small helper.
+  - What needs a path, inside the crate: `NotFound` (an absolute path where nothing is) and `MissingSymbol`
+    (the system's C library, already loaded in the process) as unit tests over the private loader.
+  - The process's slot (Linux): its name bound first refuses a load before the library opens; held while a
+    `Sane` or a handle lives, freed after; freed by a refused load; a socket the system refuses (descriptors
+    exhausted under a lowered limit, through util-linux's `prlimit`, skipped where that's missing) is
+    `SlotRefused`; bound by hand, `SlotTaken`; 200 loads beside a thread spawning programs, none refused.
+    A probe outside the workspace (two `cdylib`s each holding a copy, built apart) showed two copies starting
+    SANE twice before it and the second refused after.
+  - `Image`'s and `Page`'s `Debug` of a 1 MiB image under 1 KiB, its length given and none of its bytes.
   - The bindings checked against the installed `sane.h` (sanetui's idea), statuses included: printscan's own
     fake gave `NO_DOCS` the code 6, which is `JAMMED`. Here against 1.4.0's header, in CI against Ubuntu's
     (TEST-2).
@@ -104,9 +167,12 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
   - Here and in CI on Ubuntu with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, so nothing
     skips; on Windows and macOS the tests that need libsane or the header say they skipped.
 - **Open:**
-  - `Image` (and `Page`, which holds one) derives `Debug` over its bytes, so `{:?}` of a page prints every
-    byte (BUG-7, from S0 slice 2's code review): written by hand for the next alpha, with a changelog entry.
-  - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it.
+  - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it, and the fake's
+    tests through `DYLD_LIBRARY_PATH` beside it.
+  - Two copies of the crate built apart in one process on every system but Linux (BUG-8): no kernel-freed
+    name per process in std there, so the program's rule.
+  - A SANE an app ships, on macOS under the hardened runtime, where dyld ignores its variables (FEAT-13): only
+    if such an app comes.
   - No authorization callback (FEAT-11), until a networked backend needs one.
   - Defects found in SANE 1.4.0's `test` backend, `scanimage` and several backends' `sane_set_io_mode`,
     each an upstream report waiting on review (UP-7 to UP-11).

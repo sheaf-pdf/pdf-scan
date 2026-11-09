@@ -5,16 +5,17 @@ holds them: planned, reviewed, built in steps, code-reviewed, fixed. When a slic
 `archive/slices/`. Its milestone's file (`milestones/`) says what it builds and how it's checked; the plan
 here says how.
 
-Done: S0 slices 1 (`sane-dl` and the workspace it starts), 2 (the seam note revised) and 3 (`scan-device`
-provisional), merged (pull requests #2, #3 and #6, CI green on each); their plans are in
-[`archive/slices/s0-1-sane-dl.md`](../archive/slices/s0-1-sane-dl.md),
+Done: S0 slices 1 (`sane-dl` and the workspace it starts), 1a (`sane-dl`'s public API made safe), 2 (the seam
+note revised) and 3 (`scan-device` provisional), merged (pull requests #2, #7, #3 and #6, CI green on each);
+their plans are in [`archive/slices/s0-1-sane-dl.md`](../archive/slices/s0-1-sane-dl.md),
+[`archive/slices/s0-1a-sane-dl-safe-api.md`](../archive/slices/s0-1a-sane-dl-safe-api.md),
 [`archive/slices/s0-2-seam-note.md`](../archive/slices/s0-2-seam-note.md) and
 [`archive/slices/s0-3-scan-device.md`](../archive/slices/s0-3-scan-device.md).
 
-Done on its branch, its code review's findings fixed, waiting on review, the push and its pull request:
+Done on its branch, its code review's findings fixed, pushed, in pull request #8, waiting on review and CI:
 [`s0-4-scan-worker.md`](s0-4-scan-worker.md), S0 slice 4, `scan-worker` (five steps, each checked, then 20
 findings, 18 fixed whole and two in part, their other halves FEAT-16 and FEAT-17; branch `s0-4-scan-worker`,
-from `master` at `5a4bff2`).
+from `master` at `5a4bff2`, `master` merged in after #7).
 
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).

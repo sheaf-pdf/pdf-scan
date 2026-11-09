@@ -28,7 +28,7 @@ never do (ask 7; `just gates` checks it). The repository is public, so nothing p
 | `research/` | Surveys and assessments, a folder each (`README.md` the document, `notes/` behind it): `prior-art/` | Before deciding to build anything |
 | `pdf-lint/` | Upstream: the PDF family as pdf-scan consumes it (versions, exact pins, keeping up) and how its shortcomings are proposed back; the proposals themselves are local, in `scratch/pdf-lint/` | Before touching a family crate; when one falls short |
 | `sheaf/` | Downstream and origin: the rules for sheaf, `from-sheaf.md` (what each crate takes from it), `swaps.md` (what sheaf takes after each milestone) | Cutting a crate from sheaf; when a milestone ends |
-| `archive/` | Done slices' plans (S0 slices 1, 2, 3, 7 and 8 so far) and milestones, and `backlog-done.md` | Looking back |
+| `archive/` | Done slices' plans (S0 slices 1, 1a, 2, 3, 7 and 8 so far) and milestones, and `backlog-done.md` | Looking back |
 | `scratch/reference/` | Local, not tracked: `scratch/reference/sheaf/`, the sheaf plan files cited here, copied as at `3232a35` and never edited | When a crate's spec is wanted |
 | `scratch/pdf-lint/` | Local, not tracked: the family's fit (`pdf-family-fit/`) and the proposals to pdf-lint (`proposals/`), kept out of the public repository because they cite pdf-lint's own unpublished plan | Before touching a family crate; handing a proposal off |
 

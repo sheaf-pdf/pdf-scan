@@ -55,6 +55,7 @@ fn scanning_calls(log: &common::FakeLog) -> Vec<&str> {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_feeder_gives_its_sheets_then_no_docs() {
     let fake = Fake::new(
         "a_feeder_gives_its_sheets_then_no_docs",
@@ -124,6 +125,7 @@ fn a_feeder_gives_its_sheets_then_no_docs() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_backend_refusing_either_io_mode_scans_its_pages() {
     // fujitsu's profile answers UNSUPPORTED to either mode, as SANE 1.4.0's
     // fujitsu backend does.
@@ -174,6 +176,7 @@ fn a_backend_refusing_either_io_mode_scans_its_pages() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_page_sets_blocking_back_after_the_step_by_step_calls() {
     let fake = Fake::new(
         "a_page_sets_blocking_back_after_the_step_by_step_calls",
@@ -221,6 +224,7 @@ fn a_page_sets_blocking_back_after_the_step_by_step_calls() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_batch_dropped_after_a_page_ends_with_a_cancel() {
     let fake = Fake::new("a_batch_dropped_after_a_page_ends_with_a_cancel", DEVICE);
     in_child!(
@@ -257,6 +261,7 @@ fn a_batch_dropped_after_a_page_ends_with_a_cancel() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn duplex_pages_are_marked_front_then_back() {
     let fake = Fake::new(
         "duplex_pages_are_marked_front_then_back",
@@ -290,6 +295,7 @@ fn duplex_pages_are_marked_front_then_back() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_jam_or_an_open_cover_is_an_error_saying_its_call() {
     let fake = Fake::new(
         "a_jam_or_an_open_cover_is_an_error_saying_its_call",
@@ -340,6 +346,7 @@ fn a_jam_or_an_open_cover_is_an_error_saying_its_call() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn no_docs_from_a_pages_first_read_ends_the_batch_and_later_is_an_error() {
     let fake = Fake::new(
         "no_docs_from_a_pages_first_read_ends_the_batch_and_later_is_an_error",
@@ -373,6 +380,7 @@ fn no_docs_from_a_pages_first_read_ends_the_batch_and_later_is_an_error() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn inval_from_start_reads_the_descriptors_again() {
     let script = script(
         "option page-height FIXED 4 soft-select+soft-detect\nrange 0 300 0\noption mode STRING 8 soft-select+soft-detect\nvalue Gray\nat 1 start INVAL\nstart-inval-deactivates page-height\n",
@@ -437,6 +445,7 @@ fn inval_from_start_reads_the_descriptors_again() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn the_step_by_step_calls_say_what_sane_says() {
     let fake = Fake::new(
         "the_step_by_step_calls_say_what_sane_says",
@@ -561,6 +570,7 @@ fn a_negative_select_fd_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn an_endless_stream_stops_at_a_small_cap() {
     let fake = Fake::new(
         "an_endless_stream_stops_at_a_small_cap",
@@ -600,6 +610,7 @@ fn an_endless_stream_stops_at_a_small_cap() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn three_pass_frames_from_the_fake_are_interleaved() {
     let fake = Fake::new(
         "three_pass_frames_from_the_fake_are_interleaved",
@@ -646,6 +657,7 @@ fn three_pass_frames_from_the_fake_are_interleaved() {
 macro_rules! failing_page {
     ($name:ident, $lines:expr, $check:expr) => {
         #[test]
+        #[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
         fn $name() {
             let fake = Fake::new(stringify!($name), &script($lines));
             in_child!($name, fake.child(), || {
