@@ -111,6 +111,7 @@ fn build_list(devices: &[[Text; 4]]) -> *const *const ffi::SANE_Device {
     let mut string = |text: &Text| -> *const c_char {
         match text {
             Text::Null => ptr::null(),
+            Text::Dangling => ptr::dangling(),
             Text::Bytes(bytes) => {
                 let mut owned = bytes.clone();
                 owned.push(0);
@@ -341,10 +342,11 @@ pub unsafe extern "C" fn sane_close(handle: ffi::SANE_Handle) {
 }
 const _: ffi::SaneCloseFn = sane_close;
 
-/// A leaked string, `NUL`-terminated, or null.
+/// A leaked string, `NUL`-terminated, or null, or a pointer to no memory.
 fn leak_text(text: &Text) -> *const c_char {
     match text {
         Text::Null => ptr::null(),
+        Text::Dangling => ptr::dangling(),
         Text::Bytes(bytes) => {
             let mut owned = bytes.clone();
             owned.push(0);

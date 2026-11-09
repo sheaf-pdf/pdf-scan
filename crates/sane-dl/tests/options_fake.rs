@@ -709,6 +709,45 @@ fn caps_hold_at_their_limit_and_refuse_one_past() {
 }
 
 #[test]
+fn a_groups_undefined_fields_are_never_read() {
+    // The standard defines only a group's title and type: its name and
+    // description here point to no memory, which reading would crash on.
+    let script = format!(
+        "{DEVICE}{}",
+        r#"
+        option @dangling GROUP 0 -
+        title Standard
+        desc @dangling
+        option res INT 4 soft-select+soft-detect
+        value 300
+        "#
+    );
+    let fake = Fake::new("a_groups_undefined_fields_are_never_read", &script);
+    in_child!(
+        a_groups_undefined_fields_are_never_read,
+        fake.child(),
+        || {
+            let sane = common::load_fake();
+            let mut handle = sane.open("fake:0").unwrap();
+            let group = &handle.options()[1];
+            assert!(group.is_group());
+            assert_eq!(
+                (
+                    group.title.as_str(),
+                    group.name.as_str(),
+                    group.description.as_str()
+                ),
+                ("Standard", "", "")
+            );
+            assert_eq!(handle.get(2).unwrap(), Value::Int(vec![300]));
+            handle.reload_options().unwrap();
+            assert_eq!(handle.options()[1].title, "Standard");
+        }
+    );
+    fake.log().assert_no_violations();
+}
+
+#[test]
 fn a_descriptor_changed_without_a_word_is_read_before_the_call() {
     // Setting `s` makes `t` two words, and the backend doesn't say so.
     let script = format!(

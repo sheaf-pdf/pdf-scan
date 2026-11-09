@@ -605,14 +605,16 @@ unsafe fn copy_device_list(
 /// Copies an option's descriptor: its integers as they are, its strings no
 /// further than the cap, and its constraint read only as the member its
 /// types allow ([`constraint_member`]), each list no further than its cap.
-/// A group's name and constraint aren't read: the standard says only its
-/// title, description and type mean anything, so they may be anything.
+/// Of a group's, only the title and type are read: the standard defines no
+/// other field of a group's descriptor (one edition of it counts the
+/// description too, another doesn't), so its other pointers may be
+/// anything.
 ///
 /// # Safety
 ///
 /// `descriptor` points to a valid `SANE_Option_Descriptor`, unchanged for
-/// the call, as `sane_get_option_descriptor` gives one: its title and
-/// description null or `NUL`-terminated, and unless it's a group, its name
+/// the call, as `sane_get_option_descriptor` gives one: its title null or
+/// `NUL`-terminated, and unless it's a group, its name and description
 /// too, and its constraint pointer, read as the member `constraint_type`
 /// names, null or pointing to what that member says (a range; a word list
 /// whose first word is how many follow; strings ended by a null pointer),
@@ -626,7 +628,8 @@ unsafe fn copy_descriptor(
     let copied = unsafe { *descriptor };
     let string = |text: *const c_char| {
         // SAFETY: each string read here is null or `NUL`-terminated and valid
-        // for the call (the caller's contract): a group's name is never read.
+        // for the call (the caller's contract): of a group's, only its title
+        // is read.
         unsafe { copy_c_string(text, limits.string_bytes) }
     };
     let group = copied.r#type == ffi::SANE_TYPE_GROUP;
@@ -662,14 +665,11 @@ unsafe fn copy_descriptor(
             }
         }
     };
+    let unless_group = |text| if group { CText::Null } else { string(text) };
     RawDescriptor {
-        name: if group {
-            CText::Null
-        } else {
-            string(copied.name)
-        },
+        name: unless_group(copied.name),
         title: string(copied.title),
-        desc: string(copied.desc),
+        desc: unless_group(copied.desc),
         value_type: copied.r#type,
         unit: copied.unit,
         size: copied.size,

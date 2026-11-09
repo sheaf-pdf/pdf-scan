@@ -31,8 +31,10 @@
 //!
 //! A line per instruction: a keyword, then its values. A value is a bare
 //! word, or quoted with `"` (with `\"`, `\\` and `\xHH` escapes inside, so
-//! any bytes can be given); `@null` is a null pointer, and `@long:N` is `N`
-//! bytes of `x`. `#` starts a comment.
+//! any bytes can be given); `@null` is a null pointer, `@dangling` a pointer
+//! to no memory at all (address 1), for a field the standard leaves
+//! undefined, which a careful caller never reads (a group's name or
+//! description), and `@long:N` is `N` bytes of `x`. `#` starts a comment.
 //!
 //! | Line | What it does |
 //! |---|---|

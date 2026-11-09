@@ -239,8 +239,8 @@ pub enum Constraint {
 /// descriptors changed ([`Handle::reload_options`](crate::Handle::reload_options)).
 /// The strings for people are text (any bytes that aren't UTF-8 replaced, a
 /// null string empty, one longer than [`Limits::string_bytes`] cut there).
-/// A group's heading has only its title and description: its other fields
-/// are empty, as SANE says they mean nothing.
+/// A group's heading has only its title: its other fields are empty, as
+/// the standard defines nothing else of a group's descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OptionDescriptor {
     /// Its number, which [`get`](crate::Handle::get) and
@@ -538,8 +538,8 @@ pub(crate) enum RawConstraint {
 
 /// A descriptor as copied from SANE: its integers as they came, its
 /// strings read up to the cap, and its constraint read only as
-/// [`constraint_member`] allows. A group's name and constraint aren't read
-/// (the standard says only its title, description and type mean anything),
+/// [`constraint_member`] allows. A group's name, description and
+/// constraint aren't read (the standard defines only its title and type),
 /// so they're [`CText::Null`] and [`RawConstraint::None`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RawDescriptor {
@@ -590,6 +590,7 @@ pub(crate) fn decode(
     };
     if value_type == ValueType::Group {
         descriptor.name = String::new();
+        descriptor.description = String::new();
         return Ok(descriptor);
     }
     descriptor.unit = Unit::from_code(raw.unit);
@@ -1099,15 +1100,23 @@ mod tests {
     }
 
     #[test]
-    fn a_group_keeps_only_its_title_description_and_type() {
+    fn a_group_keeps_only_its_title_and_type() {
         let mut descriptor = raw(ffi::SANE_TYPE_GROUP, -5, -1, RawConstraint::None);
         descriptor.name = CText::Null;
+        descriptor.desc = CText::Text(b"never read".to_vec());
         let group = decoded(descriptor);
         assert!(group.is_group());
         assert_eq!(group.title, "Title");
         assert_eq!(
-            (group.unit, group.size, group.capabilities, group.unusable),
-            (Unit::None, 0, Capabilities(0), None)
+            (
+                group.name.as_str(),
+                group.description.as_str(),
+                group.unit,
+                group.size,
+                group.capabilities,
+                group.unusable
+            ),
+            ("", "", Unit::None, 0, Capabilities(0), None)
         );
     }
 

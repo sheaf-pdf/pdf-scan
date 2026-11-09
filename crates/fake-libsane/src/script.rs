@@ -8,11 +8,14 @@ use crate::feed::Feed;
 use crate::ffi;
 use crate::options::{Builder, Layout};
 
-/// A string the fake hands to C: null, or bytes (a `NUL` added when given).
+/// A string the fake hands to C: null, or bytes (a `NUL` added when given),
+/// or a pointer to no memory at all, for a field the standard leaves
+/// undefined, which a careful caller never reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Text {
     Null,
     Bytes(Vec<u8>),
+    Dangling,
 }
 
 /// What `sane_open` answers for a name.
@@ -235,7 +238,7 @@ impl Script {
 /// A word that must be text: not `@null`.
 pub(crate) fn word(text: &Text) -> Result<String, String> {
     match text {
-        Text::Null => Err("@null where a word is needed".to_owned()),
+        Text::Null | Text::Dangling => Err("@null or @dangling where a word is needed".to_owned()),
         Text::Bytes(bytes) => {
             String::from_utf8(bytes.clone()).map_err(|_| "a word that isn't UTF-8".to_owned())
         }
@@ -308,8 +311,8 @@ fn version(word: &str) -> Result<i32, String> {
 }
 
 /// Splits a line into words: bare, or quoted with `"` (`\"`, `\\` and `\xHH`
-/// escapes inside), `@null` for a null pointer and `@long:N` for `N` bytes
-/// of `x`; `#` starts a comment.
+/// escapes inside), `@null` for a null pointer, `@dangling` for one to no
+/// memory, and `@long:N` for `N` bytes of `x`; `#` starts a comment.
 pub(crate) fn split(line: &str) -> Result<Vec<Text>, String> {
     let mut words = Vec::new();
     let mut chars = line.chars().peekable();
@@ -354,6 +357,8 @@ pub(crate) fn split(line: &str) -> Result<Vec<Text>, String> {
             }
             words.push(if bare == "@null" {
                 Text::Null
+            } else if bare == "@dangling" {
+                Text::Dangling
             } else if let Some(count) = bare.strip_prefix("@long:") {
                 let count: usize = count
                     .parse()
@@ -402,7 +407,7 @@ mod tests {
             devices ACCESS_DENIED
             devices-null
             device fake:0 "Fake Co" @null "flatbed scanner"
-            device "odd\x01\"\\" v m t
+            device "odd\x01\"\\" v m @dangling
             device-repeat 2
             listing-delay 1500 0
             open fake:0 DEVICE_BUSY
@@ -441,6 +446,7 @@ mod tests {
             ]
         );
         assert_eq!(script.devices[1][0], Text::Bytes(b"odd\x01\"\\".to_vec()));
+        assert_eq!(script.devices[1][3], Text::Dangling);
         assert_eq!(script.devices[2][0], bytes("fake:2"));
         assert_eq!(script.devices.len(), 4);
         assert_eq!(script.listing_delay(0), Duration::from_millis(1500));
