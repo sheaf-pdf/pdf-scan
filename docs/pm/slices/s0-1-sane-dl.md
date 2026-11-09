@@ -310,7 +310,9 @@ codecs into it): `crates/scan-fixtures.md` and `plan.md` change to say so (step 
   PNM images, the header program) goes under `CARGO_TARGET_TMPDIR`; rusty-fork's small capture file is the one
   thing in the system's temp directory.
 - **Tests find the fake by building it:** a helper in the parent half of each test, once per test binary
-  (before any child is spawned; the path then goes to the child in its environment), runs `cargo build
+  (before any child is spawned, as the child's preparation, which rusty-fork runs in the parent alone,
+  since its child runs the test function from the top until the fork; the path then goes to the child in
+  its environment), runs `cargo build
   --locked -p fake-libsane` (the cargo that built the test, `env!("CARGO")`, so `cargo +1.89 test` builds it
   on 1.89 too) into a target directory of its own under the test's `CARGO_TARGET_TMPDIR`, and loads
   `<DLL_PREFIX>fake_libsane<DLL_SUFFIX>` from there. The nested build clears `RUSTFLAGS`,
@@ -571,6 +573,23 @@ else the steps find.
 25. **The name gate ignores case** (step 1): the stash's pattern as it was, with `grep -i`, so a sentence
     that starts with the downstream app's name, capitalized, is caught too; the org's name in a URL still
     passes.
+26. **Device strings past the cap are refused, not cut** (step 2): a list holding a name, vendor, model or
+    type longer than `Limits::string_bytes` is `BadDeviceList` whole, since a cut name wouldn't reopen; a
+    status's words, text for people only, are cut at the cap.
+27. **A listing's deadline counts the wait for the lock** (step 2): one that can't start in time returns
+    `DeadlineExceeded` and leaves nothing pending.
+28. **`ConfigDir` wants an absolute path** (step 2): SANE resolves a relative one against the directory of
+    the process that loads it, which needn't be the caller's. It refuses `:` in the path on Unix (SANE's
+    separator) and a `dll.d` already there that isn't empty, before writing anything.
+29. **Limits are the instance's** (step 2), set with `Sane::set_limits` for the calls that start after;
+    `Limits` is `#[non_exhaustive]`, so steps 3 and 4 add their caps without a break.
+30. **The fake checks a little more than the design's rules** (step 2): a call outside `sane_init` and
+    `sane_exit`, a second `sane_init`, and a null pointer SANE must write through or read
+    (`sane_get_devices`' list, `sane_open`'s handle and name; answered `INVAL`, nothing opened), beside
+    the four the design names. A null `version_code` to `sane_init` isn't one: the standard allows it
+    (step 2's repair).
+31. **`open` takes any bytes** (step 2): `impl AsRef<[u8]>`, so a `&str`, a `DeviceName` or stored bytes;
+    `DeviceName` itself is unchecked, and a `NUL` inside is `NulInName` at `open`, before SANE sees it.
 
 ## For Greg (security)
 
@@ -592,6 +611,12 @@ else the steps find.
    and `sane-dl` never does (upstream disables it by default for that reason).
 6. **The fake reads a script and writes a log from environment variables** the tests set; it is never
    published, and a gate keeps every crate from depending on it.
+7. **SANE's `dll` opens any installed backend by name, whatever `dll.conf` says** (step 2's probe, 1.4.0:
+   `test:0` opened with a `dll.conf` naming only `pnm`, and with the system's, where `test` is commented
+   out). A `ConfigDir` decides what a listing loads, not what `sane_open` can reach, so item 5 holds for
+   listings only: `pnm`, which reads any file its option names, can be opened by name in any process
+   where `libsane1` is installed. The name a worker opens must come from a listing or the user's own
+   stored choice, never from an untrusted party: slice 5's `sane` backend, said there.
 
 ## Risks
 
@@ -808,3 +833,175 @@ and the repair after the check).
     backends printed, both variables written), fails naming `pnm` on the list without it and `test` on
     the list without it, and fails when `dpkg` does; the step as it was passed on the list without `pnm`.
     Then `just ci` on the committed tree.
+
+### Step 2: bindings, loading, devices, handles; the fake's first cut; the header contract (2026-11-08)
+
+Commit: the one that carries this account.
+
+- **What it does:**
+  - `sane_dl::ffi`, public, no unsafe: `sane.h` 1.4.0 as Rust declarations, from the installed header,
+    its notice kept word for word with what changed (the functions as `unsafe extern "C"` pointer types,
+    `SaneInitFn` and the rest; the enums as integers with constants; the `#if 0` values as constants
+    marked reserved; the function-like macros as `const fn`s; the anonymous union named
+    `SANE_Constraint`; comments reworded; `type` spelled `r#type`).
+  - `Status` and `FrameFormat` (integers with SANE's constants, the reserved ones marked; `name()`,
+    `is_reserved()`, `Display` as `JAMMED (6)`), `Version` (`from_code`, `code`).
+  - `Sane`: `load()` (`libsane.so.1`, `libsane.1.dylib` on macOS, `NoDefault` on Windows;
+    `Sane::DEFAULT_LIBRARY`) and `load_from(path)`; `sane_init` without a callback; a version other than
+    1 refused after `sane_exit`. One per process: a static slot, taken before `sane_init` and freed
+    after `sane_exit` or by any failed load. The library leaked, never unloaded. `Clone`, `Send + Sync`;
+    `sane_exit` when the last of it, its handles and any late listing are gone. Every call takes one
+    call token (a flag under a mutex, with a condition variable), so a late listing can be said rather
+    than waited on. `devices(local_only, deadline)`: a thread per listing, the list copied there;
+    `DeadlineExceeded` past the deadline (the wait for the token counts); calls meanwhile
+    `ListingPending`; a handle dropped meanwhile left on a pending list the listing's thread closes when
+    it returns, which then ends SANE if the `Sane` is gone too. `open(name)`, `Handle` (`Send`, not
+    `Sync`; `name()`, `close()`, closed on drop), `status_message`, `Limits` (devices 1,024; strings
+    64 KiB) with `limits()` and `set_limits()`.
+  - `ConfigDir::write(dir, backends, Search::Isolated | Search::BeforeSystem)`, `value()`,
+    `CONFIG_DIR_VARIABLE`, `backend_of`; `Device`, `DeviceName`; `LoadError`, `Error` (`Status { status,
+    call }` with `Call` naming the function, `ListingPending`, `DeadlineExceeded`, `BadDeviceList`,
+    `BadHandle`, `NulInName`, `Thread`), `ConfigError`. Unsafe in `library.rs` alone.
+  - `fake-libsane`: the 14 exports in `exports.rs`, its one unsafe module, each asserted at compile time
+    to have its binding's type, declared with `sane-dl`'s `ffi.rs` by `#[path]`; the script (an
+    `sane_init` sequence of statuses and versions, devices, `@null` and `@long:N` strings, a repeated
+    device for the cap, a listing's status or null list, listing delays in turn, `sane_open`'s answers,
+    a null `sane_strstatus`) and the log (`call`, `return`, `violation`, `note`, with the thread) in its
+    crate docs; the rule checks (calls overlapping, a closed or unknown handle reached, `sane_cancel`
+    included, `sane_exit` with handles open, the call after an error status from `sane_start`,
+    `sane_get_parameters` or `sane_read` that isn't `sane_cancel` or `sane_close`, plus decision 30's);
+    a stale list overwritten with `#` and kept. Options and scanning answer `UNSUPPORTED` until steps 3
+    and 4.
+  - Tests, 71 here (68 as first committed, three added by the repair below): `sane-dl` 10 unit,
+    `tests/config_dir.rs` 9, `tests/fake.rs` 20, `tests/loading.rs` 6 (7 on Windows, with `NoDefault`),
+    `tests/real.rs` 4, `tests/header_contract.rs` 1, a doctest; `fake-libsane` 20 unit. `tests/common/`
+    holds the child process (rusty-fork's `fork`, the timeout, exit 77 and the parent's own stderr for a
+    skip, the require variables), the fake built once per
+    test binary by `env!("CARGO")` into `CARGO_TARGET_TMPDIR/fake-libsane/` with `RUSTFLAGS`,
+    `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` and `CARGO_BUILD_TARGET` cleared, and the log
+    read back. Every test that loads a library runs in a child, and every fake test asserts its log has
+    no violation and the calls expected.
+- **Checked here:** `cargo fmt --check`; `cargo clippy --locked --workspace --all-targets -D warnings`;
+  the same for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin` (`-p sane-dl -p fake-libsane`), and
+  `cargo doc -D warnings` for those two and Linux; `cargo test --locked --workspace` with
+  `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, all passing, the header contract among
+  them against the installed 1.4.0 header; `cargo +1.89 check --workspace --all-targets`.
+  - **Make-fails** (`scratch/work/s0-1/step-2/make-fail.md`, on a worktree under `step-2/`, removed
+    after): 25 breaks, each failing its test. The header contract: a constant changed (`NO_DOCS` to 6,
+    named exactly by the text pass), a field's type, a binding's function type (a compile error at the
+    table's tie), a C spelling (the compiler's static assertion), a reserved constant missing from the
+    table, one not marked reserved. Each of the fake's six checks turned off (overlap, closed handle,
+    exit with handles open, cancel after an error, outside `sane_init` and `sane_exit`, the stale
+    overwrite): its unit test fails. The core: a null name taken, the device and string caps off by
+    one, no deadline, calls waiting on a late listing, a drop waiting on one, a refused version not
+    exited, no one-per-process slot, a null handle taken, the call token not taken (the fake logs
+    overlaps), a dropped handle never closed (the fake logs `sane_exit` with handles open), a late
+    listing leaving its closes undone, `sane_open`'s status named for another call (the real-libsane
+    test).
+  - **Skips said on a pass:** the real-libsane tests with `SANE_DL_LIBSANE` at a missing path and no
+    require variable each print `<test>: skipped: there's no libsane to load here (…)` on stderr and
+    pass; with `SANE_DL_REQUIRE_LIBSANE=1` all four fail. The header contract likewise with
+    `SANE_DL_SANE_H` at a missing path, and with `CC` at a missing compiler.
+  - **The `// SAFETY:` comments, read for truth:** each rests on one of the module's rules (the call
+    token held, the slot, the last reference going, a handle closed once, SANE's own contracts for the
+    list and strings, the library leaked). Two needed fixing: a symbol was copied straight into a
+    function pointer, and a null address would have made that undefined behaviour, which the comment
+    didn't answer (libloading can return one where `dlerror` is thread-safe), so it's read as
+    `Option<fn>` and a null address is `MissingSymbol`; and the handle's `Send` said the standard ties a
+    handle to no thread, where it says nothing of threads at all.
+- **Listing, timed** (`scratch/work/s0-1/step-2/listing-probe/`, not a test since it reads the system's
+  directories: a release build, each run a child of its own, three rounds, in the memory scope):
+  isolated `test` and `pnm`, 0.001 s to list 4 devices; `BeforeSystem` naming `test` alone, 0.001 s
+  (2); the system's configuration, 8.88 to 8.90 s (none), beside `scanimage`'s 9.54 s (Baselines).
+  `sane_init` itself takes 0.001 to 0.006 s with the system's configuration: the wait is all
+  `sane_get_devices`.
+- **What it learned of SANE, for slice 2** (the seam's unknowns):
+  - **Names:** `test:0`, `test:1`, `pnm:0`, `pnm:1`: the backend's name, then an index the backend gives
+    in order (`test` from its `number_of_devices`, `pnm` two, fixed). An index says nothing of which
+    device it is, so a backend that numbers its devices can rename one when another comes before it;
+    what real backends put after the `:` (fujitsu's model and serial, USB addresses) needs their
+    hardware, so replugging stays the hand check's.
+  - **Opening by name needs no listing, nor a `ConfigDir`:** SANE's `dll` loads the backend a name
+    starts with whether or not `dll.conf` names it (`test:0` opened with a `dll.conf` naming only `pnm`,
+    and with the system's, where `test` is commented out). So the fast path for a known device is
+    `open` alone; a one-backend `ConfigDir` is for fast listings, and keeps other backends out of them.
+    For Greg (security) 7 says what that means for the names a worker opens.
+  - **Concurrent opens:** `pnm` opens one device at a time (a second is `DEVICE_BUSY`); `test` opens
+    both.
+  - Stopping after the page in flight is step 4's.
+- **Departures from the plan, and why:**
+  - *`ConfigDir`'s writing tests are integration tests* (`tests/config_dir.rs`), not unit tests: every
+    file a test writes goes under `CARGO_TARGET_TMPDIR`, which only integration tests are given.
+  - *Added beyond the design's lists:* `Error::Thread` (a listing's thread that can't start);
+    `ConfigError::BadPath` (decision 28); `Call` (the `call` field's type); `Search` and
+    `CONFIG_DIR_VARIABLE` (the design's `Isolated` and `BeforeSystem`, and SANE's variable, named);
+    `Sane::DEFAULT_LIBRARY`, `version()`, `limits()` and `set_limits()`, `Handle::name()`.
+    `LoadError::NotFound` and `MissingSymbol` carry their source boxed, keeping libloading's type out of
+    the API.
+  - *`Limits` holds the two caps this step uses* (decision 29); steps 3 and 4 add theirs.
+  - *No alive flag yet:* it's the cancel token's, step 4. A handle dropped during a late listing goes on
+    the pending list, which step 4's flag joins.
+  - *The real test that opens devices at once* opens the `test` backend's two together, and `pnm`'s one
+    at a time (above).
+  - *Crate READMEs and changelogs* wait for step 5, as in step 1.
+- **Decisions taken alone:** 26 to 31 above; For Greg (security) 7.
+- **Checked** (`scratch/work/s0-1/flow/checks.md`, "Step 2"): `just ci` with both require variables (68
+  tests in 8 harnesses, none skipped; the gates read 8 binaries, as there are 5 integration harnesses;
+  `sane-dl-msrv` on 1.89, the fake built by 1.89's cargo); the test list (68; step 1 had none); the header
+  contract against the installed 1.4.0 header, and failing on `NO_DOCS` changed to 6, naming it; the
+  fake's rule checks turned off one at a time on a worktree; the skips said, and failures with the require
+  variables; clippy and docs with `-D warnings` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`; the
+  listing probe run again (the same times); every `// SAFETY:` comment read for truth; the commit's
+  message and diff; the user's cargo home unchanged. All passed but four, repaired in this commit:
+  1. *After a listing that returned in time, `sane_exit` was left to the listing's thread* (medium). Cause:
+     the listing's thread sent its result, then dropped its guard, which holds a reference to the
+     library, so `devices()` could return while that thread still held it; a `Sane` dropped then wasn't
+     the last reference, and `sane_exit` and the slot came later on the listing's thread, or never if
+     the process ended first. Seen by the check: one fake test alone failing 1 run in 100, two failing
+     under `strace -f` every time, 4 of 10,000 loads right after a drop refused `AlreadyLoaded`, 2 of
+     2,000 processes ending without `sane_exit`. Fix: the guard goes first (it closes what's left to it,
+     gives the token back and drops the thread's reference), then the result is sent, so a caller that
+     has its list holds every reference left and its last drop ends SANE at once, on its own thread; the
+     timeout path's reasoning and `Sane`'s doc say so. Tests: a new one, 500 rounds in a child of a
+     listing, a drop and a load at once that must not be `AlreadyLoaded`, every `sane_exit` on the
+     test's thread; three in-time tests now also assert `sane_exit` came from the test's thread.
+  2. *The fake's null-pointer check was shown catching nothing* (minor). Cause: no test called it. Fix: a
+     unit test calls the exports with each null (serialized with the other test that uses the fake's
+     shared state). Writing it showed two faults in the fake, fixed with it: a null `version_code` to
+     `sane_init` was recorded as a violation, though the standard allows it (no version is then given:
+     now no violation, and the log says `version_code=null`); and `sane_open` with a null handle opened
+     the device anyway, leaving a handle open that no caller had, which `sane_exit` would have reported
+     as a second violation. Now a null list, handle or name is answered `INVAL` before anything is
+     listed or opened; the fake's crate docs say so, and decision 30.
+  3. *`ConfigDir::write` replaced `dll.conf` before refusing a `dll.d` that isn't empty* (minor),
+     against decision 28's "before writing anything". Fix: `dll.d` is looked at first (its metadata,
+     then its listing, so a file in its place is refused alike on every system), `dll.conf` is written
+     after, and a missing `dll.d` is made last (and checked again if someone made it meanwhile); the doc
+     says every check comes before any write. Tests: the refusal leaves no `dll.conf`, and one already
+     there as it was; a new test refuses a file named `dll.d` the same way.
+  4. *The tests' parent-only work ran in every child too* (minor). Cause: rusty-fork's child runs the
+     test function from its top until it reaches the fork, so `Fake::new` (writing the script),
+     `real_child` (writing the configuration) and `fake.child()` (a nested `cargo build`, a no-op but
+     a process and the target directory's lock) ran again in each child. Fix: `Fake::new` and
+     `real_child` only compute paths; a `Child` carries the parent's work as preparations, which
+     rusty-fork's process modifier runs in the parent alone, just before the spawn; every child gets
+     `SANE_DL_TEST_CHILD=1`, and the helpers that write or build (`fresh_dir`, `fake_library`) fail the
+     test if they run in a child.
+  - *Checked again* (`scratch/work/s0-1/step-2/repair/`): on a worktree of the repaired tree (removed
+    after; branch, HEAD, stash and worktree list unchanged), each fault put back and its test seen to
+    fail, the file restored by SHA-256: the old order (send, then the guard) failed the new test in 12 of
+    20 plain runs, and under `strace` and with a 200 ms sleep between send and drop (four tests then);
+    the new order with a 200 ms sleep between drop and send passed the harness (the 500-round test with
+    20 ms, since 500 rounds of 200 ms pass its 60 s timeout); the null check off (the check's F7), and a
+    null `version_code` made a violation again, each failed the new unit test; `dll.conf` written before
+    the check failed both `dll.d` tests; `fake_library()` called before `in_child!` failed its test, the
+    child saying it's the parent's work. On the repaired tree: the fake harness under `strace -f` 5 times
+    and whole 20 times, and the in-time test alone 200 times, all passing (at 4af5ff1 it failed under
+    `strace` 3 runs of 3); the check's probe, 0 of 10,000 loads refused and 0 of 2,000 processes without
+    `sane_exit`; an `execve` trace of one fake test, `cargo` run once, by the parent, where the check saw
+    it in the child too; clippy for all targets, and clippy and docs for the other two systems. Then
+    `just ci` with both require variables on the committed tree, and the test list (71, the 68 kept).
+    One slip, in the repair's own runs: the harness binaries run straight (under `strace`, and in the
+    loops) ran the tests' nested `cargo build` of the fake without the run's own cargo home, so cargo
+    updated its last-use cache in the user's (`.global-cache`; nothing downloaded or added there). A
+    test binary run outside `cargo test` needs `CARGO_HOME` set too, since the tests run cargo.
