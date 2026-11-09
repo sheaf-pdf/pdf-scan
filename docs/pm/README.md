@@ -5,8 +5,8 @@ The plan, its status, its decisions, its backlog and its research, kept in the r
 needs.**
 
 pdf-scan is the workspace for the scanning crates sheaf will depend on: scanners driven through each system's
-driver API, page images cleaned up and read for codes, and scanned pages written to PDF and read back. Its
-PDF crates are built on the PDF family in pdf-lint's workspace (github.com/sheaf-pdf/pdf-lint), as its consumer.
+driver API, page images cleaned up and read for codes, and scanned pages written to PDF and read back. Its PDF
+crates are built on the PDF family in pdf-lint's workspace (github.com/sheaf-pdf/pdf-lint), as its consumer.
 
 These files may name sheaf, its plan and its corpus; the code, crate docs, crate READMEs and commit messages
 never do (ask 7; `just gates` checks it). The repository is public, so nothing private goes in here

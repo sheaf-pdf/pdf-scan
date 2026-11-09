@@ -1,6 +1,8 @@
 # S0 slice 1: sane-dl, and the workspace it starts
 
-Status: running, on branch `s0-1-sane-dl`, from 2026-11-08. Milestone: `milestones/s0-devices.md`, slice 1.
+Status: done on branch `s0-1-sane-dl` (2026-11-08): its five steps built and checked, its code review's
+findings fixed ("Code review", below). Waiting on review, then the push, the pull request and CI's run on
+Ubuntu, Windows and macOS. Milestone: `milestones/s0-devices.md`, slice 1.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
 with a leading `/` (`/crates/sane-dl/`, `/justfile`); `scratch/` from the root, local and never tracked.
@@ -115,18 +117,20 @@ The names below are the design's; an implementation that keeps the design and re
   marked), `name()` (`None` for a code SANE doesn't define) and `Display`; `FrameFormat` the same. `Version {
   major, minor, build }` from `sane_init`'s code; anything but major 1 is refused.
 - **Loading: `Sane`.** `Sane::load()` opens the system's library by its versioned name (`libsane.so.1` on
-  Linux and the other Unixes, `libsane.1.dylib` on macOS, none on Windows, where SANE isn't the system's API);
+  Linux and the other Unixes, `libsane.1.dylib` on macOS, none on Windows, where SANE isn't the system's API;
+  on macOS by Homebrew's and MacPorts' absolute paths since the code review, decision 63);
   `Sane::load_from(path)` opens the one the caller names (a test's fake; an app's override, whose environment
-  variable is the app's). Loading happens only when asked; then `sane_init` with no authorization callback.
-  `LoadError` (thiserror): `NotFound { tried, source }` naming the files tried, `NoDefault` (Windows),
-  `MissingSymbol { name }`, `Init(Status)`, `UnsupportedVersion(Version)`, `AlreadyLoaded`. One live `Sane`
-  per process (a second load while one lives is `AlreadyLoaded`); a later one after the first's `sane_exit` is
-  allowed. A load that fails leaves nothing behind: a version refused after a good `sane_init` still gets its
-  `sane_exit`, and every failure frees the process's one slot, so a later load can succeed. The library is
-  never unloaded (no `dlclose`): backends may leave threads, exit handlers or thread-local destructors in it.
-  Every call but `sane_cancel` holds the instance's lock, so no two SANE calls ever overlap, as the standard
-  requires ("the SANE API does not require any other operations to be re-entrant"); `Sane` is `Send + Sync`,
-  handles keep it alive, and `sane_exit` runs when the last of them goes.
+  variable is the app's), an `unsafe fn` since the code review (decision 62). Loading happens only when asked;
+  then `sane_init` with no authorization callback. `LoadError` (thiserror): `NotFound { tried, source }`
+  naming the files tried, `NoDefault` (Windows), `MissingSymbol { name }`, `Init(Status)`,
+  `UnsupportedVersion(Version)`, `AlreadyLoaded`. One live `Sane` per process (a second load while one lives
+  is `AlreadyLoaded`); a later one after the first's `sane_exit` is allowed. A load that fails leaves nothing
+  behind: a version refused after a good `sane_init` still gets its `sane_exit`, and every failure frees the
+  process's one slot, so a later load can succeed. The library is never unloaded (no `dlclose`): backends may
+  leave threads, exit handlers or thread-local destructors in it. Every call but `sane_cancel` holds the
+  instance's lock, so no two SANE calls ever overlap, as the standard requires ("the SANE API does not require
+  any other operations to be re-entrant"); `Sane` is `Send + Sync`, handles keep it alive, and `sane_exit`
+  runs when the last of them goes.
 - **Devices under a deadline:** `devices(local_only, deadline) -> Result<Vec<Device>, Error>`.
   `sane_get_devices` runs on a thread of its own, its list copied there before anything else is called (SANE
   keeps it valid only until the next listing or `sane_exit`); past the deadline the call returns
@@ -169,9 +173,11 @@ The names below are the design's; an implementation that keeps the design and re
     only up to a `NUL` inside it. A `BOOL` travels as a word, never a Rust `bool`'s byte; a word read back
     that is neither 0 nor 1 is `BadValue`, never a bool by cast. They return `SetInfo { inexact,
     reload_options, reload_params }`; `reload_options` re-reads every descriptor before returning, and so does
-    `sane_start` answering `INVAL`, each reload said in what the call returns. `Fixed` is SANE's 16.16 word,
-    with `to_f64` and a checked `from_f64`. Strings that go back to C (string values, string-list entries,
-    device names) stay bytes; text for people is lossy UTF-8.
+    `sane_start` answering `INVAL`, each reload said in what the call returns (as built, after the code
+    review: SANE's word in `SetInfo`, a start's in `StartInvalid`, and every re-read, whatever its cause,
+    counted by `Handle::options_generation`, decision 65). `Fixed` is SANE's 16.16 word, with `to_f64` and a
+    checked `from_f64`. Strings that go back to C (string values, string-list entries, device names) stay
+    bytes; text for people is lossy UTF-8.
   - **scanning, step by step** (what the seam needs as SANE gives it): `start()`, `parameters()` (the six
     fields as SANE gives them, and checked accessors), `read(buf)` (each read's status; the length asked for
     capped at the read chunk and `i32::MAX`; a length returned below 0 or above it is `BadReadLength`, never
@@ -195,7 +201,10 @@ The names below are the design's; an implementation that keeps the design and re
     the bytes expected where `lines` is known, for the seam's progress events; it's called between reads with
     no lock held, so it may use the cancel token. Page assembly reads blocking: it sets blocking mode after
     each `sane_start` (which every backend must support), and non-blocking reads with the select fd are the
-    step-by-step API's. A status mid-page (`JAMMED`, `COVER_OPEN`, `IO_ERROR`, `NO_DOCS` after the first byte,
+    step-by-step API's. (Corrected in the code review, decision 57: several of SANE 1.4.0's backends answer
+    `UNSUPPORTED` to either mode, against the standard, so a page sets blocking mode only on a handle the
+    step-by-step calls made non-blocking, a device opening blocking, and goes on whatever that answers.) A
+    status mid-page (`JAMMED`, `COVER_OPEN`, `IO_ERROR`, `NO_DOCS` after the first byte,
     any other) is an error, and the page in flight is dropped.
   - **caps on hostile input** (`Limits`, defaults said in the docs, each checked before the work it caps):
     options per device (4,096), bytes in a descriptor's string (64 KiB), entries in a word or string list
@@ -208,7 +217,8 @@ The names below are the design's; an implementation that keeps the design and re
     single-channel one, a three-pass image whose frames differ in size or depth, repeat a channel, or end
     (`last_frame`) before all three channels came. A frame that ends before `lines` rows is `ShortFrame`, one
     that runs past them `LongFrame`, a final partial row under `lines = -1` `PartialRow`, each with the
-    counts; a stream past the frame cap `FrameTooLarge`, its reading stopped.
+    counts; a stream past the frame cap `FrameTooLarge`, its reading stopped (as built, after the code review:
+    `LimitExceeded` for every cap a value passes, decision 67).
 - **`CancelToken`** (`Clone + Send + Sync`, from `cancel_token()`): `cancel()` calls `sane_cancel` from any
   thread, under the handle's own lock with an alive flag that `close` clears before `sane_close`, so a late
   cancel is a no-op and never reaches a closed handle (airbridge's pattern, credited where it sits, in our own
@@ -221,13 +231,15 @@ The names below are the design's; an implementation that keeps the design and re
   apart); `ListingPending`; `DeadlineExceeded`; `BadDeviceList`, `BadHandle` (a `GOOD` from `sane_open` with a
   null handle), `BadDescriptor { option, reason }`, `BadValue { option, word }`; the option refusals
   (`NoSuchOption`, `Inactive`, `NotSettable`, `NotAutomatic`, `WrongType`, `WrongLength`, `StringTooLong`,
-  `Unusable`); `BadReadLength`, `BadParameters`, `ShortFrame`, `LongFrame`, `PartialRow`, `FrameTooLarge`;
-  `Cancelled`; `NulInName`. `status_message(Status)` gives `sane_strstatus`'s text, bounded, `None` for a
+  `Unusable`); `BadReadLength`, `BadParameters`, `ShortFrame`, `LongFrame`, `PartialRow`, `FrameTooLarge`
+  (`LimitExceeded` since the code review, and `ReloadAfterSet` beside it); `Cancelled`; `NulInName`.
+  `status_message(Status)` gives `sane_strstatus`'s text, bounded, `None` for a
   null.
 - **The API's shape for its callers:** the errors (`LoadError`, `Error`, `ConfigError`) and the status-like
   enums that may grow are `#[non_exhaustive]`; the plain data (`Device`, `Parameters`, `OptionDescriptor`,
   `Constraint`, `Value`, `SetInfo`, `Image`, `Version`) has public fields and isn't, so slice 5's `sane`
-  backend can build them in its own tests without a library. Tests in `tests/`, outside the crate, match the
+  backend can build them in its own tests without a library (`SetInfo` made `#[non_exhaustive]` in the code
+  review, built from `Default`, decision 65). Tests in `tests/`, outside the crate, match the
   errors with a wildcard arm.
 - **Unsafe** sits in one module that loads the library, calls it and copies what it returns into owned values;
   the crate root is `#![deny(unsafe_code)]` and only that module allows it. Every block has a `// SAFETY:`
@@ -477,16 +489,16 @@ left out, with why.
 runner (the open point in `crates/sane-dl.md`; `Sane::load()`'s bare `libsane.1.dylib` goes through dyld's
 search, which on Apple silicon doesn't include Homebrew's `/opt/homebrew/lib`, so the item says whether
 `load()` needs a second name or the app's path); an authorization callback, if a networked backend ever needs
-one; the `test` backend's resolution default (below), for the maintainer's OK before any report upstream; and whatever
-else the steps find.
+one; the `test` backend's resolution default (below), for the maintainer's OK before any report upstream; and
+whatever else the steps find.
 
 ## Baselines
 
 - **The MSRV probe** (`scratch/work/s0-1/msrv-probe/`): each package's `rust-version` over `sane-dl`'s own
   normal and dev graphs, on every target; built and tested on the result.
 - **SANE as installed here** (2026-11-08): `libsane1`, `libsane-common`, `sane-utils` and, since the plan was
-  drawn, `libsane-dev` (the maintainer, the control file's note), all 1.4.0-1ubuntu1: `libsane.so.1` with the `test` and
-  `pnm` backends, and `/usr/include/sane/sane.h`. Observed with `scanimage` through a private
+  drawn, `libsane-dev` (the maintainer, the control file's note), all 1.4.0-1ubuntu1: `libsane.so.1` with the
+  `test` and `pnm` backends, and `/usr/include/sane/sane.h`. Observed with `scanimage` through a private
   `SANE_CONFIG_DIR` (`scratch/work/s0-1/probe-sane/`):
   - listing with the system's configuration: 9.54 s, nothing attached; an isolated directory naming `test` and
     `pnm`: 0.17 s; `BeforeSystem` with an empty `dll.d/`: 0.01 s, and libsane's debug log says it read that
@@ -569,7 +581,8 @@ else the steps find.
 23. **The gates' make-fails run once, in step 1,** where the gates are new, rather than at the slice's end,
     so the `readelf` gate is proven before step 2's FFI code leans on it.
 24. **The cancel token's flag is sticky** until a call returns `Cancelled` for it; page assembly reads
-    blocking; `set_auto` takes no value and needs `SANE_CAP_AUTOMATIC`.
+    blocking; `set_auto` takes no value and needs `SANE_CAP_AUTOMATIC`. (Page assembly sets blocking mode
+    only where it was changed, decision 57; a stale flag can be taken back, decision 69.)
 25. **The name gate ignores case** (step 1): the stash's pattern as it was, with `grep -i`, so a sentence
     that starts with the downstream app's name, capitalized, is caught too; the org's name in a URL still
     passes.
@@ -609,7 +622,9 @@ else the steps find.
     `Limits::list_entries` or holding an entry past the string cap. A title or description past the cap is
     cut there (text for people, as status words are); a name is refused, as device names are (26).
 36. **A group's name, unit, size, capabilities and constraint aren't read** (step 3): the standard says only
-    its title, description and type mean anything, so its pointers may be anything.
+    its title, description and type mean anything, so its pointers may be anything. (Corrected in the code
+    review, decision 61: the published standard defines only a group's title and type, so its description
+    isn't read either.)
 37. **A failed re-read leaves no descriptors** (step 3): every option call is then `NoSuchOption` until
     `reload_options` succeeds, never sized from descriptors that may be stale.
 38. **`Fixed::from_f64` rounds to the nearest word** (step 3; `SANE_FIX` truncates), `None` for NaN, the
@@ -665,12 +680,83 @@ else the steps find.
     authorization callback) and UP-7 to UP-10 (the `test` backend's resolution default, its hang, its -1
     length, and `scanimage`'s 16-bit three-pass abort), each read against sane-backends' master first; the
     upstream ones "waiting on review", as the control file's note words what waits.
+57. **A page sets blocking mode only where it was changed, and goes on whatever that answers** (code
+    review): a device opens blocking (the standard), so a page calls `sane_set_io_mode(FALSE)` only on a
+    handle whose `set_io_mode(true)` answered `GOOD`, and ignores its status. SANE 1.4.0's `fujitsu`,
+    `canon_dr`, `kodak`, `epson2`, `epsonds`, `escl`, `hp5590`, `kodakaio` and others, and HPLIP's `hpaio`,
+    answer `UNSUPPORTED` to either mode, against the standard's promise; `scanimage` never calls it. A
+    backend left non-blocking is read as an empty read is (58). Decision 24 is revised by it.
+58. **An empty read is made again after a pause, with no cap** (code review): from 100 µs, doubling to
+    10 ms, reset by a read that gives bytes, so a backend answering `GOOD` with no bytes costs no processor
+    (34 reads in 300 ms, where reading at once made 17,219). No cap fails the page: a backend that answers
+    so while its lamp warms up would fail under one, where `scanimage`, which reads again at once, scans; a
+    wait that never ends is a hang, the token's to cancel or the watchdog's, as with a blocking read that
+    never returns. The README no longer says the caps bound loops.
+59. **A frame of unknown height that ends before its first row is `ShortFrame`**, a row's bytes expected
+    (code review): its parameters were fine, so not `BadParameters`; a page always has a row, and
+    `Assembly::started` is true after any frame that ends well, so a later `NO_DOCS` is never a feeder's end.
+60. **Progress expects what's known** (code review): the frames that ended as they were read, and the
+    frame in flight for itself and for each frame to come; never below what's read, exact once the last
+    frame begins.
+61. **Of a group's descriptor, only the title and type are read** (code review; decision 36 revised). The
+    standard as published (sane-project.gitlab.io/standard) defines only those two; the source of its
+    current edition counts the description too. The copy reads only what every edition defines, so a
+    group's description is empty; `scanimage` doesn't read it either.
+62. **`Sane::load_from` is an `unsafe fn`; `Sane::load` stays safe** (code review, before the first
+    publish): `load_from` dlopens any path and calls its symbols with `sane.h`'s types, which a safe function
+    can't promise (libloading's `Library::new` is unsafe for this; ash and openxr made their loaders unsafe
+    for it). Its `# Safety`: a library this process may run, whose SANE functions have `sane.h`'s types.
+    `load` opens only the system's own SANE, trusted as a library linked at build time would be, which safe
+    Rust does through every `-sys` crate. The tests load through one helper whose SAFETY comment covers the
+    libraries they load.
+63. **On macOS, `load` tries absolute paths and no bare name** (code review; security item 8):
+    `/opt/homebrew/lib/libsane.1.dylib`, `/usr/local/lib/libsane.1.dylib`, `/opt/local/lib/libsane.1.dylib`,
+    in that order, since dyld looks for a bare name in the working directory of an unrestricted process.
+    `Sane::DEFAULT_LIBRARIES: &[&str]` replaces `DEFAULT_LIBRARY: Option<&str>` (an API change before the
+    first publish); empty on Windows, so `NoDefault`. Untried on a Mac (TEST-7).
+64. **`links = "sane-dl"`, with a build script that builds nothing** (code review; security item 10): cargo
+    then refuses two copies of the crate in one build (shown by a probe depending on 0.1.0-alpha.1 and a
+    copy at 0.2.0: "only one package in the dependency graph may specify the same links value"), where each
+    copy would keep its own one-per-process slot and start SANE twice. The gate's `links = "sane"` check
+    still holds; the package holds `build.rs`, and its recipe expects it; the README no longer says "no
+    build script".
+65. **Every re-read of the descriptors is counted, and `SetInfo` is `#[non_exhaustive]`** (code review):
+    `Handle::options_generation()` counts each re-read, whatever its cause (a set's `RELOAD_OPTIONS`, a
+    start's `INVAL`, a changed descriptor before an option call, `reload_options`), so a caller compares it
+    around a call. `get` keeps returning a `Value`, and `SetInfo` stays SANE's own word, now made from
+    `Default` outside the crate so more can be added. The spec's "said in what the call returns" reads
+    accordingly. Decision 21 holds for the rest of the plain data.
+66. **A set made before its re-read failed is `Error::ReloadAfterSet { info, reload }`** (code review), as
+    `StartInvalid` is for a start: the caller knows the value took effect, and what SANE said of it.
+67. **A cap passed is `Error::LimitExceeded { limit: LimitKind, value, cap }`** (code review): a known frame
+    or a line past its cap (was `BadParameters`), a frame of unknown height (was `FrameTooLarge`, removed), a
+    device list (was `BadDeviceList`), an option count (was `BadDescriptor`). What no frame can have is
+    checked first. What makes one option unusable (its size or a list past its cap) stays its `unusable`
+    reason: the option is kept and the device opens, and no real backend nears those caps.
+68. **A `dll.d` already there that isn't an empty directory is `ConfigError::BadPath`** for the directory
+    (code review), not a made-up `Io` error; `Io` is what the system refused.
+69. **`Handle::clear_cancel()` takes back a waiting cancel** (code review; decision 43 kept): on the handle,
+    whose thread knows when a new batch begins, not on the token, where a clear from another thread would
+    race the cancel it's meant for. It returns whether one was waiting; `batch()`'s docs say when to call
+    it.
+70. **The fake plays both** (code review): `io-mode-unsupported` (`sane_set_io_mode` answers `UNSUPPORTED`
+    to either mode, frame or none), which the `fujitsu`, `canon-dr`, `kodak` and `epson` profiles imply as
+    those backends answer; and `@dangling`, a pointer to no memory, for a field the standard leaves
+    undefined.
+71. **The gates read fake-libsane's graph, and each binary whole** (code review): the fake may take no
+    dependency; `readelf -d` is read into a variable first, and a binary it can't read fails the gate.
+72. **No one is named in a tracked file but the root `LICENSE-MIT`, and no local path is given** (the
+    control file's note, the fix's privacy commit): rulings by their date, "waiting on review" for what
+    waits, "the maintainer" where who matters; this plan's headings renamed; checkouts by their public
+    repositories, files in them by their repository paths.
 
 ## For review (security)
 
 1. **Loading a library runs its code** in the process: `load_from` trusts the path it's given, and the app
-   chooses it (an override variable is the app's to guard). The default goes by soname through the system
-   loader's own search; there is none on Windows, so no DLL search order is involved.
+   chooses it (an override variable is the app's to guard); since the code review it's an `unsafe fn`, so the
+   trust is its caller's promise in Rust's terms, not a doc comment (item 9). The default goes by soname
+   through the system loader's own search (on macOS by absolute paths, item 8); there is none on Windows, so
+   no DLL search order is involved.
 2. **Backends are C code running in-process.** `sane-dl` checks and caps every integer, pointer and length
    that crosses, but can't contain a backend that corrupts memory or crashes ("some corrupt memory, some
    cause crashes", libinsane): its README says to run SANE in a process of its own, as `scan-worker` will.
@@ -692,6 +778,16 @@ else the steps find.
    listings only: `pnm`, which reads any file its option names, can be opened by name in any process
    where `libsane1` is installed. The name a worker opens must come from a listing or the user's own
    stored choice, never from an untrusted party: slice 5's `sane` backend, said there.
+8. **On macOS `load()` opened a bare name, which dyld also looks for in the working directory** (code
+   review, from Apple's dlopen(3); not run here, no Mac): a `libsane.1.dylib` planted in the directory an
+   app starts from would have been loaded. `load()` now tries only absolute paths there (decision 63); an
+   app with SANE elsewhere gives its path to `load_from`.
+9. **`load_from` was safe, its trust in the library resting on doc text** (code review): any path from safe
+   code could run a library's initialisers and have arbitrary symbols called as SANE's. It's an `unsafe fn`
+   now (decision 62), so the promise is its caller's, in Rust's terms.
+10. **Two copies of the crate in one program would start SANE twice** (code review): each with its own
+    one-per-process slot, so overlapping calls and one copy's `sane_exit` freeing what the other's handles
+    use, from safe code. Cargo refuses two copies now (`links`, decision 64).
 
 ## Risks
 
@@ -1448,3 +1544,108 @@ Commits `5255df9` (the crate made ready to publish, its package checked) and the
     or gate reads (the gates leave out `docs/pm`), so `just ci` and the step's other checks weren't run
     again. `git grep -i` for the maintainer's name outside the root `LICENSE-MIT` finds the 78 lines it
     found, none added.
+
+## Code review
+
+Four reviewers read the branch at `db9b695` (2026-11-08), each through one lens: behaviour, the crates as
+published libraries, the repository, and FFI soundness. Their findings and evidence are local
+(`scratch/work/s0-1/flow/review-*.json`, and `scratch/work/s0-1/review-*/`): 23 findings, the set I/O mode
+one found twice, so 22 distinct; 3 blockers, 5 major, 15 minor. Each was checked against the code first, the
+behavioural ones reproduced (the fake's scripts, the reviewers' shim over the real `libsane`, the published
+standard read again). All held, and all are fixed; none refuted, none deferred. Commits from `942553a` to
+`9b8bd5a`, then this one.
+
+**Fixed:**
+
+1. *`Batch::next_page` failed every page on backends that answer `UNSUPPORTED` to `sane_set_io_mode`
+   whatever the mode* (blocker; found by two lenses: SANE 1.4.0's `fujitsu`, `canon_dr`, `kodak`, `epson2`,
+   `epsonds`, `escl`, `hp5590`, `kodakaio` and more, and HPLIP's `hpaio`, so most Epson, HP, network and
+   Fujitsu scanners, slice 6's fi-6130 among them; each retry fed a sheet away). `942553a`, decision 57;
+   the fake's `io-mode-unsupported` and four profiles (decision 70), and tests: a batch through the
+   `fujitsu` profile, a page setting blocking back after the step-by-step calls. The reviewers' shim over
+   the real `libsane`, which answers `UNSUPPORTED` as those backends do, now scans `test:0`.
+2. *A frame of unknown height that ended before its first row was a page of height 0* (major).
+   `942553a`, decision 59; one frame and three passes in the fake, and a unit test.
+3. *A read answering `GOOD` with no bytes was retried at once, without end* (minor; the README promised no
+   unbounded loop). `942553a`, decision 58: pauses growing to 10 ms, no cap, the README's claim corrected;
+   the cancel test counts the reads.
+4. *Progress on a three-pass page whose frames differ in padding passed what it expected* (minor).
+   `942553a`, decision 60; a unit test with the reviewer's frames.
+5. *A group's description was followed, though the published standard defines only a group's title and
+   type: `Sane::open` crashed on a stand-in library that `scanimage` reads* (blocker). `2b424f4`, decision
+   61; the fake's `@dangling`, and a test opening a device whose group's name and description point
+   nowhere.
+6. *`Sane::load_from` was safe, its SAFETY comments resting on a contract a safe function can't carry*
+   (major). `3b6abdb`, decision 62; security item 9.
+7. *On macOS `load()` opened a bare name, which dyld also seeks in the working directory* (major,
+   security). `3b6abdb`, decision 63; security item 8; TEST-7 updated.
+8. *Two copies of the crate in one program would each keep a slot of their own* (minor). `3b6abdb`,
+   decision 64; security item 10.
+9. *`RawHandle`'s `Send` comment said every call holds the call token; `sane_cancel` doesn't* (minor).
+   `3b6abdb`.
+10. *Descriptor re-reads made unasked weren't said, against the spec, and `SetInfo` couldn't grow*
+    (major). `43e40c0`, decision 65; `crates/sane-dl.md`'s "For the seam" says it as built.
+11. *A set the backend made, whose re-read failed, returned the same error as a refusal* (minor).
+    `43e40c0`, decision 66.
+12. *Caps a real scan can reach were reported in reason strings* (minor; A4 at 2400 dpi, 16-bit color, is
+    3,340,837,224 bytes). `e689a42`, decision 67.
+13. *A token's cancel landing after a batch had ended couldn't be cleared* (minor). `e689a42`, decision 69.
+14. *`ConfigDir` refused a used `dll.d` as a made-up I/O error* (minor). `e689a42`, decision 68.
+15. *The `readelf` gate counted binaries it couldn't read, and passed* (minor). `493b0c7`, decision 71.
+16. *fake-libsane's "no dependencies" had no gate* (minor). `493b0c7`, decision 71.
+17. *`just ci` didn't say that CI sets the require variables* (minor). `493b0c7`: the justfile's header and
+    CI's comment say it.
+18. *The justfile's doc lines: `gates`' a fragment in `just --list`, "those four" naming five, no line for
+    `sane-dl-msrv`* (minor). `493b0c7`, and "each there" in `3b6abdb` (the package now holds six).
+19. *`.gitattributes`' `*.sh` rule for scripts the repository doesn't have* (minor). `493b0c7`: the
+    comment says what it's for.
+20. *Local home paths in public docs, from before the branch* (major; 16 in 8 files, and six dead
+    `file://` links). `9b8bd5a`, with the maintainer's name (the control file's note): 78 lines reworded,
+    `git grep -i` for it finds only `LICENSE-MIT`; the checkouts by their public repositories, files in them
+    by their repository paths, and the surveys' "session scratchpad" and cargo-registry paths reworded.
+21. *`crates/sane-dl.md` gave the plan's decisions as 49* (minor). This commit: no count given.
+22. *`status.md` said step 5's check was next* (minor). This commit: `status.md` rewritten.
+
+**Checked, on the committed tree** (at `9b8bd5a`; this commit changes `docs/pm` alone, which no build,
+test or gate reads):
+
+- `just ci` with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, green: fmt, clippy, 221 tests
+  in 14 harnesses with none skipped, doc, the gates (sane-dl's graph 10 packages, fake-libsane's none, 14
+  binaries read), `sane-dl-package` (16 files), and `sane-dl-msrv`, 178 tests on 1.89 (the fake built on
+  1.89 too, by the nested build: `ptr::dangling` needs 1.84 and the build script's `cargo::` 1.77).
+- The test list: 221, step 5's 215 all kept (three renamed: the README's doctest a line down, the group's
+  unit test, the cap's fake test), 6 new.
+- `cargo clippy --all-targets -D warnings` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`.
+- `just sane-dl-package` in a fresh `CARGO_TARGET_DIR` under `scratch/work/s0-1/fix/package/`: the dry
+  run passes, 16 files (`build.rs` new), nothing published.
+- Make-fails, on a detached worktree under `scratch/work/s0-1/fix/`, removed after: the `readelf` gate
+  given a non-ELF file and a missing path, and fake-libsane given a dependency, each failing the gates
+  saying why; and each behavioural fix undone in turn, each failing its tests (the old `set_io_mode` call:
+  `Status { UNSUPPORTED, SetIoMode }`; reading again at once: 17,219 empty reads in 300 ms; a group's
+  description read: the child killed by `SIGSEGV`; zero-row frames: the two fake tests and the unit test;
+  the old progress: `(16, Some(12))`).
+- The `links` probe (`scratch/work/s0-1/links-probe/`): cargo refuses sane-dl 0.1.0-alpha.1 beside a copy
+  at 0.2.0. The reviewers' I/O mode shim over the system's `libsane.so.1`, scanning `test:0` through an
+  isolated configuration: a page, as from the plain library.
+- Not run again, and why: ThreadSanitizer (the cancel's synchronization, the alive flag and the call token,
+  is untouched; `clear_cancel` is the flag's swap and the read loop's pause is on one thread); the
+  reviewers' AddressSanitizer run (the unsafe code changed by one pointer read fewer and the library names
+  tried); the header contract (`ffi.rs` unchanged; it ran in `just ci` all the same); `scanimage`'s pages
+  beside ours (no assembled byte changed, and the tests against the `test` and `pnm` backends ran); the MSRV
+  probe (no dependency added).
+- The privacy scan of every file and commit message the slice committed runs last, after this commit; its
+  result is in the run's local record (`scratch/work/s0-1/flow/notes.md`), and anything it finds is fixed
+  in a commit of its own.
+
+**What only CI shows** (it waits on the push), beyond step 5's list: the build script and `links` on
+Windows and macOS, and on macOS `load()` refused with the three paths named (TEST-7 tries them with
+Homebrew's SANE). Windows and macOS on this code are TEST-8.
+
+**Backlog:** UP-11 (the backends that answer `UNSUPPORTED` to a blocking `sane_set_io_mode`, against the
+standard), TEST-8 (this slice's code on CI's Windows and macOS), TEST-7 revised (absolute paths on macOS);
+TEST-2 still closes with CI's run of the tests.
+
+**For slice 2, of the seam's SANE unknowns:** a backend's blocking promise isn't to be trusted: many answer
+`UNSUPPORTED` to `sane_set_io_mode` either way and read blocking, so the seam's "blocking or not with the
+select fd" (section 3) is the backend's to offer, and `sane-dl` reads a page blocking without asking. Nothing
+new on names that change on replugging, or on stopping after the page in flight.

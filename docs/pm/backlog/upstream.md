@@ -1,11 +1,11 @@
 # Upstream: contributions to other projects
 
-IDs UP-1 to UP-10; the next new one is **UP-11**. Format and rules: `README.md`.
+IDs UP-1 to UP-11; the next new one is **UP-12**. Format and rules: `README.md`.
 
-Nothing is reported or offered upstream without the maintainer's OK (plan.md, "Standing rules"), so each is waiting on
-review. None blocks a slice: the plan works around each. From the prior-art survey
-(`research/prior-art/README.md`, 2026-11-08), and from S0 slice 1: UP-7 to UP-10, each seen on SANE 1.4.0,
-the code behind it unchanged in sane-backends' master at `a113b257` (2026-11-08; read, as GPL code is, only to
+Nothing is reported or offered upstream without the maintainer's OK (plan.md, "Standing rules"), so each is
+waiting on review. None blocks a slice: the plan works around each. From the prior-art survey
+(`research/prior-art/README.md`, 2026-11-08), and from S0 slice 1: UP-7 to UP-11, each seen on SANE 1.4.0, the
+code behind it unchanged in sane-backends' master at `a113b257` (2026-11-08; read, as GPL code is, only to
 study).
 
 ## For S0 (scan devices)
@@ -14,6 +14,7 @@ study).
 - **UP-8** · sane-backends (`test` backend) · S0 · waiting on review — **The `test` backend hangs now and then as a frame ends.** Built with threads, as Debian and Ubuntu build it, it reads each frame's picture from a reader thread through a pipe, and ends that thread with `pthread_cancel` (`sanei_thread_kill`) at the read that reaches the frame's end and at `sane_cancel`. Now and then the next frame's reader never writes and the frontend blocks reading the pipe for good. Seen on 1.4.0: about 1 in 2,000 cancels at once after a start, in one process; 1 to 4 processes of 12 or 24 reading 3,000 whole pages each, in parallel; none in 144,000 pages read 64 bytes at a time with a 1 ms pause after each frame's first read, which is how `sane-dl`'s tests read it. gdb sessions at the hang (S0 slice 1's step 4, their output not kept) showed the new reader blocked in `malloc`'s `get_free_list` and the frontend in `sane_test_read`; step 4 took the cause for an asynchronous cancel landing inside the allocator, but `sanei_thread` cancels in deferred mode, glibc's default, by its own comment, so the cause wants confirming, with backtraces kept, before a report. The probe is local, `scratch/work/s0-1/step-4/probe-hang/`. *(S0 slice 1, step 4)*
 - **UP-9** · sane-backends (`test` backend) · S0 · waiting on review — **In non-blocking mode, an empty pipe at a frame's first read ends the frame, with a length of -1.** `read` gives -1 (`EAGAIN`), and the end-of-frame test adds it, as a `size_t`, to the bytes read so far, which wraps while none have been read: the frame is ended (its reader cancelled) and `sane_read` answers `GOOD` with `*length = -1`. The `EAGAIN` branch after it, which answers `GOOD` with no bytes, is reached only once some bytes have come. `sane-dl` refuses the length (`BadReadLength`), as it should; its non-blocking test lets the reader fill the pipe first. The fix: test for a negative `read` before the end-of-frame test. *(S0 slice 1, step 4)*
 - **UP-10** · sane-backends (`scanimage`) · S0 · waiting on review — **`scanimage` aborts on 16-bit three-pass color.** It asserts that a red, green or blue frame is 8-bit (`assert (parm.depth == 8)` in `scan_it`), so a backend's 16-bit three-pass scan (the `test` backend's `three-pass` at depth 16) ends it by `SIGABRT` instead of writing the image or saying it can't; one-pass 16-bit color is written. The fix: interleave two bytes a sample at 16 bits, or refuse with a message. *(S0 slice 1, step 4's comparison with `scanimage`)*
+- **UP-11** · sane-backends (`fujitsu`, `canon_dr`, `kodak`, `epson2`, `epsonds`, `escl`, `hp5590`, `kodakaio` and others) · S0 · waiting on review — **`sane_set_io_mode(FALSE)` answers `UNSUPPORTED`, where the standard says a blocking set always succeeds.** Each of these answers `UNSUPPORTED` to either mode without looking at it (in 1.4.0's binaries also `epson`, `magicolor`, `kvs1025`, `kvs20xx`, `kvs40xx`, `dell1600n_net`, `dmc`, `dc210` and `hpljm1005`; and HPLIP 3.24.4's `hpaio`), and reads blocking all the same; `scanimage` never calls it, so nothing upstream notices. A frontend that sets blocking mode and trusts the standard scans nothing from them, as `sane-dl`'s batches didn't before S0 slice 1's code review (its decision 57). The fix in each is to answer `GOOD` to `FALSE`; or the standard says a frontend may not rely on it. One report against the backends, or a note in the standard, whichever upstream prefers. *(S0 slice 1, code review: the backends' sources at sane-backends' master `a113b257` and tag `1.4.0`, read to study, and 1.4.0's binaries disassembled)*
 
 ## For S1 (pages)
 

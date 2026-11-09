@@ -1,6 +1,6 @@
 # Tests: checks still to build, spikes and measurements
 
-IDs TEST-1 to TEST-7; the next new one is **TEST-8**. Format and rules: `README.md`.
+IDs TEST-1 to TEST-8; the next new one is **TEST-9**. Format and rules: `README.md`.
 
 From the prior-art survey's "What is still unverified" (`research/prior-art/README.md`,
 2026-11-08): what settles each is an experiment, not more reading.
@@ -20,7 +20,9 @@ From the prior-art survey's "What is still unverified" (`research/prior-art/READ
 
 - **TEST-3** · twain-dsm · S0 · open — **TWAIN's sample source on a hosted runner.** Whether `Twain_DS_sample01` (BSD-3) installs silently on `windows-latest` (`msiexec /qn`), or runs from yushulx/virtual-scanner's portable zip, or works with the DSM and the source copied into `twain_32` and `twain_64` (if the runner lets us write `C:\Windows\twain_*`); whether it scans with a hidden window in both bitnesses; `CAP_XFERCOUNT` from its environment variable sets the page count. *(survey, TWAIN, WIA and ICA)*
 
-- **TEST-7** · sane-dl · S0 · open — **sane-dl against Homebrew's sane-backends on the macOS runner.** Untried: S0 slice 1 kept it out (its decision 18), so an unknown on a runner couldn't hold the slice; on macOS the tests that need libsane say they skipped. Try `brew install sane-backends` on `macos-latest`, then the tests with `SANE_DL_REQUIRE_LIBSANE=1` through an isolated `ConfigDir` naming `test`. `Sane::load()` opens the bare name `libsane.1.dylib`, found through dyld's search, whose fallback path holds `/usr/local/lib` (Homebrew on Intel) but not `/opt/homebrew/lib` (Homebrew on Apple silicon, as the runners are), so the item says whether `load()` needs a second name tried after the first, or whether Homebrew's path is the app's to give through `load_from`. Also: whether Homebrew's build has the `test` and `pnm` backends, and the header contract against its `sane.h` (`SANE_DL_SANE_H`). *(S0 slice 1, `crates/sane-dl.md`)*
+- **TEST-7** · sane-dl · S0 · open — **sane-dl against Homebrew's sane-backends on the macOS runner.** Untried: S0 slice 1 kept it out (its decision 18), so an unknown on a runner couldn't hold the slice; on macOS the tests that need libsane say they skipped. Try `brew install sane-backends` on `macos-latest`, then the tests with `SANE_DL_REQUIRE_LIBSANE=1` through an isolated `ConfigDir` naming `test`. Since S0 slice 1's code review `Sane::load()` tries absolute paths on macOS and no bare name (which dyld would also seek in the working directory, and whose fallback search holds `/usr/local/lib` for old binaries only): `/opt/homebrew/lib/libsane.1.dylib` (Homebrew on Apple silicon, as the runners are), `/usr/local/lib/libsane.1.dylib` (Homebrew on Intel), `/opt/local/lib/libsane.1.dylib` (MacPorts). The item says whether Homebrew installs the library under that name there, and whether `load()` opens it. Also: whether Homebrew's build has the `test` and `pnm` backends, and the header contract against its `sane.h` (`SANE_DL_SANE_H`). *(S0 slice 1, `crates/sane-dl.md`)*
+
+- **TEST-8** · sane-dl, fake-libsane · S0 · open — **S0 slice 1's code on CI's Windows and macOS.** Built and checked on Linux, with clippy for both other targets; what only CI shows: the fake built as a DLL and a dylib by the tests' nested build and loaded by its path, rusty-fork's children on each, the abort's exit code on Windows (`0xC0000409`), the build script that builds nothing and the `links` key, the tests that need libsane or `sane.h` saying they skipped, and on macOS `load()` refused as `NotFound` naming its three paths (before TEST-7 installs Homebrew's SANE). Close it once CI's run of the slice's push or pull request is green on both. *(S0 slice 1, code review)*
 
 ## Later
 

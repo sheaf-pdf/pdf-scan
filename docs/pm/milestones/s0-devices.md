@@ -1,10 +1,10 @@
 # S0: Scan devices
 
 **The device layer, before the pages and the PDF: SANE on Linux, then TWAIN and WIA on Windows; the device
-model frozen once both have been through it.** The maintainer's order (2026-11-08: "we want to add a s0 milestone for
-the scan devices"): S0, then S1 pages, then S2 PDF (`decisions.md`). Needs nothing unbuilt; the hand checks
-need scanners, and the Windows slices a Windows machine (ask 4's point, now answered: device work starts
-before a scanner is at hand).
+model frozen once both have been through it.** The maintainer's order (2026-11-08: "we want to add a s0
+milestone for the scan devices"): S0, then S1 pages, then S2 PDF (`decisions.md`). Needs nothing unbuilt; the
+hand checks need scanners, and the Windows slices a Windows machine (ask 4's point, now answered: device work
+starts before a scanner is at hand).
 
 Bindings first, the model drafted beside them and kept provisional (`decisions.md`, "Made here"): `sane-dl`
 follows SANE alone and needs no model, so it comes first; the model's hard points (how a page arrives, its
@@ -28,8 +28,15 @@ S1 back: S1 can start once the Linux slices are done.
    measured the pixel crates'. Checked: `just ci`; SANE's `test` and `pnm` backends in CI and the bindings
    against the installed `sane.h` (TEST-2); the fake's cases; missing libsane said, not a crash; each gate
    failing on a violation made for the check.
-   **Built** (`slices/s0-1-sane-dl.md`): `sane-dl` 0.1.0-alpha.1, ready to publish and not published, MSRV
-   1.89; its code review, and CI's run of it on the push, close the slice.
+   **Done on the branch** (2026-11-08; `slices/s0-1-sane-dl.md`): branch `s0-1-sane-dl`, from `137be1a`
+   to its head (the code as of `493b0c7`, its privacy commit `9b8bd5a`, then the record). `sane-dl`
+   0.1.0-alpha.1, ready to publish and not published, MSRV 1.89, with `fake-libsane`; its five steps checked
+   and its code review's 22 findings fixed. For review: the plan's "Decisions taken alone, for review" (72)
+   and "For review (security)" (10), above all the code review's API changes before the first publish
+   (`Sane::load_from` an `unsafe fn`, `DEFAULT_LIBRARIES` with macOS's absolute paths, the `links` key and its
+   empty build script, `LimitExceeded`, `ReloadAfterSet`, `options_generation`, `SetInfo` non-exhaustive,
+   `clear_cancel`); then the push and the pull request, and CI's run on the three systems (TEST-2, TEST-8),
+   which closes the slice.
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the

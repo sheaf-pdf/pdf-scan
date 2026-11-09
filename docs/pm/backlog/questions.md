@@ -1,8 +1,8 @@
 # Questions: decisions still to make
 
-IDs Q-1 to Q-3; the next new one is **Q-4**. Format and rules: `README.md`. A question for the maintainer alone goes in
-`asks.md`; these are the plan's, settled by a measurement, a test or a slice, and any of them can be raised
-to an ask.
+IDs Q-1 to Q-3; the next new one is **Q-4**. Format and rules: `README.md`. A question for the maintainer
+alone goes in `asks.md`; these are the plan's, settled by a measurement, a test or a slice, and any of them
+can be raised to an ask.
 
 ## For S1 (pages)
 

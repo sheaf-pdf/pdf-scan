@@ -1,7 +1,7 @@
 # pdf-scan: the plan
 
-As of 2026-11-08. Building: S0 slice 1 has built the workspace and `sane-dl`, with `fake-libsane` for its
-tests (`slices/s0-1-sane-dl.md`); the rest is planned.
+As of 2026-11-08. S0 slice 1 has built the workspace and `sane-dl`, with `fake-libsane` for its tests, done
+on its branch and waiting on review (`slices/s0-1-sane-dl.md`); the rest is planned.
 
 pdf-scan is a workspace of crates for getting paper into PDF, which sheaf will depend on: scanners driven
 through each system's own driver API, in a worker process; page images cleaned up, judged blank or not, and
@@ -85,36 +85,37 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 
 ## The milestones
 
-Details in `milestones/`. Devices first, by the maintainer's order (2026-11-08), on fakes and SANE's own test backend
-where no scanner is at hand; then the pixel crates cut from sheaf; then the PDF crates on the family.
+Details in `milestones/`. Devices first, by the maintainer's order (2026-11-08), on fakes and SANE's own test
+backend where no scanner is at hand; then the pixel crates cut from sheaf; then the PDF crates on the family.
 
 | # | Milestone | Crates | Needs | State |
 |---|---|---|---|---|
-| S0 | **Scan devices:** SANE, the device model (provisional) and the worker on Linux; then TWAIN and WIA on Windows; the model frozen | `sane-dl`, `scan-device` (`fake`, `sane`, `twain`, `wia`), `scan-worker`, `twain-dsm`; `fake-libsane` for tests | Nothing unbuilt; by hand, scanners; for Windows, a Windows machine | Slice 1 running |
+| S0 | **Scan devices:** SANE, the device model (provisional) and the worker on Linux; then TWAIN and WIA on Windows; the model frozen | `sane-dl`, `scan-device` (`fake`, `sane`, `twain`, `wia`), `scan-worker`, `twain-dsm`; `fake-libsane` for tests | Nothing unbuilt; by hand, scanners; for Windows, a Windows machine | Slice 1 done on its branch, waiting on review |
 | S1 | **Pages:** the pixel crates cut from sheaf, sheaf's output held byte for byte | `scan-fixtures`, `scan-image`, `scan-cleanup`, `patch-codes` | Nothing unbuilt | Planned |
 | S2 | **PDF:** scanned pages to PDF and back, on the family | `pdf-images`, `pdf-scan` | S1's `scan-image`; the family (alphas; its writers built, unpublished) | Planned |
 | — | Later: macOS (`ica`), a second barcode engine, a faster cleanup if S0 slice 4's throughput asks for it | | | — |
 
-**sheaf's side** is sheaf's own track, as pdf-lint's family has "sheaf's migration": sheaf swaps its copy
-for each crate in a PR of its own, when the maintainer says, and its copy goes, as it went for pdf-lint's checker.
+**sheaf's side** is sheaf's own track, as pdf-lint's family has "sheaf's migration": sheaf swaps its copy for
+each crate in a PR of its own, when the maintainer says, and its copy goes, as it went for pdf-lint's checker.
 It's done in sheaf, never from here, and sheaf's plan doesn't point here (decisions.md, "Made here"):
 `sheaf/from-sheaf.md` lists what each crate takes from sheaf, and `sheaf/swaps.md` what each swap replaces and
 which of sheaf's entries it closes.
 
 ## Standing rules
 
-pdf-lint's, which the maintainer set for that workspace, and sheaf's on licenses, taken as S0 slice 1 starts (ask 7,
-as recommended; decisions.md, "Made here").
+pdf-lint's, which the maintainer set for that workspace, and sheaf's on licenses, taken as S0 slice 1 starts
+(ask 7, as recommended; decisions.md, "Made here").
 
 - **Code, crate docs, crate READMEs and commit messages never mention** sheaf, its milestones, the corpus
   or anything counted on it, or `scratch/`; the org's name in a URL (`github.com/sheaf-pdf/…`) aside. They
   say what the code does, not where it came from. `docs/pm/` may name them, keeping nothing private
   (decisions.md). `just gates` checks every file outside `docs/pm/`.
-- **Nothing is published** (crates.io, tags, releases), pushed or merged without the maintainer's word. The PDF
-  crates can't publish before the family crates they take are on crates.io (no path dependencies there):
+- **Nothing is published** (crates.io, tags, releases), pushed or merged without the maintainer's word. The
+  PDF crates can't publish before the family crates they take are on crates.io (no path dependencies there):
   `pdf-images`' are, as alphas; `pdf-scan`'s pdf-structure and pdf-content-streams aren't yet
   (`pdf-lint/README.md`).
-- **Nothing is reported upstream without the maintainer's OK** (SANE backends, the TWAIN DSM, rxing, hayro, image-rs).
+- **Nothing is reported upstream without the maintainer's OK** (SANE backends, the TWAIN DSM, rxing, hayro,
+  image-rs).
 - **Licenses:** every crate MIT OR Apache-2.0. GPL, LGPL and AGPL code (NAPS2, libinsane, simple-scan,
   sane-backends, jbig2dec, zbar) is studied and cited, never copied, translated or linked. An unmodified
   copyleft library loaded at run time is allowed (D17): libsane, `TWAINDSM.dll`. What ships beside an app
@@ -131,5 +132,5 @@ as recommended; decisions.md, "Made here").
 - **Hostile input:** caps with sane defaults, read before the work they cap: an image's dimensions before
   it's decoded, a worker's message sizes before they're read (a driver's bytes are untrusted, and so is a
   crashed worker's half message). Decoders are fuzzed.
-- **Builds** as pdf-lint's: in its memory scope, no writes to cargo's home directory, `rg` not grep, commits with the
-  `Co-Authored-By` trailer.
+- **Builds** as pdf-lint's: in its memory scope, no writes to cargo's home directory, `rg` not grep, commits
+  with the `Co-Authored-By` trailer.

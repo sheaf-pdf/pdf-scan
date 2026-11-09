@@ -15,8 +15,8 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   fine." Loading an unmodified, separately shipped library (`TWAINDSM.dll`, LGPL-2.1; libsane, whose
   backends are GPL-2.0+ with the SANE exception) isn't copying, translating or linking. Ship its license
   text and a source offer.
-- **M5's kickoff answers** (2026-10-23), taken as recommended under the maintainer's standing instruction, open to
-  review until the slice that depends on each starts:
+- **M5's kickoff answers** (2026-10-23), taken as recommended under the maintainer's standing instruction,
+  open to review until the slice that depends on each starts:
   - ask 3: TWAIN and WIA on Windows, TWAIN first, with a 32-bit worker for 32-bit TWAIN drivers;
   - ask 4: macOS isn't in M5 (a Pending entry for ImageCaptureCore);
   - ask 5: drivers always in a worker process;
@@ -71,9 +71,10 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   "pdf-lint will continue to move. it is currently in alpha releases for most of the family of libraries. As a
   consumer of these crates if you identify any major shortcomings we should create proposals that can be
   handed off to them for refactor". So nothing is changed in pdf-lint from here; a major shortcoming becomes a
-  proposal (kept local, `scratch/pdf-lint/proposals/`), handed off with the maintainer's OK, while pdf-scan works around
-  it; published alphas are pinned exactly (decided the same day: "pin alphas exactly is fine"), unpublished
-  crates taken by path; the family is read again before each slice that touches it (`pdf-lint/README.md`).
+  proposal (kept local, `scratch/pdf-lint/proposals/`), handed off with the maintainer's OK, while pdf-scan
+  works around it; published alphas are pinned exactly (decided the same day: "pin alphas exactly is fine"),
+  unpublished crates taken by path; the family is read again before each slice that touches it
+  (`pdf-lint/README.md`).
 - **The device layer is built bindings first, its model frozen late** (decided 2026-11-08, taking the
   recommendation: "make the edits"). `sane-dl` comes first (it follows SANE alone and needs no model); a
   seam note (`crates/scan-device-seam.md`) records how each API delivers each concept, before

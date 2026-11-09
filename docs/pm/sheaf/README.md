@@ -11,7 +11,8 @@ the upstream pdf-scan builds on; sheaf is downstream.
   slice pins.
 - **It moves on without knowing this plan exists:** its plan doesn't point here, so the copies are checked for
   drift before each slice (the command is in `scratch/reference/README.md`).
-- **It takes each crate in a swap of its own,** done in sheaf when the maintainer says, never from here (`sheaf/swaps.md`).
+- **It takes each crate in a swap of its own,** done in sheaf when the maintainer says, never from here
+  (`sheaf/swaps.md`).
 - These files, and the rest of `docs/pm/`, may name sheaf; the code, crate docs, crate READMEs and commit
   messages never do (ask 7, `decisions.md`).
 

@@ -2,17 +2,20 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 1 (`slices/s0-1-sane-dl.md`, which has the design, its 49 decisions and what each
-step checked): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not published; MSRV 1.89
-(`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends and `fake-libsane`
+**As built** in S0 slice 1 (`slices/s0-1-sane-dl.md`, which has the design, its decisions, what each step
+checked and the code review's fixes): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not published;
+MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends and `fake-libsane`
 (`crates/fake-libsane.md`).
 
-- **What:** SANE for Rust, loaded at run time (M5 proposal 6, M5 ask 6, entry 5): `libsane.so.1` (or
-  `libsane.1.dylib` on macOS) opened by `libloading` (0.9, ISC) through the system loader's search, or a
-  library the caller names (`Sane::load_from`; sheaf's tests would name theirs by `SHEAF_LIBSANE`, an
-  environment variable that's the app's). Nothing fails until SANE is asked for, and then it says so
-  (`LoadError`: `NotFound` with the names tried, `NoDefault` on Windows, `MissingSymbol`, `Init`,
-  `UnsupportedVersion`, `AlreadyLoaded`). Never unloaded; one `Sane` per process, another after it ends.
+- **What:** SANE for Rust, loaded at run time (M5 proposal 6, M5 ask 6, entry 5): `libsane.so.1` opened by
+  `libloading` (0.9, ISC) through the system loader's search (on macOS `libsane.1.dylib` at Homebrew's and
+  MacPorts' absolute paths, never a bare name, which dyld would also seek in the working directory), or a
+  library the caller names (`Sane::load_from`, an `unsafe fn`, since it trusts the library's code and its
+  symbols' types; sheaf's tests would name theirs by `SHEAF_LIBSANE`, an environment variable that's the
+  app's). Nothing fails until SANE is asked for, and then it says so (`LoadError`: `NotFound` with the names
+  tried, `NoDefault` on Windows, `MissingSymbol`, `Init`, `UnsupportedVersion`, `AlreadyLoaded`). Never
+  unloaded; one `Sane` per process, another after it ends; one copy of the crate per program (its manifest's
+  `links = "sane-dl"`, with a build script that builds nothing).
   - Bindings of its own (`sane_dl::ffi`, public, types and constants only), from SANE 1.4.0's public-domain
     `sane.h`: its 14 functions as function-pointer types, its structs, types and constants. The grant asks
     that the notice be kept and changes marked: both done in the file's header. No bindgen, no build-time
@@ -39,21 +42,27 @@ step checked): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not publi
   - Options typed: descriptors (`OptionDescriptor`), constraints (ranges, word lists, string lists), units,
     capabilities, values (`Value`, `Fixed`); refusals before the backend sees a call SANE's rules don't
     allow; descriptors read again whenever a set says so (`SANE_INFO_RELOAD_OPTIONS`), when `sane_start`
-    returns `SANE_STATUS_INVAL`, and before any call on an option SANE now describes differently.
+    returns `SANE_STATUS_INVAL`, and before any call on an option SANE now describes differently, each
+    re-read counted (`Handle::options_generation`); a set made whose re-read fails is `ReloadAfterSet`. Of a
+    group's descriptor only its title and type are read, as the standard defines no more.
   - Frames assembled (`Batch::next_page`, `Image`): `lines = -1` read to EOF; padded rows; 1-bit rows with 1
     black and the first pixel in the high bit; 16-bit samples in native order; three-pass frames into one
-    image; `NO_DOCS` from `sane_read` as well as `sane_start` (`Page::NoDocs`, with the pages delivered).
-    NAPS2 handles 1- and 8-bit transfers only, so 16-bit, padded and unknown-length frames go beyond every
-    frontend, and are proven against the test backend and beside `scanimage`'s pages.
+    image; `NO_DOCS` from `sane_read` as well as `sane_start` (`Page::NoDocs`, with the pages delivered). A
+    page reads blocking as a device opens, setting the mode only where the step-by-step calls changed it,
+    since several backends answer `UNSUPPORTED` to either mode; an empty read is made again after a pause of
+    up to 10 ms. NAPS2 handles 1- and 8-bit transfers only, so 16-bit, padded and unknown-length frames go
+    beyond every frontend, and are proven against the test backend and beside `scanimage`'s pages.
   - Caps on hostile input (`Limits`): devices, strings, options, list entries, option sizes, frames, lines,
-    the read chunk, each checked before the work it caps.
+    the read chunk, each checked before the work it caps; a device list, an option count, a frame or a line
+    past its cap is `LimitExceeded`, naming the cap (`LimitKind`).
 - **For the seam** (`crates/scan-device-seam.md`): each frame's parameters as SANE gives them (format, last
   frame, bytes and pixels per line, lines, depth), in `Image::frames` and from `parameters()`; each read's
-  status; each option reload, said in what the call returns; `NO_DOCS` and which call returned it, with the
-  pages so far; every status with its call, unknown ones kept as integers; the token, and "feed no more" left
-  to the caller, who starts no next page. All exposed, so the `sane` backend decides what they mean and
-  `sane-dl` stays SANE alone. What the slice learned of the seam's SANE unknowns is in its plan's "So far",
-  steps 2 and 4, for S0 slice 2.
+  status; each option reload, SANE's word in what the call returns (`SetInfo`, `StartInvalid`) and every
+  re-read, whatever its cause, counted by `Handle::options_generation`; `NO_DOCS` and which call returned it,
+  with the pages so far; every status with its call, unknown ones kept as integers; the token, and "feed no
+  more" left to the caller, who starts no next page. All exposed, so the `sane` backend decides what they mean
+  and `sane-dl` stays SANE alone. What the slice learned of the seam's SANE unknowns is in its plan's "So
+  far", steps 2 and 4, and "Code review", for S0 slice 2.
 - **Prior art:** `sane-scan` 0.1.2 (2023), the one published binding, links at build time (bindgen, libclang,
   `-lsane`), passes a one-byte `bool` where backends read a four-byte word, sizes `lines = -1` buffers wrong,
   turns a mid-page `JAMMED` into a truncated `Ok`, and hasn't answered a PR since 2023. Three permissive
@@ -65,7 +74,7 @@ step checked): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not publi
   who wants SANE. Dependencies: `libloading` and `thiserror`; dev: `rusty-fork` (a child process per test
   that loads a library) and `tempfile`. The devices layer's gate holds its graph; nothing links libsane
   (`just gates`: no `links = "sane"`, and no binary built with libsane among its `NEEDED` entries).
-- **Tested by** (215 tests on Linux as built; the plan's "So far" counts them by file):
+- **Tested by** (221 tests on Linux as built; the plan's "So far" and "Code review" count them):
   - SANE's own `test` backend (`libsane1` installed, the child's `SANE_CONFIG_DIR` an isolated `ConfigDir`
     naming `test`): a 10-sheet feeder then `NO_DOCS`; gray and color at 1, 8 and 16 bits; unknown height, alone
     and from the feeder (on 1.4.0 the hand scanner gives `lines = -1` from the feeder too); short reads;
@@ -88,9 +97,10 @@ step checked): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not publi
   - Here and in CI on Ubuntu with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, so nothing
     skips; on Windows and macOS the tests that need libsane or the header say they skipped.
 - **Open:**
-  - CI's run of this code, which waits on the push: Windows and macOS (the fake as a DLL and a dylib), and
-    the tests and the header contract against Ubuntu's `libsane1` and `sane.h`, 1.4.0 as here (TEST-2).
-  - macOS against Homebrew's sane-backends (TEST-7): `load()`'s bare `libsane.1.dylib` and dyld's search.
+  - CI's run of this code, which waits on the push: Windows and macOS (the fake as a DLL and a dylib, the
+    build script and `links`; TEST-8), and the tests and the header contract against Ubuntu's `libsane1` and
+    `sane.h`, 1.4.0 as here (TEST-2).
+  - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it.
   - No authorization callback (FEAT-11), until a networked backend needs one.
-  - Four defects found in SANE 1.4.0's `test` backend and `scanimage`, each an upstream report waiting on
-    review (UP-7 to UP-10).
+  - Defects found in SANE 1.4.0's `test` backend, `scanimage` and several backends' `sane_set_io_mode`,
+    each an upstream report waiting on review (UP-7 to UP-11).

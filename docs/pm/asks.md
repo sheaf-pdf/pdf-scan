@@ -1,8 +1,8 @@
 # Asks for review
 
-Each with its options, the recommended answer first. Under the maintainer's standing instruction, a recommended answer
-is taken rather than waited on, and stays open to review until the slice that depends on it starts.
-When one is ruled, the ruling goes in `decisions.md` and the ask goes.
+Each with its options, the recommended answer first. Under the maintainer's standing instruction, a
+recommended answer is taken rather than waited on, and stays open to review until the slice that depends on it
+starts. When one is ruled, the ruling goes in `decisions.md` and the ask goes.
 
 5. **Where does `pdf-images` live?** (`crates/pdf-images.md`)
    - **Here.** Recommended, first for the MSRV and the release pipeline: the hayro codecs need Rust 1.92,

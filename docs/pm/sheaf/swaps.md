@@ -1,9 +1,9 @@
 # sheaf's side: what sheaf takes after each milestone
 
-sheaf's own slices, done in sheaf when the maintainer says; nothing here writes to sheaf (`decisions.md`, "Made here").
-Each swap deletes sheaf's copy in the same PR, closes the sheaf entries the crates fixed, and keeps sheaf's
-checks as they are (its byte-identical tests, `gate_7k`'s scan gates). "When" is the earliest a swap could
-be; the maintainer decides when it is, and may hold any later.
+sheaf's own slices, done in sheaf when the maintainer says; nothing here writes to sheaf (`decisions.md`,
+"Made here"). Each swap deletes sheaf's copy in the same PR, closes the sheaf entries the crates fixed, and
+keeps sheaf's checks as they are (its byte-identical tests, `gate_7k`'s scan gates). "When" is the earliest a
+swap could be; the maintainer decides when it is, and may hold any later.
 
 The device crates are held back furthest. Their model is provisional until S0's `twain` backend has been
 through it (`milestones/s0-devices.md`, slice 11), so sheaf takes none of them before then, and may wait longer

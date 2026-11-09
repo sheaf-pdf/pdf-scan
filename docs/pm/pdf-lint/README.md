@@ -1,11 +1,10 @@
 # pdf-lint: the PDF family pdf-scan consumes
 
 pdf-scan's PDF crates (`pdf-images`, `pdf-scan`) are built on the PDF crate family in pdf-lint's workspace
-(github.com/sheaf-pdf/pdf-lint). That family keeps moving, and most
-of it is in alpha releases. pdf-scan is its consumer, not its co-author (decided 2026-11-08: "pdf-lint will
-continue to move. it is currently in alpha releases for most of the family of libraries. As a consumer of
-these crates if you identify any major shortcomings we should create proposals that can be handed off to them
-for refactor"). So:
+(github.com/sheaf-pdf/pdf-lint). That family keeps moving, and most of it is in alpha releases. pdf-scan is
+its consumer, not its co-author (decided 2026-11-08: "pdf-lint will continue to move. it is currently in alpha
+releases for most of the family of libraries. As a consumer of these crates if you identify any major
+shortcomings we should create proposals that can be handed off to them for refactor"). So:
 
 - **Nothing is changed in pdf-lint from here.** Its code, plan and backlog are read, never written.
 - **A major shortcoming becomes a proposal** in `scratch/pdf-lint/proposals/`, written to be handed to
@@ -42,9 +41,9 @@ pdf-lint's plan: read it before each slice that waits on one.
 
 ## How pdf-scan depends on it
 
-- **A published crate is pinned exactly** (`pdf-objects = "=0.1.0-alpha.2"`; the maintainer, 2026-11-08: "pin alphas
-  exactly is fine"): alphas may break between releases, so a bump is a change of its own, made after reading
-  what moved.
+- **A published crate is pinned exactly** (`pdf-objects = "=0.1.0-alpha.2"`; the maintainer, 2026-11-08: "pin
+  alphas exactly is fine"): alphas may break between releases, so a bump is a change of its own, made after
+  reading what moved.
 - **An unpublished crate is taken by path** (or a git revision), and the crate that takes it can't publish
   until it's on crates.io: crates.io accepts no path or git dependencies. Today that holds `pdf-scan` back
   (pdf-structure, pdf-content-streams), not `pdf-images`.
@@ -111,9 +110,9 @@ Minor shortcomings found on the way, a line each.
 
 ### Handing one off
 
-The maintainer's OK first, as for anything that leaves this workspace. Then the maintainer carries it to pdf-lint, or a pdf-lint
-session reads it from here; nothing is written into pdf-lint's repository from here. Its status line and the
-index below record each step.
+The maintainer's OK first, as for anything that leaves this workspace. Then the maintainer carries it to
+pdf-lint, or a pdf-lint session reads it from here; nothing is written into pdf-lint's repository from here.
+Its status line and the index below record each step.
 
 ## Index
 

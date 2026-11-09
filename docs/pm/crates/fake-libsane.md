@@ -15,9 +15,11 @@ carry none of that into the process that loads it.
   only for the feeder; duplex pages marked front or back in their pixels; descriptors that change after a
   set, and `INVAL` from `sane_start` with descriptors changed behind it; a feeder that ends where a test
   says; a jam or an open cover at sheet N, from a start or mid-page; Brother's `2500x0`; reads that hang
-  until `sane_cancel`, or for good, or ignore it; an abort at sheet N; a slow listing; and hostile values of
-  every kind (versions, statuses SANE doesn't define, lengths, frames, descriptors, device lists, null
-  pointers).
+  until `sane_cancel`, or for good, or ignore it; an abort at sheet N; a slow listing; `sane_set_io_mode`
+  answering `UNSUPPORTED` to either mode, as several real backends do (the code review; the `fujitsu`,
+  `canon-dr`, `kodak` and `epson` profiles imply it); and hostile values of every kind (versions, statuses
+  SANE doesn't define, lengths, frames, descriptors, device lists, null pointers, and pointers to no memory,
+  `@dangling`, for a field the standard leaves undefined, as a group's description).
 - **It checks SANE's calling rules:** calls overlapping, anything reaching a closed handle (`sane_cancel`
   included), `sane_exit` with handles open, a call after an error status or a batch's `NO_DOCS` that isn't
   `sane_cancel` or `sane_close`, a stale device list read (it's overwritten, never freed), and the refusals
@@ -27,12 +29,12 @@ carry none of that into the process that loads it.
   script: devices, options, profiles, frames, sheets, faults) and `FAKE_LIBSANE_LOG` (every call, with its
   thread). Both formats are in its crate docs, so `scan-device`'s `sane` backend (S0 slice 5) can drive it as
   `sane-dl`'s tests do.
-- **Boundary:** never published, and no crate depends on it, of any kind (`just gates` checks both): tests
-  build it themselves (a nested `cargo build -p fake-libsane` into their own target directory, with the
-  cargo that built the test) and load the shared object by its path. Its declarations are `sane-dl`'s
-  `ffi.rs`, taken by `#[path]`, never a second copy, and each export is asserted at compile time to have its
-  binding's type, so the header contract that checks the bindings checks the fake's too. Unsafe code in one
-  module, its exports; the rest denies it.
+- **Boundary:** never published, no crate depends on it, of any kind, and it takes no dependency (`just gates`
+  checks all three, the last since the code review): tests build it themselves (a nested `cargo build -p
+  fake-libsane` into their own target directory, with the cargo that built the test) and load the shared
+  object by its path. Its declarations are `sane-dl`'s `ffi.rs`, taken by `#[path]`, never a second copy, and
+  each export is asserted at compile time to have its binding's type, so the header contract that checks the
+  bindings checks the fake's too. Unsafe code in one module, its exports; the rest denies it.
 - **Tested by:** its own unit tests (43 as built), each rule check shown catching its violation; and every
   `sane-dl` test that loads it.
 - **Open:** CI's run of this code, where it's built and loaded as a DLL on Windows and a dylib on macOS; it
