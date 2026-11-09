@@ -1313,7 +1313,9 @@ as it was), each new test made to fail on a broken copy (seven mutations,
 22. *Minor: `status.md` waited on CI's run, which is green; TEST-2 and TEST-8 open.* Holds (run 42582929367,
     every job success at `4624760`). **Fixed** (the bookkeeping): both moved to `archive/backlog-done.md`, the
     table counted again, `status.md` and the milestone's slice 1 no longer waiting on CI, each slice's review
-    counts named.
+    counts named. In the archive they stand under a heading of their own, above TEST-3's: slice 8's branch
+    rewrites TEST-3's line, the file's last, and the two appended after it made the trial merge conflict there
+    (the commit after the bookkeeping moved them; whichever merge lands second may fold the headings).
 23. *Minor: "the 2026-10-29 ruling" cited, recorded nowhere public.* Holds. **Fixed** (`a174dde`): the rule
     said instead of its date.
 24. *Minor: the gate's devices-layer loop reads `sane-dl` alone.* Holds (`justfile`, `for crate in sane-dl`).
