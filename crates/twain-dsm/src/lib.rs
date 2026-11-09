@@ -57,7 +57,7 @@ twain_dsm::run::<(), _>(|twain| -> Result<usize, twain_dsm::Error> {
         }
         pages += 1;
         match transfer.end().map_err(|r| r.into_error())? {
-            Pending::More(next) => ready = next,
+            Pending::More(next, _) => ready = next,
             Pending::Done(_) => return Ok(pages),
         }
     }
@@ -126,7 +126,7 @@ pub use container::{
 pub use dsm::Dib;
 #[cfg(windows)]
 pub use enabled::{
-    Enabled, Event, MemoryTransfer, Native, Next, Pending, Ready, Strip, Transferred, Ui,
+    Enabled, Event, ImageInfo, MemoryTransfer, Native, Next, Pending, Ready, Strip, Transferred, Ui,
 };
 #[cfg(windows)]
 pub use error::{Error, Gone, LoadError, Refused, RunError};

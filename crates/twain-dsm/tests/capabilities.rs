@@ -37,8 +37,12 @@ fn the_samples_answers(source: &Source<'_, ()>) {
     set(ffi::CAP_INDICATORS, Item::Bool(false));
     assert_eq!(one(source, ffi::CAP_INDICATORS), Item::Bool(false));
 
-    // As the sample starts.
+    // As the sample starts, and its defaults.
     assert_eq!(one(source, ffi::CAP_FEEDERLOADED), Item::Bool(true));
+    match source.get_default(ffi::ICAP_PIXELTYPE) {
+        Ok(Container::One(Item::UInt16(_))) => {}
+        other => panic!("MSG_GETDEFAULT of ICAP_PIXELTYPE: {other:?}"),
+    }
     assert_eq!(
         one(source, ffi::ICAP_PIXELTYPE),
         Item::UInt16(ffi::TWPT_RGB)

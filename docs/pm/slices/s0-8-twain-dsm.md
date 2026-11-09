@@ -1,7 +1,7 @@
 # S0 slice 8: twain-dsm
 
 Status: running, on branch `s0-8-twain-dsm`, from 2026-11-08: planned, reviewed, its six steps built and
-pushed; the code review, fixes, CI on a pull request and approval close it. Milestone:
+pushed, code-reviewed and fixed; CI on a pull request and approval close it. Milestone:
 `milestones/s0-devices.md`, slice 8. Run on the Windows machine, the same way as slice 7
 (`archive/slices/s0-7-twain-spike.md`): this plan, an adversarial review (below), the steps (each committed and
 pushed), parallel code reviews, a fix stage.
@@ -367,7 +367,31 @@ both targets from a test with no developer prompt; `twain.h` builds with MSVC af
 156 bytes in both; both installed DSMs pass `WinVerifyTrust` offline; never unloading is enough for the
 function pointers, and the DSM frees its state at the last `MSG_CLOSEDSM`, so a later `run` starts clean; the
 DSM refuses a duplicate `MSG_OPENDSM`; `MSG_CLOSEDSM` force-closes open sources; `TWRC_CANCEL` leaves the source
-in state 7; a `Dib` is `Send`.
+in state 7; a `Dib` is `Send`. (Step 3 found the force-close skips the last source the DSM lists.)
+
+## Code review
+
+2026-11-09, after step 6, by four reviewers in parallel, each a fresh agent given the code and the primary
+sources, not the author's conclusions, each with probes of its own (`scratch/work/s0-8/review-code/`: one
+report each, and `fixes.md`, every finding's disposition): soundness (`unsafe`, FFI, threads); TWAIN's
+protocol, against the DSM's source, the sample's and the specification; hostile input and the bindings; the
+tests, CI, the docs and the API for slice 9. About seventy findings, a few found by two; all taken but four,
+said in `fixes.md` with why. The high ones:
+- **Two copies of the crate in one process** (two versions, a DLL and its host) each had their own run flag and
+  took the DSM the other loaded: two threads in the lockless DSM, which crashed in two of three probe runs.
+- **Another message loop on the TWAIN thread** (a driver's dialog, a message box) took the callback's post,
+  which carried the source's message, or the DSM's wake-up: `MSG_XFERREADY` lost, the source stuck in 6.
+- **Extended image info on 64-bit** read two `TW_UINT32` (a handle the source sent) as inline data, by
+  `TW_EXTIMAGEINFO`'s rule; `TW_INFO`'s, the specification's example and the sample application say four bytes.
+- **A driver's large container** made the decoder panic on 32-bit (capacity overflow).
+- **Tests that passed with the thing broken:** a request that never woke the loop (no wait was timed);
+  `reset` and `disable` that sent nothing (the next step down made up for them); a child that ran no test.
+- Medium, among others: a stale `MSG_XFERREADY` made a `Ready` in state 5; a refused step moved the record;
+  `MSG_CLOSEDSREQ` in 6 or 7 went unrecorded; messages weren't offered to `MSG_PROCESSEVENT` with a callback;
+  the buffer rules (largest, even, aligned, one size) unchecked; image info not offered in state 7; the hidden
+  window closable from outside; a handle named twice freed twice; `preferred_size` past its 64 MiB; defines the
+  generator and the contract couldn't read passing unseen; the contract blind to fields' signedness; two NUL
+  bytes making a test file binary to git, and so to the name gate.
 
 ## So far
 
@@ -418,9 +442,10 @@ in state 7; a `Dib` is `Send`.
   taken from the queue is handed to the caller rather than lost).
 - **Loading** as planned, two things learned. A 32-bit process reaches SysWOW64 by the System32 path and may
   be told either name, so files are compared by identity (volume and file index), never by path: the module
-  of the same name already loaded, the module after loading, a later `load`. And `WinVerifyTrust` verifies a
-  catalog-signed file through its catalog: `kernel32.dll` is Microsoft's (`WrongSigner`), not `Unsigned` as
-  the review had it. So the test makes its own cases from the installed DSM: a copy with its certificate table
+  of the same name already loaded, the module after loading, a later `load`. And `WinVerifyTrust` verified
+  `kernel32.dll`, catalog-signed, as Microsoft's (`WrongSigner`), not `Unsigned` as the review had it (the fix
+  stage found `cmd.exe`, catalog-signed too, `Unsigned`: what a check of the file finds varies, and either is
+  refused). So the test makes its own cases from the installed DSM: a copy with its certificate table
   emptied is `Unsigned`, a copy with one byte changed is `BadSignature` (`TRUST_E_BAD_DIGEST`); with
   `concrt140.dll` (signed in the file, by Microsoft) each is refused before it's loaded, the test checking
   that no module of its name is. `LoadError` gained `Open`, `BadSignature`, `Loader` and `NotTheFileChecked`;
@@ -535,7 +560,8 @@ in state 7; a `Dib` is `Send`.
   through `next_event` with the feeder empty. The delivery switch was step 3's test, and step 4's transfers
   run `Events` after `Callback` on one connection.
 - **CI:** the TWAIN job sets `TWAIN_DSM_REQUIRE_SAMPLE=1`, which the plan had and step 1 left out.
-- **The check:** as step 4's; 65 tests in each bitness.
+- **The check:** as step 4's; 65 tests in each bitness. The plan's "here and in CI" waits on the pull request:
+  no CI run has had the branch yet.
 
 **Step 6, the spike retired; what it found, written down** (2026-11-08):
 - **The spike gone:** `crates/twain-spike` deleted (its `image` module lives on in `tests/support/`, as step 4
@@ -552,4 +578,52 @@ in state 7; a `Dib` is `Send`.
   entry and `status.md` say it's built; `slices/README.md` lists it running; TEST-11 (the decoders fuzzed with
   `cargo-fuzz`) in `backlog/tests.md`. `decisions.md` is unchanged: no ruling was made during the slice; its
   decisions taken alone, above, wait for review.
-- **The check:** as step 5's; 65 tests in each bitness.
+- **The check:** as step 5's; 66 tests in each bitness.
+
+**Fix stage** (2026-11-09; `scratch/work/s0-8/review-code/fixes.md`, the scripts and make-fails in
+`scratch/work/s0-8/fix/`):
+- **The thread:** the run lock is a semaphore named for the process (`Local\twain-dsm run <pid>`), which every
+  copy of the crate takes, a semaphore since a mutex would let its own thread take it twice; `dsm::load`
+  refuses a DSM this copy didn't load (`LoadError::InUse`). The hidden window's procedure is the crate's,
+  ignoring `WM_CLOSE`. The callback keeps the source's message in a process-wide ring of atomics, tagged with a
+  generation changed at every enable and disable, its post only a wake-up (a registered message); each turn of
+  the pump reads the ring and, for delivery by events, offers a made-up `WM_NULL` to `MSG_PROCESSEVENT`, which
+  the DSM answers with a message it holds. Messages are offered to the source in either delivery; for a TWAIN 2
+  source by events, the carrier of a held message is dispatched still. The pump checks its deadline as it
+  drains, and takes a timeout too long to add as none.
+- **The record:** `MSG_XFERREADY` is taken only in state 5; `MSG_CLOSEDSREQ` in 6 or 7 moves it to 5, and the
+  transfer methods, which poll the source first, answer `Error::CloseRequested`. `disable` and `reset` walk
+  strictly (the record moves only on a step taken; a restart's guess undone if it's refused); a `Drop`'s walk
+  passes over; a walk that reaches its floor reports nothing; the restart tries `MSG_RESET` before
+  `MSG_ENDXFER`. Each enable registers the null procedure again for events, empties the queue, and keeps its
+  `TW_USERINTERFACE` at one address for the disable (`Enabled::modal`, `forced_ui`). `open` and `open_source`
+  are refused while a connection or source the DSM wouldn't close is open (`Error::StillOpen`).
+- **Transfers:** the buffer rules checked (`BufferTooLarge`, `BufferMisaligned`, `BufferSizeChanged`), sizes no
+  buffer meets refused (`BufferSizes`), `preferred_size` within them and a multiple of 4; `image_info` returns
+  `ImageInfo`, unpacked, and is offered in state 7 after `TWRC_XFERDONE`, as `ext_image_info` is only then
+  (`Error::TransferNotDone`); `Pending::More` carries the count; `stop_feeder` keeps none.
+- **Decoders:** extended image info's four-byte rule; a source's block at most 16 MiB, a list at most 65,536
+  items, `try_reserve`; a handle named twice freed once; a null handle for items `Malformed`; the request
+  pre-filled `TWRC_INFONOTSUPPORTED`; strings read to what their type holds; ranges of `BOOL`; a one value sent
+  padded to the widest item.
+- **Bindings:** the generator and the contract fail on a `#define` with a value they can't read (but the three
+  calling-convention macros, and `CAP_FILESYSTEM`'s commented-out value); the contract compares 70 integer
+  fields' signedness; the generator reads every `pub const` line of `by_hand.rs` and checks its type against
+  the generated prefix's. Each seen to fail on its case (`make-fail-sign.txt`, `make-fail-unread.txt`, and the
+  generator's on a cast and a changed type).
+- **Found in the fixing:** with `InUse`, `kernel32.dll` (loaded in every process) is `InUse` before its
+  signature is read, so the catalog case moved to `cmd.exe`, which came back `Unsigned` where `kernel32.dll`
+  had verified as Microsoft's: the test takes either, and step 2's note says so.
+- **Tests:** waits timed (a request that doesn't wake the loop fails); `disable` then a `set` taken in state 4;
+  the triplets `reset` and `disable` send, from a triplet log compiled into the crate's tests; the pending
+  counts with `CAP_XFERCOUNT` 3 (2, 1, done); another message loop for 300 ms after the enable (fails with
+  polling switched off, `make-fail-foreign-loop.txt`); a stale transfer ready; the buffer rules; `InUse` and
+  `Elsewhere` with a DSM the test loads itself; the other bitness's DSM refused for its machine; `WM_QUIT`;
+  `requeue`; `get_default`; inside the crate, `WM_CLOSE` posted to the window, the run lock held by another
+  copy, the 16-error cap, `RunReport::closed_*`. A child that's done exits 78, so one that ran no test fails;
+  skips reach stderr past the capture; the NUL bytes are escapes. The random-input test of extended image info
+  reaches the decoding now (it reached it 0 times in 67,456 entries).
+- **API for slice 9:** `Twain::requeue`, `Source::opened`, `ImageInfo`, `From<TW_FIX32> for Fix32`,
+  `RunReport::closed_source` and `closed_connection`.
+- **CI and tools:** the TWAIN job runs the crate's clippy for i686 too; the justfile says what `just ci` covers.
+- **The check:** as step 6's; 78 tests in each bitness and on 1.89, the 2 by hand besides.

@@ -42,6 +42,34 @@ pub enum Error {
     /// (`TW_SETUPMEMXFER`'s `MinBufSize`).
     #[error("a buffer of {len} bytes, and the source takes {min} at least")]
     BufferTooSmall { len: usize, min: u32 },
+    /// A memory transfer's buffer larger than the source's largest
+    /// (`MaxBufSize`).
+    #[error("a buffer of {len} bytes, and the source takes {max} at most")]
+    BufferTooLarge { len: usize, max: u32 },
+    /// A memory transfer's buffer of an odd length, or not at a 4-byte
+    /// boundary: TWAIN asks both.
+    #[error("a buffer of {len} bytes of odd length or off a 4-byte boundary")]
+    BufferMisaligned { len: usize },
+    /// A memory transfer's buffer of another length than its first: TWAIN
+    /// asks one for the whole transfer.
+    #[error("a buffer of {len} bytes, after one of {first}")]
+    BufferSizeChanged { len: usize, first: usize },
+    /// The source's buffer sizes no buffer can meet: its smallest past 64 MiB,
+    /// or larger than its largest.
+    #[error("the source's buffer sizes can't be met (min {min}, max {max}, preferred {preferred})")]
+    BufferSizes { min: u32, max: u32, preferred: u32 },
+    /// The source asked to be closed (`MSG_CLOSEDSREQ`) during a transfer, and
+    /// is back in state 5: the user cancelled on its window, or it failed.
+    #[error("the source asked to be closed")]
+    CloseRequested,
+    /// Image info or extended image info asked of a transfer that didn't end
+    /// with `TWRC_XFERDONE`: TWAIN allows them only then.
+    #[error("the transfer didn't end with TWRC_XFERDONE")]
+    TransferNotDone,
+    /// A connection or a source is still open from before, the DSM having
+    /// refused to close it: nothing more is opened until it is.
+    #[error("a connection or a source is still open, the DSM having refused to close it")]
+    StillOpen,
 }
 
 fn by(label: &str, code: &Option<ConditionCode>) -> String {
@@ -49,8 +77,10 @@ fn by(label: &str, code: &Option<ConditionCode>) -> String {
 }
 
 /// Why the DSM wasn't loaded. Its file is checked before any of its code runs:
-/// held open against change, its signature and signer read, its machine read;
-/// so each refusal but the last two happens before it's loaded.
+/// held open against change, its machine, signature and signer read. So every
+/// refusal comes before the DLL is loaded but `Loader` (the loader ran it and
+/// refused), `NotTheFileChecked` and `MissingEntry` (it's loaded, and stays
+/// so).
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -68,15 +98,21 @@ pub enum LoadError {
     /// file: loading would hand back that one.
     #[error("another {name} is loaded already, from {}", loaded.display())]
     Elsewhere { name: String, loaded: PathBuf },
-    /// The file has no signature: none in it, and none for it in the
-    /// system's catalogs.
+    /// The DSM is loaded in this process already by something else (another
+    /// TWAIN client, another copy of this crate): using it too would race
+    /// whatever uses it, as the DSM has no locks.
+    #[error("the DSM is in use in this process already, loaded from {}", loaded.display())]
+    InUse { loaded: PathBuf },
+    /// The file has no signature that verifies: none in it, and none found for
+    /// it in the system's catalogs (a check of the file may or may not find a
+    /// catalog's: Windows' own files come back so, or as `WrongSigner`).
     #[error("the file has no signature")]
     Unsigned,
     /// The signature doesn't verify: `WinVerifyTrust`'s answer.
     #[error("the signature doesn't verify ({code:#010x})")]
     BadSignature { code: i32 },
-    /// Signed and valid, but not by the TWAIN Working Group: Windows' own
-    /// DLLs, signed through catalogs, are Microsoft's.
+    /// Signed and valid, but not by the TWAIN Working Group (a Windows file
+    /// whose catalog signature is found is Microsoft's).
     #[error("signed by {subject:?}, not the TWAIN Working Group")]
     WrongSigner { subject: String },
     /// Built for another machine than this process's.
@@ -100,9 +136,10 @@ pub enum LoadError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RunError {
-    /// Another `run` is going on in this process, on this thread or another:
-    /// the DSM has no locks, so one thread uses it at a time. Also every `run`
-    /// after one whose teardown couldn't close the DSM's connection.
+    /// Another `run` is going on in this process, on this thread or another,
+    /// by this copy of the crate or another: the DSM has no locks, so one
+    /// thread uses it at a time. Also every `run` after one whose teardown
+    /// couldn't close the DSM's connection.
     #[error("TWAIN is already running in this process")]
     AlreadyRunning,
     /// The thread couldn't be made a single-threaded apartment: it's in a
@@ -112,6 +149,9 @@ pub enum RunError {
     /// The hidden window couldn't be made: the error.
     #[error("the hidden window couldn't be made (error {code})")]
     Window { code: u32 },
+    /// The process's run lock couldn't be made: the error.
+    #[error("the run lock couldn't be made (error {code})")]
+    Lock { code: u32 },
 }
 
 /// A step refused: the error, and the state it was asked of, unchanged.

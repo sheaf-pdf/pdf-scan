@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use support::Outcome;
 use twain_dsm::{
-    Delivery, Enabled, Item, Native, Next, Opened, Pending, Ready, SourceId, Twain, Ui, ffi,
+    Delivery, Enabled, Error, Item, Native, Next, Opened, Pending, Ready, SetOutcome, Source,
+    SourceId, Twain, Ui, ffi,
 };
 
 /// The sample's feeder, through the environment the DSM loads it in.
@@ -87,7 +88,7 @@ fn scan<'t>(
     let enabled = loop {
         pages += 1;
         match memory_page(ready) {
-            Pending::More(next) => ready = next,
+            Pending::More(next, _) => ready = next,
             Pending::Done(enabled) => break enabled,
         }
     };
@@ -95,6 +96,7 @@ fn scan<'t>(
         .disable()
         .map_err(|r| r.into_error())
         .expect("MSG_DISABLEDS");
+    in_state_4(&source);
     (
         pages,
         source
@@ -102,6 +104,15 @@ fn scan<'t>(
             .map_err(|r| r.into_error())
             .expect("MSG_CLOSEDS"),
     )
+}
+
+/// The source is in state 4: a capability set there is taken, where an
+/// enabled source refuses it (`TWCC_SEQERROR`).
+fn in_state_4(source: &Source<'_, u32>) {
+    let outcome = source
+        .set(ffi::CAP_INDICATORS, Item::Bool(false))
+        .unwrap_or_else(|e| panic!("MSG_SET in state 4: {e}"));
+    assert_eq!(outcome, SetOutcome::Exact);
 }
 
 /// Opens the system's DSM and finds the sample, or why not.
@@ -298,7 +309,7 @@ fn a_cancel_stops_the_batch_at_the_next_page_or_before_the_first() {
                         .map_err(|r| r.into_error())
                         .expect("MSG_ENDXFER")
                     {
-                        Pending::More(ready) => ready,
+                        Pending::More(ready, _) => ready,
                         Pending::Done(_) => {
                             panic!("{delivery:?}: no pages left after the first of 3")
                         }
@@ -312,6 +323,7 @@ fn a_cancel_stops_the_batch_at_the_next_page_or_before_the_first() {
                         .disable()
                         .map_err(|r| r.into_error())
                         .expect("MSG_DISABLEDS");
+                    in_state_4(&source);
                     let opened = source
                         .close()
                         .map_err(|r| r.into_error())
@@ -358,7 +370,7 @@ fn requests_come_through_next_event() {
                     next_ready(enable_batch(opened, &sample, delivery, ffi::TWSX_MEMORY));
                 let mut enabled = loop {
                     match memory_page(ready) {
-                        Pending::More(next) => ready = next,
+                        Pending::More(next, _) => ready = next,
                         Pending::Done(enabled) => break enabled,
                     }
                 };
@@ -366,6 +378,7 @@ fn requests_come_through_next_event() {
                 // from it, and a request does.
                 let remote = twain.remote();
                 std::thread::spawn(move || remote.post(7).expect("posted"));
+                let started = std::time::Instant::now();
                 let got = loop {
                     match enabled
                         .next_event(Duration::from_secs(10))
@@ -388,6 +401,11 @@ fn requests_come_through_next_event() {
                     }
                 };
                 assert_eq!(got, 7);
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "the request took {:?}",
+                    started.elapsed()
+                );
                 match enabled
                     .next_event(Duration::from_millis(200))
                     .map_err(|r| r.into_error())
@@ -404,4 +422,202 @@ fn requests_come_through_next_event() {
         .expect("TWAIN runs")
         .value
     });
+}
+
+/// Another message loop running on the TWAIN thread after the enable (a
+/// driver's dialog, a message box: here, one that takes and dispatches every
+/// message for 300 ms) loses nothing: the source's `MSG_XFERREADY` is handed
+/// over all the same, at once, in either delivery.
+#[test]
+fn another_message_loop_on_the_thread_loses_nothing() {
+    forked!(
+        another_message_loop_on_the_thread_loses_nothing,
+        PAGES,
+        || {
+            twain_dsm::run::<u32, _>(|twain| {
+                for delivery in [Delivery::Callback, Delivery::Events] {
+                    let (opened, sample) = match connect(twain) {
+                        Ok(c) => c,
+                        Err(outcome) => return outcome,
+                    };
+                    let enabled = enable_batch(opened, &sample, delivery, ffi::TWSX_MEMORY);
+                    foreign_loop(Duration::from_millis(300));
+                    let started = std::time::Instant::now();
+                    let ready = next_ready(enabled);
+                    assert!(
+                        started.elapsed() < Duration::from_secs(2),
+                        "{delivery:?}: the transfer ready took {:?}",
+                        started.elapsed()
+                    );
+                    drop(ready);
+                    assert!(twain.drop_errors().is_empty());
+                }
+                Outcome::Done
+            })
+            .expect("TWAIN runs")
+            .value
+        }
+    );
+}
+
+/// A loop of the thread's own, as a modal dialog runs: every message taken
+/// and dispatched, for `time`.
+fn foreign_loop(time: Duration) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+    };
+    let until = std::time::Instant::now() + time;
+    while std::time::Instant::now() < until {
+        // SAFETY: an all-zero MSG is a valid value of it.
+        let mut msg: MSG = unsafe { core::mem::zeroed() };
+        // SAFETY: `msg` is writable; any of this thread's messages.
+        while unsafe { PeekMessageW(&mut msg, core::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            // SAFETY: a message just taken on this thread.
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A `MSG_XFERREADY` from an enable disabled before it was handed over is no
+/// transfer of the next enable: after that enable's batch, nothing more is
+/// ready, in either delivery.
+#[test]
+fn a_ready_from_an_earlier_enable_is_stale() {
+    forked!(a_ready_from_an_earlier_enable_is_stale, PAGES, || {
+        twain_dsm::run::<u32, _>(|twain| {
+            for delivery in [Delivery::Callback, Delivery::Events] {
+                let (opened, sample) = match connect(twain) {
+                    Ok(c) => c,
+                    Err(outcome) => return outcome,
+                };
+                // Enabled, and disabled at once: the source said its
+                // transfer was ready, and nobody took it.
+                let source = enable_batch(opened, &sample, delivery, ffi::TWSX_MEMORY)
+                    .disable()
+                    .map_err(|r| r.into_error())
+                    .expect("MSG_DISABLEDS, after MSG_RESET");
+                in_state_4(&source);
+                // Enabled again: its batch, whole, and then nothing.
+                let mut ready = next_ready(
+                    source
+                        .enable(Ui::Hidden)
+                        .map_err(|r| r.into_error())
+                        .expect("enables"),
+                );
+                let mut pages = 1;
+                let mut enabled = loop {
+                    match memory_page(ready) {
+                        Pending::More(next, _) => {
+                            ready = next;
+                            pages += 1;
+                        }
+                        Pending::Done(enabled) => break enabled,
+                    }
+                };
+                assert_eq!(pages, 3, "{delivery:?}");
+                loop {
+                    match enabled
+                        .next_event(Duration::from_millis(500))
+                        .map_err(|r| r.into_error())
+                        .expect("next")
+                    {
+                        Next::Timeout(_) => break,
+                        Next::Event(back, _) | Next::Request(back, _) | Next::Quit(back, _) => {
+                            enabled = back
+                        }
+                        Next::Ready(_) => {
+                            panic!("{delivery:?}: a stale transfer ready, in state 5")
+                        }
+                    }
+                }
+                assert!(twain.drop_errors().is_empty());
+            }
+            Outcome::Done
+        })
+        .expect("TWAIN runs")
+        .value
+    });
+}
+
+/// TWAIN's rules for a memory transfer's buffers are checked before the
+/// source sees one: a buffer off a 4-byte boundary, of odd length, of
+/// another length than the first, larger than the source's largest.
+#[test]
+fn a_buffer_against_the_rules_is_refused_before_it_is_sent() {
+    forked!(
+        a_buffer_against_the_rules_is_refused_before_it_is_sent,
+        PAGES,
+        || {
+            twain_dsm::run::<u32, _>(|twain| {
+                let (opened, sample) = match connect(twain) {
+                    Ok(c) => c,
+                    Err(outcome) => return outcome,
+                };
+                let ready = next_ready(enable_batch(
+                    opened,
+                    &sample,
+                    Delivery::Callback,
+                    ffi::TWSX_MEMORY,
+                ));
+                let mut transfer = ready
+                    .memory()
+                    .map_err(|r| r.into_error())
+                    .expect("DAT_SETUPMEMXFER");
+                let setup = transfer.setup();
+                let (min, max) = (setup.MinBufSize, setup.MaxBufSize);
+                let size = transfer.preferred_size();
+                assert_eq!(size % 4, 0, "preferred {size}");
+                let mut buffer = vec![0u8; size + 8];
+                let misaligned = &mut buffer[1..size + 1];
+                assert!(matches!(
+                    transfer.next_buffer(misaligned),
+                    Err(Error::BufferMisaligned { .. })
+                ));
+                if size > min as usize {
+                    assert!(matches!(
+                        transfer.next_buffer(&mut buffer[..size - 1]),
+                        Err(Error::BufferMisaligned { .. })
+                    ));
+                }
+                assert!(
+                    transfer
+                        .next_buffer(&mut buffer[..size])
+                        .expect("a buffer")
+                        .is_some()
+                );
+                if size >= min as usize + 4 {
+                    assert!(matches!(
+                        transfer.next_buffer(&mut buffer[..size - 4]),
+                        Err(Error::BufferSizeChanged { .. })
+                    ));
+                }
+                if max != 0 && max != ffi::TWON_DONTCARE32 {
+                    let mut large = vec![0u8; max as usize + 4];
+                    assert!(matches!(
+                        transfer.next_buffer(&mut large),
+                        Err(Error::BufferTooLarge { .. })
+                    ));
+                }
+                while transfer
+                    .next_buffer(&mut buffer[..size])
+                    .expect("a buffer")
+                    .is_some()
+                {}
+                drop(
+                    transfer
+                        .end()
+                        .map_err(|r| r.into_error())
+                        .expect("MSG_ENDXFER"),
+                );
+                assert!(twain.drop_errors().is_empty());
+                Outcome::Done
+            })
+            .expect("TWAIN runs")
+            .value
+        }
+    );
 }

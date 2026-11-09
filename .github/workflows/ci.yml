@@ -100,6 +100,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: i686-pc-windows-msvc
+          components: clippy
       - uses: extractions/setup-just@v4
       # Windows PowerShell 5.1, where the script was tested.
       - name: Install the sample source and the DSM
@@ -132,6 +133,8 @@ jobs:
         run: just twain-dsm-test x86_64-pc-windows-msvc
       - name: twain-dsm, 32-bit
         run: just twain-dsm-test i686-pc-windows-msvc
+      - name: twain-dsm's lints, 32-bit
+        run: just twain-dsm-clippy i686-pc-windows-msvc
 
   # Without SANE installed: what the oldest Rust can break is compiling, and
   # the tests that need libsane say they skipped.

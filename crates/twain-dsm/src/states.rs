@@ -96,9 +96,20 @@ impl<'t, T> Loaded<'t, T> {
 
     /// Opens the connection (`MSG_OPENDSM`, state 2 to 3) as `app`, the
     /// hidden window its parent, and takes the DSM's memory functions
-    /// (`DAT_ENTRYPOINT`).
+    /// (`DAT_ENTRYPOINT`). The DSM loads every installed source's library to
+    /// list it, running each one's code, and changes the process's current
+    /// directory to each one's folder as it does: a relative path another
+    /// thread resolves meanwhile may resolve elsewhere. Refused
+    /// ([`Error::StillOpen`]) while a connection the DSM wouldn't close is
+    /// open.
     pub fn open(self, app: App) -> Result<Opened<'t, T>, Refused<Self>> {
         let twain = self.twain;
+        if twain.connected.get() {
+            return Err(Refused {
+                state: self,
+                error: Error::StillOpen,
+            });
+        }
         twain.app.set(app.identity);
         let (triplet, rc) = self.dsm.parent(&twain.app, true, twain.window.hwnd());
         if rc != ReturnCode::SUCCESS {
@@ -218,7 +229,9 @@ impl<'t, T> Opened<'t, T> {
     /// way to take a callback back, and the DSM keeps one across closing and
     /// opening the source again, so [`Delivery::Events`] registers none to
     /// clear any. [`Delivery::Callback`] is refused for a source of TWAIN 1.x,
-    /// before it's opened.
+    /// before it's opened; so is any source ([`Error::StillOpen`]) while one
+    /// the DSM wouldn't close is open. The DSM changes the process's current
+    /// directory to the source's folder as it loads it.
     pub fn open_source(
         self,
         source: &SourceId,
@@ -226,6 +239,12 @@ impl<'t, T> Opened<'t, T> {
     ) -> Result<Source<'t, T>, Refused<Self>> {
         if let Err(error) = check_delivery(source, delivery) {
             return Err(Refused { state: self, error });
+        }
+        if self.twain().source_open.get().is_some() {
+            return Err(Refused {
+                state: self,
+                error: Error::StillOpen,
+            });
         }
         let twain = self.twain();
         let dsm = self.dsm();
@@ -242,12 +261,7 @@ impl<'t, T> Opened<'t, T> {
         };
         let proc = match delivery {
             Delivery::Events => None,
-            Delivery::Callback => {
-                let generation = twain.generation.get().wrapping_add(1);
-                twain.generation.set(generation);
-                window::arm_callback(twain.window.handle(), generation);
-                Some(window::source_callback as crate::ffi::TwainCallbackProc)
-            }
+            Delivery::Callback => Some(window::source_callback as crate::ffi::TwainCallbackProc),
         };
         let (triplet, rc) = dsm.register_callback(&twain.app, &twain.source, proc);
         if rc != ReturnCode::SUCCESS {
@@ -339,7 +353,7 @@ pub struct Source<'t, T> {
 }
 
 impl<'t, T> Source<'t, T> {
-    fn opened(&self) -> &Opened<'t, T> {
+    fn below(&self) -> &Opened<'t, T> {
         match &self.opened {
             Some(opened) => opened,
             // Only `close` and `into_opened_unclosed` take it, consuming self.
@@ -348,11 +362,17 @@ impl<'t, T> Source<'t, T> {
     }
 
     pub(crate) fn twain(&self) -> &'t Twain<T> {
-        self.opened().twain()
+        self.below().twain()
     }
 
     pub(crate) fn dsm(&self) -> &'static Dsm {
-        self.opened().dsm()
+        self.below().dsm()
+    }
+
+    /// The connection beneath: to list the sources (`Opened::sources`) with
+    /// this one open.
+    pub fn opened(&self) -> &Opened<'t, T> {
+        self.below()
     }
 
     /// The source's identity as the DSM filled it in when it opened it.
@@ -431,7 +451,7 @@ impl<'t, T> Source<'t, T> {
                 }
                 .into()),
             },
-            other => Err(ContainerError::UnknownContainer(other.con_type()).into()),
+            other => Err(ContainerError::NotOneValue(other.con_type()).into()),
         }
     }
 
@@ -505,7 +525,7 @@ pub(crate) fn capability_read<T>(
 ) -> Result<Container, Error> {
     let (triplet, rc, answer) = dsm.capability_read(&twain.app, dest, msg, cap);
     match answer {
-        Some((con_type, bytes)) => Ok(Container::decode(con_type, &bytes)?),
+        Some((con_type, bytes)) => Ok(Container::decode(con_type, &bytes?)?),
         None => Err(twain.source_failure(dsm, dest, triplet, rc)),
     }
 }

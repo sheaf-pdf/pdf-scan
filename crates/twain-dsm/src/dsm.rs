@@ -29,9 +29,10 @@ use windows_sys::Win32::Security::WinTrust::{
     WTHelperProvDataFromStateData, WinVerifyTrust,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN,
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetFileInformationByHandle, OPEN_EXISTING, ReadFile, SetFilePointerEx,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO,
+    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    OPEN_EXISTING, ReadFile, SetFilePointerEx,
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
@@ -41,6 +42,7 @@ use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalSi
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
 use crate::codes::{ConditionCode, ReturnCode, Triplet};
+use crate::container::ContainerError;
 use crate::error::LoadError;
 use crate::ext_info;
 use crate::ffi::{
@@ -49,6 +51,14 @@ use crate::ffi::{
 };
 use crate::pe;
 use crate::window::Message;
+
+/// A capability's answer: its container type and its block's bytes, or why
+/// they weren't read; `None` unless the source succeeded.
+pub(crate) type ContainerAnswer = Option<(u16, Result<Vec<u8>, ContainerError>)>;
+
+/// The largest block a source's container or extended image info is read
+/// from: no container needs more.
+pub(crate) const MAX_CONTAINER: usize = 16 << 20;
 
 /// The organization a DSM's signer must name.
 const SIGNER: &str = "TWAIN Working Group";
@@ -70,12 +80,13 @@ pub(crate) struct Memory {
     pub(crate) unlock: DsmMemUnlock,
 }
 
-/// A file as the system knows it: its volume and its index there, the same
-/// whatever path it's reached by (a 32-bit process's System32 is SysWOW64).
+/// A file as the system knows it: its volume and its id there
+/// (`FILE_ID_INFO`, 128 bits, which ReFS needs), the same whatever path it's
+/// reached by (a 32-bit process's System32 is SysWOW64).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct FileId {
-    volume: u32,
-    index: u64,
+    volume: u64,
+    id: [u8; 16],
 }
 
 /// The DSM once loaded: the process holds one, ever.
@@ -131,13 +142,18 @@ pub(crate) fn load(path: &Path) -> Result<&'static Dsm, LoadError> {
         error: std::io::Error::last_os_error(),
     })?;
     if !present.is_null() {
+        // Not this crate's (it would be in LOADED): another of the name is
+        // what the loader would hand back, and the same one is another TWAIN
+        // client's, which using too would race (the DSM has no locks).
         let at = module_path(present);
-        if file_id_of(&at) != Some(id) {
-            return Err(LoadError::Elsewhere {
+        return Err(if file_id_of(&at) == Some(id) {
+            LoadError::InUse { loaded: at }
+        } else {
+            LoadError::Elsewhere {
                 name: file_name(&path),
                 loaded: at,
-            });
-        }
+            }
+        });
     }
 
     // Checked through the handle held: its machine, then its signature and
@@ -153,7 +169,10 @@ pub(crate) fn load(path: &Path) -> Result<&'static Dsm, LoadError> {
     file.rewind();
     verify(&path, &file)?;
 
-    let wide_path = wide_os(&path);
+    // The file the handle has open, by its final path, so a link or a
+    // junction on the way that's changed since can't load another.
+    let load_path = file.final_path().unwrap_or_else(|| path.clone());
+    let wide_path = wide_os(&load_path);
     // SAFETY: `wide_path` is NUL-terminated UTF-16; no file handle is passed
     // (it's reserved); the flags look for the DLL's own dependencies in its
     // folder and System32 only. The file stays held against change by
@@ -368,23 +387,29 @@ impl Block {
     }
 
     /// Its bytes, as many as `GlobalSize` measures, copied out: empty if it
-    /// can't be measured or locked.
-    fn read(&self) -> Vec<u8> {
+    /// can't be measured or locked, refused if there are more than `max`.
+    fn read(&self, max: usize) -> Result<Vec<u8>, ContainerError> {
         // SAFETY: `handle` is a live block; both allocators' blocks are
         // GlobalAlloc's, which GlobalSize measures (0 if it can't).
         let size = unsafe { GlobalSize(self.handle) };
+        if size > max {
+            return Err(ContainerError::TooLarge {
+                len: size as u64,
+                max: max as u64,
+            });
+        }
         if size == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let at = self.lock();
         if at.is_null() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         // SAFETY: locked, the block's `size` bytes are readable from `at` until
         // it's unlocked below; they're copied out first.
         let bytes = unsafe { core::slice::from_raw_parts(at.cast::<u8>(), size) }.to_vec();
         self.unlock();
-        bytes
+        Ok(bytes)
     }
 }
 
@@ -537,6 +562,43 @@ impl File {
     fn id(&self) -> Option<FileId> {
         file_id(self.0)
     }
+
+    /// The path of the file the handle has open, links and junctions
+    /// resolved: what's loaded, so a path changed after the file was opened
+    /// can't name another. Without the `\\?\` prefix a drive's or a share's
+    /// path needs none of.
+    fn final_path(&self) -> Option<PathBuf> {
+        let mut buf = vec![0u16; 512];
+        loop {
+            // SAFETY: the handle is open; `buf` is writable for its length in
+            // u16s, as the call is told.
+            let n = unsafe {
+                GetFinalPathNameByHandleW(
+                    self.0,
+                    buf.as_mut_ptr(),
+                    buf.len() as u32,
+                    FILE_NAME_NORMALIZED,
+                )
+            } as usize;
+            if n == 0 {
+                return None;
+            }
+            if n < buf.len() {
+                buf.truncate(n);
+                break;
+            }
+            buf.resize(n + 1, 0);
+        }
+        let text = String::from_utf16(&buf).ok()?;
+        let plain = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+            rest.to_owned()
+        } else {
+            text
+        };
+        Some(PathBuf::from(plain))
+    }
 }
 
 impl Drop for File {
@@ -547,13 +609,20 @@ impl Drop for File {
 }
 
 fn file_id(handle: HANDLE) -> Option<FileId> {
-    // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is a valid value of it.
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { core::mem::zeroed() };
-    // SAFETY: `handle` is open; `info` is writable.
-    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
-    (ok != 0).then(|| FileId {
-        volume: info.dwVolumeSerialNumber,
-        index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    let mut info = FILE_ID_INFO::default();
+    // SAFETY: `handle` is open; `info` is writable for the size given, the
+    // class's structure.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            (&raw mut info).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    (ok != 0).then_some(FileId {
+        volume: info.VolumeSerialNumber,
+        id: info.FileId.Identifier,
     })
 }
 
@@ -608,7 +677,10 @@ fn wide_os(path: &Path) -> Vec<u16> {
 
 /// An identity for asking the DSM its own condition code: its `Id` is no
 /// application's, so the DSM answers with the code it keeps for refusals it
-/// couldn't pin on one (`apps.cpp`, `AppGetConditionCode`), and clears it.
+/// couldn't pin on one (`apps.cpp`, `AppGetConditionCode`, which checks the
+/// `Id` first), and clears it. For `DAT_STATUS/MSG_GET` and nothing else:
+/// other paths of the DSM index its table by the `Id` unchecked
+/// (`AppSetConditionCode`).
 fn nobody() -> Cell<TW_IDENTITY> {
     Cell::new(TW_IDENTITY {
         Id: u32::MAX,
@@ -646,7 +718,7 @@ impl Dsm {
         // write them (it fills in the application's `Id`) through their
         // pointers; a Cell hands out no references to its contents that this
         // could alias. The caller keeps `data`'s contract.
-        ReturnCode(unsafe {
+        let rc = ReturnCode(unsafe {
             (self.entry)(
                 origin.as_ptr(),
                 dest,
@@ -655,7 +727,10 @@ impl Dsm {
                 triplet.msg,
                 data,
             )
-        })
+        });
+        #[cfg(test)]
+        sent_log::push(triplet, rc);
+        rc
     }
 
     /// `MSG_OPENDSM` or `MSG_CLOSEDSM`, with the parent window.
@@ -763,15 +838,18 @@ impl Dsm {
 
     /// A `DAT_CAPABILITY` message whose answer is a container the source
     /// allocates (`MSG_GET`, `MSG_GETCURRENT`, `MSG_GETDEFAULT`, `MSG_RESET`,
-    /// `MSG_QUERYSUPPORT`): its type and its bytes, copied out, the block
-    /// freed. The bytes are `None` unless the source succeeded.
+    /// `MSG_QUERYSUPPORT`): its type and its bytes, copied out (refused past
+    /// 16 MiB, which no container needs), the block freed. `None` unless the
+    /// source succeeded. A source that failed and allocated a block anyway
+    /// (TWAIN says it doesn't) leaves it unfreed: freeing what it may free
+    /// itself would be worse.
     pub(crate) fn capability_read(
         &self,
         app: &Cell<TW_IDENTITY>,
         source: &Cell<TW_IDENTITY>,
         msg: u16,
         cap: u16,
-    ) -> (Triplet, ReturnCode, Option<(u16, Vec<u8>)>) {
+    ) -> (Triplet, ReturnCode, ContainerAnswer) {
         let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_CAPABILITY, msg);
         let mut capability = TW_CAPABILITY {
             Cap: cap,
@@ -784,39 +862,38 @@ impl Dsm {
         let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut capability).cast()) };
         let handle = capability.hContainer;
         if rc != ReturnCode::SUCCESS || handle.is_null() {
-            // A source that failed allocated nothing to free; one that
-            // succeeded without a block answered nothing.
-            let bytes = (rc == ReturnCode::SUCCESS).then(|| (capability.ConType, Vec::new()));
+            // A source that succeeded without a block answered nothing.
+            let bytes = (rc == ReturnCode::SUCCESS).then(|| (capability.ConType, Ok(Vec::new())));
             return (triplet, rc, bytes);
         }
         let block = Block {
             handle,
             memory: self.memory(),
         };
-        (triplet, rc, Some((capability.ConType, block.read())))
+        (
+            triplet,
+            rc,
+            Some((capability.ConType, block.read(MAX_CONTAINER))),
+        )
     }
 
-    /// `DAT_USERINTERFACE`: `MSG_ENABLEDS` (the UI shown or not),
-    /// `MSG_ENABLEDSUIONLY` or `MSG_DISABLEDS`, the hidden window the parent.
+    /// `DAT_USERINTERFACE`: `MSG_ENABLEDS`, `MSG_ENABLEDSUIONLY` or
+    /// `MSG_DISABLEDS`, with `ui`, the one structure for an enable and its
+    /// disable, as TWAIN asks.
     pub(crate) fn user_interface(
         &self,
         app: &Cell<TW_IDENTITY>,
         source: &Cell<TW_IDENTITY>,
         msg: u16,
-        show: bool,
-        window: HWND,
+        ui: &Cell<ffi::TW_USERINTERFACE>,
     ) -> (Triplet, ReturnCode) {
         let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_USERINTERFACE, msg);
-        let mut ui = ffi::TW_USERINTERFACE {
-            ShowUI: u16::from(show),
-            ModalUI: 0,
-            hParent: window,
-        };
-        // SAFETY: DAT_USERINTERFACE takes a TW_USERINTERFACE, on this frame
-        // for the call (the source may write ModalUI); hParent is the hidden
-        // window, which outlives the source's use of it.
+        // SAFETY: DAT_USERINTERFACE takes a TW_USERINTERFACE: `ui`, a Cell the
+        // caller keeps at one address for the enable's length, which the source
+        // may write (ModalUI) through the pointer; hParent is the hidden window,
+        // which outlives the source's use of it.
         (triplet, unsafe {
-            self.call(app, Some(source), triplet, (&raw mut ui).cast())
+            self.call(app, Some(source), triplet, ui.as_ptr().cast())
         })
     }
 
@@ -950,14 +1027,15 @@ impl Dsm {
 
     /// `DG_IMAGE/DAT_EXTIMAGEINFO/MSG_GET` for `ids`: the source's answer,
     /// each entry with its data read out, inline or from the block its handle
-    /// names (freed after, as the application must).
+    /// names (freed after, as the application must; a handle named twice, a
+    /// source's mistake, read and freed once, since freeing it twice would
+    /// corrupt the heap).
     pub(crate) fn ext_image_info(
         &self,
         app: &Cell<TW_IDENTITY>,
         source: &Cell<TW_IDENTITY>,
         ids: &[u16],
-    ) -> Result<(Triplet, ReturnCode, Vec<ext_info::Answer>), crate::container::ContainerError>
-    {
+    ) -> Result<(Triplet, ReturnCode, Vec<ext_info::Answer>), ContainerError> {
         let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_EXTIMAGEINFO, ffi::MSG_GET);
         let request = ext_info::request(ids)?;
         // In words, so the block is aligned as TW_EXTIMAGEINFO is.
@@ -982,18 +1060,26 @@ impl Dsm {
             return Ok((triplet, rc, Vec::new()));
         }
         let entries = ext_info::parse(answer, ids.len())?;
+        let mut freed = std::collections::HashSet::new();
         let answers = entries
             .into_iter()
             .map(|entry| {
                 let data = match entry.data() {
                     ext_info::Data::None => ext_info::Read::None,
+                    ext_info::Data::Missing => ext_info::Read::Missing,
                     ext_info::Data::Inline(bytes) => ext_info::Read::Bytes(bytes),
+                    ext_info::Data::Handle(handle) if !freed.insert(handle) => {
+                        ext_info::Read::Repeated
+                    }
                     ext_info::Data::Handle(handle) => {
                         let block = Block {
                             handle: handle as *mut c_void,
                             memory: self.memory(),
                         };
-                        ext_info::Read::Bytes(block.read())
+                        match block.read(MAX_CONTAINER) {
+                            Ok(bytes) => ext_info::Read::Bytes(bytes),
+                            Err(e) => ext_info::Read::Refused(e),
+                        }
                     }
                     ext_info::Data::Unknown => ext_info::Read::Unknown,
                 };
@@ -1075,5 +1161,27 @@ impl Dsm {
         let global = self.status(&nobody(), None);
         let own = self.status(app, None);
         own.or(global)
+    }
+}
+
+/// Every triplet the crate sends, with its answer, for the crate's own tests
+/// to check what a step sent.
+#[cfg(test)]
+pub(crate) mod sent_log {
+    use std::sync::Mutex;
+
+    use crate::codes::{ReturnCode, Triplet};
+
+    static SENT: Mutex<Vec<(Triplet, ReturnCode)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn push(triplet: Triplet, rc: ReturnCode) {
+        SENT.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((triplet, rc));
+    }
+
+    /// What was sent since the last call.
+    pub(crate) fn take() -> Vec<(Triplet, ReturnCode)> {
+        core::mem::take(&mut *SENT.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }

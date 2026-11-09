@@ -2,12 +2,15 @@
 //! read, every entry's bounds checked, and its data decoded. Pure; reading
 //! the memory an entry's handle names is the DSM module's.
 //!
-//! An entry's `Item` holds its data inline unless the data is larger than
-//! a `TW_HANDLE` (the item type's size times `NumItems`): then it's the
-//! handle of a block holding it, which the application frees (the TWAIN 2.4
-//! specification, `TW_EXTIMAGEINFO`). A `TWTY_HANDLE` entry's `Item` is
-//! always such a handle, its block the data's bytes (barcode text, in the
-//! specification's example).
+//! An entry's `Item` holds its data inline if it's four bytes or fewer (the
+//! item type's size times `NumItems`), and else is the handle of a block
+//! holding it, which the application frees, in either bitness: the TWAIN 2.4
+//! specification's `TW_INFO` says four bytes, and its example of two barcodes
+//! (two `TW_UINT32`, behind a handle) and the TWAIN Working Group's sample
+//! application agree; its `TW_EXTIMAGEINFO` says `sizeof(TW_HANDLE)`, which
+//! on 64-bit Windows would read eight bytes of a driver's handle as data. A
+//! `TWTY_HANDLE` entry's `Item` is always such a handle, its block the data's
+//! bytes (barcode text, in the specification's example).
 
 use core::mem::{offset_of, size_of};
 
@@ -44,6 +47,8 @@ pub enum ExtValue {
 pub(crate) enum Data {
     /// None: the source gave none.
     None,
+    /// A null handle for data a handle should hold.
+    Missing,
     /// In `Item` itself: these bytes of it.
     Inline(Vec<u8>),
     /// In the block this handle names.
@@ -61,9 +66,17 @@ pub(crate) struct Answer {
 /// An entry's data, read: inline, or from its handle's block (freed).
 pub(crate) enum Read {
     None,
+    Missing,
     Bytes(Vec<u8>),
+    /// A handle another entry named first: read (and freed) with it.
+    Repeated,
+    /// A block that doesn't hold up (too large to read).
+    Refused(ContainerError),
     Unknown,
 }
+
+/// The most bytes an entry's data is inline in `Item`.
+const INLINE: u64 = 4;
 
 /// One `TW_INFO` as the source filled it in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,11 +106,12 @@ impl Entry {
             return Data::Unknown;
         };
         let size = (item_type.size() as u64) * u64::from(self.num_items);
-        let handle = item_type == ItemType::Handle || size > size_of::<usize>() as u64;
+        let handle = item_type == ItemType::Handle || size > INLINE;
         match (handle, self.item) {
-            (true, 0) => Data::None,
+            (true, 0) if self.num_items == 0 => Data::None,
+            (true, 0) => Data::Missing,
             (true, item) => Data::Handle(item),
-            // `size` is at most a usize's bytes here.
+            // `size` is at most 4 here, and a usize at least 4 bytes.
             (false, item) => Data::Inline(item.to_le_bytes()[..size as usize].to_vec()),
         }
     }
@@ -114,6 +128,12 @@ pub(crate) fn decode(answer: Answer) -> ExtInfo {
             (None, _) | (_, Read::Unknown) => {
                 ExtValue::Malformed(ContainerError::UnknownItemType(entry.item_type))
             }
+            (Some(item_type), Read::Missing) => ExtValue::Malformed(ContainerError::Short {
+                len: 0,
+                needed: (item_type.size() as u64) * u64::from(entry.num_items),
+            }),
+            (_, Read::Repeated) => ExtValue::Malformed(ContainerError::RepeatedHandle),
+            (_, Read::Refused(e)) => ExtValue::Malformed(e),
             (Some(ItemType::Handle), Read::Bytes(bytes)) => ExtValue::Bytes(bytes),
             (Some(ItemType::Handle), Read::None) => ExtValue::Bytes(Vec::new()),
             (Some(item_type), Read::Bytes(bytes)) => {
@@ -135,7 +155,8 @@ pub(crate) fn decode(answer: Answer) -> ExtInfo {
 }
 
 /// The block that asks for `ids`: `NumInfos`, then a `TW_INFO` for each with
-/// only its `InfoID` set.
+/// its `InfoID` set and its `ReturnCode` `TWRC_INFONOTSUPPORTED`, so an entry
+/// the source leaves alone doesn't read as an empty success.
 pub(crate) fn request(ids: &[u16]) -> Result<Vec<u8>, ContainerError> {
     let count = u32::try_from(ids.len()).map_err(|_| ContainerError::TooMany(ids.len()))?;
     let len = ids
@@ -153,6 +174,8 @@ pub(crate) fn request(ids: &[u16]) -> Result<Vec<u8>, ContainerError> {
         .zip(ids)
     {
         entry[ID..ID + 2].copy_from_slice(&id.to_le_bytes());
+        entry[RETURN_CODE..RETURN_CODE + 2]
+            .copy_from_slice(&ffi::TWRC_INFONOTSUPPORTED.to_le_bytes());
     }
     Ok(block)
 }
@@ -227,33 +250,29 @@ mod tests {
     }
 
     #[test]
-    fn data_that_fits_a_handle_is_inline_and_more_is_behind_one() {
-        let word = size_of::<usize>() as u16;
-        // One UINT32, inline.
+    fn four_bytes_are_inline_and_more_are_behind_a_handle_in_either_bitness() {
+        // One UINT32, inline; four UINT8, inline; five, behind a handle.
         assert_eq!(
             entry(ffi::TWTY_UINT32, 1, 2).data(),
-            Data::Inline(2usize.to_le_bytes()[..4].to_vec())
+            Data::Inline(vec![2, 0, 0, 0])
         );
-        // As many UINT8 as a handle holds, inline; one more, behind one.
-        assert!(
-            matches!(entry(ffi::TWTY_UINT8, word, 7).data(), Data::Inline(b) if b.len() == word as usize)
-        );
+        assert!(matches!(entry(ffi::TWTY_UINT8, 4, 7).data(), Data::Inline(b) if b.len() == 4));
         assert_eq!(
-            entry(ffi::TWTY_UINT8, word + 1, 0x1234).data(),
+            entry(ffi::TWTY_UINT8, 5, 0x1234).data(),
             Data::Handle(0x1234)
         );
-        // Two UINT32 are 8 bytes: inline in a 64-bit process, a handle in a
-        // 32-bit one.
-        let two = entry(ffi::TWTY_UINT32, 2, 0x5678).data();
-        if word == 8 {
-            assert!(matches!(two, Data::Inline(_)));
-        } else {
-            assert_eq!(two, Data::Handle(0x5678));
-        }
-        // A string is wider than a handle, and a TWTY_HANDLE item always one.
+        // Two UINT32, the specification's two barcodes: behind a handle,
+        // whatever the bitness (on 64-bit, Item could hold them, and doesn't).
+        assert_eq!(
+            entry(ffi::TWTY_UINT32, 2, 0x5678).data(),
+            Data::Handle(0x5678)
+        );
+        // A string is wider than four bytes, and a TWTY_HANDLE item always
+        // behind one; a null handle for items is missing, for none, none.
         assert_eq!(entry(ffi::TWTY_STR255, 1, 9).data(), Data::Handle(9));
         assert_eq!(entry(ffi::TWTY_HANDLE, 1, 9).data(), Data::Handle(9));
-        assert_eq!(entry(ffi::TWTY_HANDLE, 2, 0).data(), Data::None);
+        assert_eq!(entry(ffi::TWTY_HANDLE, 2, 0).data(), Data::Missing);
+        assert_eq!(entry(ffi::TWTY_UINT32, 0, 0).data(), Data::Inline(vec![]));
         // None for a code other than success, whatever Item holds; an
         // unknown type can't be told.
         let mut refused = entry(ffi::TWTY_UINT32, 1, 9);
@@ -304,27 +323,58 @@ mod tests {
     #[test]
     fn random_answers_parse_or_are_refused_never_a_panic() {
         let mut r = Random::new(0x0e71_eaf0);
+        let (mut inline, mut behind, mut decoded) = (0, 0, 0);
         for _ in 0..20_000 {
-            let len = r.below(400) as usize;
-            let block = r.bytes(len);
             let asked = r.below(30) as usize;
+            let len = if r.below(4) == 0 {
+                r.below(400) as usize
+            } else {
+                ENTRIES + asked * ENTRY
+            };
+            let mut block = r.bytes(len);
+            // Most entries a success of a known type and a few items, so the
+            // decoding is reached.
+            if block.len() >= ENTRIES {
+                for e in block[ENTRIES..].as_chunks_mut::<ENTRY>().0.iter_mut() {
+                    if r.below(5) != 0 {
+                        e[RETURN_CODE..RETURN_CODE + 2].copy_from_slice(&0u16.to_le_bytes());
+                        let item_type = r.below(0x10) as u16;
+                        e[ITEM_TYPE..ITEM_TYPE + 2].copy_from_slice(&item_type.to_le_bytes());
+                        let count = r.below(8) as u16;
+                        e[NUM_ITEMS..NUM_ITEMS + 2].copy_from_slice(&count.to_le_bytes());
+                    }
+                }
+            }
             if let Ok(entries) = parse(&block, asked) {
                 assert_eq!(entries.len(), asked);
                 for entry in entries {
                     let data = match entry.data() {
                         Data::None => Read::None,
+                        Data::Missing => Read::Missing,
                         Data::Unknown => Read::Unknown,
-                        Data::Inline(bytes) => Read::Bytes(bytes),
+                        Data::Inline(bytes) => {
+                            inline += 1;
+                            Read::Bytes(bytes)
+                        }
                         // A block of whatever length the handle's might be.
                         Data::Handle(_) => {
+                            behind += 1;
                             let len = r.below(64) as usize;
                             Read::Bytes(r.bytes(len))
                         }
                     };
-                    let _ = decode(Answer { entry, data });
+                    let value = decode(Answer { entry, data }).value;
+                    if matches!(value, ExtValue::Items(_) | ExtValue::Bytes(_)) {
+                        decoded += 1;
+                    }
                 }
             }
         }
         assert!(parse(&[], usize::MAX).is_err());
+        // The input reaches the decoding, inline and behind a handle, often.
+        assert!(
+            inline > 10_000 && behind > 10_000 && decoded > 10_000,
+            "{inline} inline, {behind} behind a handle, {decoded} decoded"
+        );
     }
 }

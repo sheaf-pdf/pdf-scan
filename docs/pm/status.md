@@ -51,10 +51,14 @@ next, once that's open.
   seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
 - **Running: S0 slice 8, `twain-dsm`** (on the Windows machine, branch `s0-8-twain-dsm`;
   `slices/s0-8-twain-dsm.md`): planned, reviewed (24 findings, all taken), its six steps built and pushed
-  2026-11-08: the crate safe by construction (`decisions.md`; `crates/twain-dsm.md`), tested through the
-  sample source in both bitnesses; the spike deleted. Three things the plan had wrong, found by its tests: the
-  DSM doesn't close a source left open alone, its global condition code must be read first, and a
-  catalog-signed DLL verifies. The code review, fixes, CI on a pull request and approval close it.
+  2026-11-08: the crate safe by construction (`decisions.md`; `crates/twain-dsm.md`), tested through the sample
+  source in both bitnesses; the spike deleted. Three things the plan had wrong, found by its tests: the DSM
+  doesn't close a source left open alone, its global condition code must be read first, and a catalog-signed
+  Windows file can verify, as Microsoft's (refused either way). Code-reviewed by four reviewers in parallel and
+  fixed, 2026-11-09 (the high findings: two copies of the crate in one process racing in the DSM, a source's
+  message lost to another message loop on the thread, extended image info misread on 64-bit, a driver's large
+  container panicking a 32-bit worker, tests that passed with the thing broken). CI on a pull request and
+  approval close it.
 - **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
   `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
   (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
@@ -64,9 +68,8 @@ next, once that's open.
   fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
   1's; CI's run on the three systems then shows nothing of its own (docs only).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6). Also:
-  `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
-  PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
+  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
+  8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the
+  maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
 - **Next:** S0 slice 3, `scan-device` provisional, once slice 2's pull request is open; then slice 4 on
-  Linux. On Windows, slice 8's code review; then slice 9 (the `twain` backend), once slices 3 and 4 are
-  done.
+  Linux. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

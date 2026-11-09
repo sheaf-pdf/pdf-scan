@@ -4,18 +4,22 @@
 //! (rusty-fork): one `run` at a time per process, and the DSM, once loaded,
 //! stays loaded, so each test starts from a process that never had it. A test
 //! that needs what isn't installed (the DSM, the sample source) says why and
-//! exits 77; the parent says it skipped, and passes, unless
-//! `TWAIN_DSM_REQUIRE_SAMPLE=1`, when the child fails instead.
+//! exits 77; the parent says it skipped (to stderr, past the harness's
+//! capture), and passes, unless `TWAIN_DSM_REQUIRE_SAMPLE=1`, when the child
+//! fails instead. A child that's done exits 78, so one that ran no test (its
+//! name mistyped) fails.
 
 #![allow(dead_code)] // each test file uses its own part
 
 use std::hash::Hash;
+use std::io::Write as _;
 use std::time::Duration;
 
 use twain_dsm::{App, Load, LoadError, Opened, SourceId, Twain};
 
-/// The exit code of a child that skipped.
+/// The exit codes of a child that skipped, and one that's done.
 const SKIPPED: i32 = 77;
+const DONE: i32 = 78;
 
 /// How a child's test ended, short of a panic.
 pub enum Outcome {
@@ -49,13 +53,19 @@ pub fn fork(name: &str, id: impl Hash, env: &[(&str, &str)], body: impl FnOnce()
                 .expect("the child could be waited for")
                 .unwrap_or_else(|| panic!("{name}: the child ran past 120 seconds"));
             match status.code() {
-                Some(0) => {}
-                Some(SKIPPED) => eprintln!("{name}: skipped (the child's output says why)"),
+                Some(DONE) => {}
+                Some(SKIPPED) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "{name}: skipped (the child's output says why)"
+                    );
+                }
+                Some(0) => panic!("{name}: the child ran no test (is the name right?)"),
                 _ => panic!("{name}: the child failed ({status:?})"),
             }
         },
         || match body() {
-            Outcome::Done => {}
+            Outcome::Done => std::process::exit(DONE),
             Outcome::Skip(why) => {
                 assert!(
                     !required("TWAIN_DSM_REQUIRE_SAMPLE"),

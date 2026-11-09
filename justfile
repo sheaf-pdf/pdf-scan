@@ -2,7 +2,11 @@
 # what CI checks, but for two variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
 # needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it.
+# a local run that matches it. CI's Windows TWAIN job also runs the
+# twain-dsm recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
+# `twain-bindings --check`, `twain-dsm-doc-codes`), which need Windows,
+# MSVC, the sample source, twain.h or nightly, and sets
+# TWAIN_DSM_REQUIRE_SAMPLE=1 and TWAIN_DSM_REQUIRE_HEADER=1.
 
 # The oldest Rust each library supports, from its Cargo.toml.
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
@@ -80,6 +84,11 @@ sane-dl-package:
 # From Git Bash: just runs recipes with `sh`.
 twain-dsm-test target:
     cargo test --locked -p twain-dsm --target {{ target }}
+
+# twain-dsm's lints for `target`, its tests included: the 32-bit one too,
+# whose code the 64-bit build doesn't compile.
+twain-dsm-clippy target:
+    cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
 
 # twain-dsm's doctests on nightly, whose rustdoc checks that each
 # `compile_fail` example fails with the error code it names (stable's checks

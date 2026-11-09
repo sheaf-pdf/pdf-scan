@@ -4,15 +4,17 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`; the code's from 
 leading `/`.
 
 **As built by S0 slice 8** (`slices/s0-8-twain-dsm.md`, its "So far" the record), from what the TWAIN spike (S0
-slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working Group's sample source.
+slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working Group's sample source, and
+revised by the slice's code review and fixes.
 
 - **What:** TWAIN through the Data Source Manager, loaded at run time (M5 proposal 7, M5 ask 3, entry 6, D17):
   the system's `TWAINDSM.dll`, else one the caller names (the app's bundled copy). The specification puts
   installing it on the application ("Applications that wish to use access the Data Source Manager, must install
   it themselves"); drivers often install it too, so a machine may have one or not, and an old driver's may be
   old.
-  - **Safe by construction** (`decisions.md`, 2026-11-08): no `unsafe fn` and no raw pointer in the public API;
-    each contract the spike left to its caller is bound by the compiler or kept inside. The DSM is never
+  - **Safe by construction** (`decisions.md`, 2026-11-08): no `unsafe fn`, and no raw pointer in any public
+    signature (`ffi`'s plain structs have pointer fields, which nothing public takes or returns); each contract
+    the spike left to its caller is bound by the compiler or kept inside. The DSM is never
     unloaded, so its entry point and memory functions live as long as the process; TWAIN's states are owned
     values that borrow the TWAIN thread's `Twain`, which is neither `Send` nor `Sync`, inside a closure
     higher-ranked over that borrow, so no state leaves the closure or the thread (E0521, E0277, checked by
@@ -22,9 +24,11 @@ slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working
     its `SAFETY` comment. Safe assumes a DSM and drivers that keep TWAIN's calling rules, as any FFI does; their
     data stays untrusted.
   - **The TWAIN thread is the caller's:** `run(|twain| ..)` makes the calling thread a single-threaded apartment
-    with a hidden top-level window (the parent the DSM and drivers are given; never shown, its procedure
-    `DefWindowProcW`, so no Rust code runs inside one) for the closure, then undoes both. One `run` per process
-    at a time, for the DSM's lack of locks (an atomic flag, released by a guard, panics included). Other threads
+    with a hidden top-level window (the parent the DSM and drivers are given; never shown; its procedure the
+    crate's own, which ignores `WM_CLOSE`, so only the crate destroys it, and the crate's wake-up, and passes the
+    rest to `DefWindowProcW`) for the closure, then undoes both. One `run` per process at a time, whatever copies
+    of the crate the process holds, for the DSM's lack of locks: the lock is a semaphore named for the process,
+    given back at the end of a run (panics included) and kept for good by a stranded one. Other threads
     post requests of the caller's own type through `Remote<T>` (`Send + Sync`), which wakes the loop with a
     message to the window, under a lock the teardown takes to clear the window's handle, so a post never
     reaches a reused handle; after the run, a post is handed back (`Gone`). `Twain::wait` pumps the thread's
@@ -32,10 +36,15 @@ slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working
   - **The record, apart from the states:** `Twain` keeps what's open (the DSM loaded, the connection, the
     source and its state 4 to 7), set at each triplet that moves it, and every step down walks from there: each
     state's `Drop`, and the end of `run`, which closes the source and then the connection whatever became of
-    the states (a state forgotten with `mem::forget` included). A step refused with `TWCC_SEQERROR` restarts
-    the walk once from state 7, as `TWAIN.cs`'s rollback does; `MSG_XFERREADY` moves the record to state 6
-    as it's received (the sample is there before `MSG_ENABLEDS` returns). What a `Drop` couldn't do is in
-    `Twain::drop_errors`. If the DSM refuses `MSG_CLOSEDSM` at the end, the run reports it
+    the states (a state forgotten with `mem::forget` included). A `Drop` passes a refused step over to the next;
+    `disable` and `reset` move the record only on a step the source took. A step refused with `TWCC_SEQERROR`
+    restarts the walk higher, from `MSG_RESET`, then from `MSG_ENDXFER` (which in state 6 can make a feeder take
+    another page), as TWAIN's resynchronization and `TWAIN.cs`'s rollback do, refusals before the floor reported
+    only if it isn't reached. `MSG_XFERREADY` is taken only in state 5 (one from an earlier enable, or said
+    twice, is no transfer), and moves the record to 6 as it's received (the sample is there before
+    `MSG_ENABLEDS` returns); `MSG_CLOSEDSREQ` in 6 or 7 moves it to 5, and a transfer method then answers
+    `Error::CloseRequested`. What a `Drop` couldn't do is in `Twain::drop_errors`. `RunReport` says what the end
+    of the run had to close. If the DSM refuses `MSG_CLOSEDSM` at the end, the run reports it
     (`RunReport::stranded`) and leaves the application's identity, the window, the apartment and the flag as
     they are: no `run` follows in that process. A source that won't close is `RunReport::source_left`.
   - **Loading:** `Load::System` (`<system folder>\TWAINDSM.dll`, SysWOW64's in a 32-bit process, which reaches
@@ -44,9 +53,12 @@ slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working
     not certificate: 2.5.0 and 2.5.1 have different certificates and one signer) are checked through that
     handle before any of its code runs; it's loaded by its full path while the handle is held, and the module
     loaded compared with the file checked. A module of the same name loaded from another file is refused
-    (`Elsewhere`). Files are compared by identity (volume and file index), never by path: a 32-bit process
-    may be told either name for a system file. `WinVerifyTrust` verifies a catalog-signed file through its
-    catalog, so Windows' own DLLs are Microsoft's (`WrongSigner`), not `Unsigned`. One `Loaded` at a time.
+    (`Elsewhere`), and so is the same file loaded by something else, another TWAIN client or another copy of the
+    crate (`InUse`). It's loaded by the final path of the handle held (links and junctions resolved), and files
+    are compared by identity (volume and 128-bit file id), never by path: a 32-bit process may be told either
+    name for a system file. A Windows file signed through a catalog comes back as Microsoft's (`WrongSigner`)
+    or as `Unsigned`, by what the check of the file finds (`kernel32.dll` the one, `cmd.exe` the other, here):
+    refused either way. One `Loaded` at a time.
     `TWAINDSM_LOG` naming a file, with `TWAINDSM_MODE=w`, makes the DSM log every triplet.
   - **What the DSM does that the crate must know** (the spike, and slice 8 in the DSM's source): it loads every
     source's library at `MSG_OPENDSM`, so opening it runs each installed driver's code; it skips Windows' own
@@ -73,35 +85,51 @@ slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working
     `into_error`, `#[must_use]`, no blanket `From`, so `?` never walks a chain down unseen). One source at a
     time.
   - **Messages from the source:** delivery fixed per open source. `Delivery::Callback` registers
-    `DAT_CALLBACK2`'s procedure, a safe `extern "system" fn` that posts the message to the window (its handle
-    and a generation in process-wide atomics, so it can't dangle) and returns `TWRC_SUCCESS`, for TWAIN 2
-    sources only (`DF_DS2`); `Delivery::Events` registers a null procedure and offers each message the loop
-    takes, while the source is enabled, to `MSG_PROCESSEVENT`. `Enabled::next_event` hands over
+    `DAT_CALLBACK2`'s procedure, a safe `extern "system" fn` that keeps the message in a process-wide ring of
+    atomics, tagged with a generation changed at every enable and disable, wakes the window and returns
+    `TWRC_SUCCESS`, for TWAIN 2 sources only (`DF_DS2`); `Delivery::Events` registers a null procedure (again
+    before each enable, which drops a message the DSM still holds from an earlier one). Either way each message
+    the loop takes, but the crate's own, is offered to `MSG_PROCESSEVENT` while the source is enabled (the
+    source's own windows need it), and each turn of the loop reads the ring and, for events, offers a made-up
+    `WM_NULL`, so the DSM hands over a message it holds: another message loop on the thread (a driver's dialog,
+    a message box) that takes the wake-up loses nothing. For a TWAIN 2 source by events, the carrier of a
+    message the DSM held is dispatched still. `Enabled::next_event` hands over
     `Next::Ready`, `Event` (`CloseRequest`, `CloseOk`, `Device` with `DAT_DEVICEEVENT`'s answer), `Request`,
     `Timeout` or `Quit`, the source's first: every queued message is taken before a request is handed over.
   - **Capabilities:** `get`, `get_current`, `get_default`, `reset`, `set`, `query_support` on a `Source`, as a
     `Container` (one value, an enumeration with its indices as sent, an array, a range) of `Item`s of every
     item type `twain.h` has; a list's one type checked when it's made; strings TWAIN's bytes, checked for
-    length and NUL before they're sent; handles decoded to their value, never sent. Blocks allocated with the
-    DSM's `DSM_MemAllocate`, a source's measured with `GlobalSize` and copied out, every length checked
-    first. `set` answers `SetOutcome::Exact` or `Adjusted` (`TWRC_CHECKSTATUS`).
+    length and NUL before they're sent, and read to what their type holds, so what was read can be sent back;
+    handles decoded to their value, never sent; ranges of the integers, `FIX32` and `BOOL`. Blocks allocated with
+    the DSM's `DSM_MemAllocate`, a source's measured with `GlobalSize` and copied out, every length checked
+    first: at most 16 MiB, a list at most 65,536 items, so no driver's block can exhaust a 32-bit worker. A one
+    value sent is padded to the widest item, so a source that reads it as its capability's own type reads
+    nothing past it. `set` answers `SetOutcome::Exact` or `Adjusted` (`TWRC_CHECKSTATUS`).
   - **The driver's window:** `Source::enable(Ui::Shown)` (parented to the hidden window; the application's own
     window as owner is slice 9's), and `Source::settings_ui()` (`MSG_ENABLEDSUIONLY`) for its settings alone,
     `Event::CloseOk` when they're saved; both run by hand with the sample (`tests/ui.rs`).
-  - **Transfers:** `Ready::native` (`Native::Done(Dib, Transferred)` or `Cancelled`) and `Ready::memory`, whose
-    `next_buffer` fills the caller's buffer (refused under `MinBufSize`) and hands back a `Strip` of what the
-    source wrote, `BytesWritten` checked; `preferred_size` resolves `TWON_DONTCARE32` and caps at 64 MiB.
-    `image_info` gives `TW_IMAGEINFO` as TWAIN does (only its first `BitsPerSample` to be trusted). One
-    `MSG_XFERREADY` per enable: `end` (`MSG_ENDXFER`) gives `Pending::More(Ready)` or `Done(Enabled)`, the
-    count kept (`Ready::pending`, `None` for 0xFFFF, "don't know"). Extended image info in state 7
-    (`ext_image_info`), by the specification's rule (TWAIN 2.4, `TW_EXTIMAGEINFO`): an entry's `Item` is the
-    handle of a block, which the application frees, when the data is larger than a `TW_HANDLE`, else the data
-    inline; a `TWTY_HANDLE` entry's is always a handle to its bytes.
+  - **Transfers:** `Ready::native` (`Native::Done(Dib, Transferred)` or `Cancelled`; an empty `Dib` if the
+    source said done and gave no block, or it wouldn't lock) and `Ready::memory` (refused if no buffer can meet
+    the source's sizes), whose `next_buffer` fills the caller's buffer, refused unless TWAIN's rules hold (at
+    least `MinBufSize`, at most `MaxBufSize`, of even length at a 4-byte boundary, one size for the transfer),
+    and hands back a `Strip` of what the source wrote, `BytesWritten` checked; `preferred_size` resolves
+    `TWON_DONTCARE32`, keeps within the source's sizes and 64 MiB, and is a multiple of 4. `image_info` gives
+    `ImageInfo`, `DAT_IMAGEINFO`'s answer unpacked (only its first `bits_per_sample` to be trusted), in state 6,
+    and in 7 after `TWRC_XFERDONE` (a feeder's measured length). One `MSG_XFERREADY` per enable: `end`
+    (`MSG_ENDXFER`) gives `Pending::More(Ready, count)` or `Done(Enabled)`, the count `None` for 0xFFFF, "don't
+    know". Extended image info in state 7 after `TWRC_XFERDONE` only (`ext_image_info`), an entry's `Item` the
+    handle of a block (which the application frees) when its data is more than four bytes, else the data
+    inline, in either bitness: `TW_INFO`'s rule in the TWAIN 2.4 specification, which its example and the
+    TWAIN Working Group's sample application keep (its `TW_EXTIMAGEINFO` says `sizeof(TW_HANDLE)`, which on
+    64-bit Windows would read eight bytes of a handle as data); a `TWTY_HANDLE` entry's is always a handle to
+    its bytes. A handle named twice is freed once.
   - **Cancel by state:** a request posted from another thread is taken in the loop; at the next state-6 point
-    (before the first transfer, or after a page's `MSG_ENDXFER`) `Ready::reset` (`MSG_RESET`) ends the batch;
+    (before the first transfer, or after a page's `MSG_ENDXFER`) `Ready::reset` (`MSG_RESET`) ends the batch
+    (`Twain::requeue` puts a request taken that isn't for now back first);
     `Ready::stop_feeder` where a driver has it (the sample refuses it, `TWCC_BADPROTOCOL`).
   - **Condition codes:** a failure's are each party's, each asked once: the DSM's for no application first (an
-    identity whose `Id` is out of range, which takes the read path that checks it), then the application's,
+    identity whose `Id` is out of range, which takes the read path that checks it, and is used for that
+    triplet alone: the DSM's other paths index by the `Id` unchecked), then the application's,
     which wins; then the source's, if the triplet was to the source open. `Error::Failed { triplet, rc,
     by_source, by_dsm }`. Codes such as `TWCC_PAPERJAM`, `TWCC_PAPERDOUBLEFEED`, `TWCC_NOMEDIA` reach the
     backend so.
@@ -124,10 +152,14 @@ slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working
   both bitnesses; and the TWAIN Working Group's sample data source (`Twain_DS_sample01`, BSD-3; it reads its
   images from disk, its page count from a `CAP_XFERCOUNT` environment variable), installed silently by
   `/scripts/twain-sample.ps1` (the DSM 2.5.0 with it, both bitnesses), through the crate's API in child
-  processes, here and in CI's `twain-dsm` job on `windows-latest`, in both bitnesses: listing, the signature
-  cases, capabilities in all four containers, transfers both ways and both deliveries, native and memory
-  pixels equal, states dropped and forgotten anywhere, cancels, requests, and a stranded teardown. By hand: the
-  source's window; a real driver (slice 12). The spike's own program is gone; its record is history.
+  processes, in both bitnesses, here (CI's `twain-dsm` job runs them on `windows-latest` once the branch has a
+  pull request; none has yet): listing, the signature cases, capabilities in all four containers, transfers
+  both ways and both deliveries with their pending counts, native and memory pixels equal, states dropped and
+  forgotten anywhere, cancels, requests (each timed, so a post that doesn't wake the loop fails), another
+  message loop on the thread, a stale transfer ready, the buffer rules, and a stranded teardown; inside the
+  crate, the triplets `reset` and `disable` send, the run lock shared with another copy, the hidden window
+  outliving a `WM_CLOSE`. By hand: the source's window; a real driver (slice 12). The spike's own program is
+  gone; its record is history.
 - **Open:**
   - `twain.h`'s license, settled 2026-11-08: no copy grants a license (copyright notices, "All rights
     reserved", outside the DSM's LGPL); the only grant is twain.org's TWAIN License, whose reach to a Rust

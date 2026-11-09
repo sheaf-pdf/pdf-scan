@@ -85,8 +85,15 @@ def number(text):
     return int(text.strip().rstrip("uUlL"), 0)
 
 
+# twain.h's #defines with a value that are no constant: the calling
+# convention's macros, and one whose value is commented out.
+NOT_CONSTANTS = {"PASCAL", "TW_HUGE", "TW_CALLINGSTYLE", "CAP_FILESYSTEM"}
+
+
 def header_constants(h):
-    """twain.h's numeric #defines, and its aliases (a #define of one name as another), resolved."""
+    """twain.h's numeric #defines, and its aliases (a #define of one name as another), resolved.
+    Exits if a #define with a value is neither, and not one of NOT_CONSTANTS: a form this script
+    doesn't read (a cast, an expression) would otherwise go unbound, unseen."""
     numeric = {}
     for name, value in re.findall(rf"^\s*#\s*define\s+(\w+)\s+\(?\s*({NUMBER})[uUlL]*\s*\)?\s*(?:/[*/].*)?$", h, re.M):
         if name in numeric and numeric[name] != number(value):
@@ -96,6 +103,14 @@ def header_constants(h):
     for name, target in re.findall(r"^\s*#\s*define\s+(\w+)\s+([A-Z]\w*)\s*(?:/[*/].*)?$", h, re.M):
         if target in numeric:
             aliases[name] = target
+    unread = sorted(
+        name
+        for name, value in re.findall(r"^\s*#\s*define\s+(\w+)[ \t]+(\S[^\n]*)$", h, re.M)
+        if name not in numeric and name not in aliases and name not in NOT_CONSTANTS
+        and not value.lstrip().startswith(("//", "/*"))
+    )
+    if unread:
+        sys.exit("twain.h defines these with values this script doesn't read: " + ", ".join(unread))
     return numeric, aliases
 
 
@@ -168,7 +183,7 @@ def generate(cs, h):
     def header_value(name):
         return numeric.get(name, numeric.get(aliases.get(name)))
     stscc = number(re.search(rf"public const int STSCC\s*=\s*({NUMBER})", cs).group(1))
-    lines, table, report, emitted = [], [], [], {}
+    lines, table, report, emitted, types = [], [], [], {}, {}
     only_cs, renamed, mismatched = [], [], []
 
     def emit(name, ty, value, text):
@@ -184,6 +199,7 @@ def generate(cs, h):
             mismatched.append(f"{name}: TWAINH.cs {value:#x}, twain.h {expected:#x}")
             return False
         emitted[name] = value
+        types[name] = ty
         lines.append(f"pub const {name}: {ty} = {text};")
         table.append(name)
         return True
@@ -238,6 +254,17 @@ def generate(cs, h):
 
     by_hand = {}
     hand_text = BY_HAND.read_text(encoding="utf-8") if BY_HAND.exists() else ""
+    hand_problems = []
+    for line in re.findall(r"^pub const .*$", hand_text, re.M):
+        if not re.fullmatch(rf"pub const \w+: \w+ = (?:{NUMBER}|[A-Z]\w*);", line):
+            hand_problems.append(f"by_hand.rs: a line the script can't read: {line}")
+    prefix_types = {}
+    for name, ty in types.items():
+        prefix_types.setdefault(name.split("_", 1)[0], set()).add(ty)
+    for name, ty in re.findall(r"^pub const (\w+): (\w+) =", hand_text, re.M):
+        known = prefix_types.get(name.split("_", 1)[0])
+        if known and ty not in known:
+            hand_problems.append(f"by_hand.rs: {name} is {ty}, and the generated {name.split('_', 1)[0]}_ are {sorted(known)}")
     for name, value in re.findall(rf"^pub const (\w+): \w+ = ({NUMBER}|[A-Z]\w*);", hand_text, re.M):
         if re.fullmatch(NUMBER, value):
             by_hand[name] = number(value)
@@ -245,7 +272,7 @@ def generate(cs, h):
             by_hand[name] = emitted.get(value, by_hand.get(value))
         else:
             sys.exit(f"by_hand.rs: {name} = {value}, which isn't defined before it")
-    problems = []
+    problems = list(hand_problems)
     listed = re.findall(r'^\s*\("(\w+)", (\w+) as i64\),$', hand_text, re.M)
     if [n for n, _ in listed] != list(by_hand) or any(n != c for n, c in listed):
         problems.append("by_hand.rs's BY_HAND doesn't list its constants, each once, in order")

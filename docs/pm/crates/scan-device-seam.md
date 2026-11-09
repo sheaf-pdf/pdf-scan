@@ -47,7 +47,11 @@ the unknowns, where building the crate changed what the spike had: `twain-dsm` s
 from a record of where the source is that it keeps apart from the states, so a state dropped or forgotten
 anywhere is stepped down, and what a drop couldn't do is kept for the backend (`drop_errors`); and it closes a
 source left open itself at the end, since the DSM's own closing stops before the last source it lists. Each
-failure carries both parties' condition codes, the DSM's read in the order its clearing needs.
+failure carries both parties' condition codes, the DSM's read in the order its clearing needs. After its code
+review: the thread's messages are offered to `MSG_PROCESSEVENT` in either delivery (the source's own windows
+need it), and the source's messages are kept in process memory, not in the posts that wake the loop, so
+another message loop on the TWAIN thread (a driver's dialog, a message box) loses none; one run per process
+holds across copies of the crate.
 
 ## The rules it keeps
 

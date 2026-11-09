@@ -86,10 +86,13 @@ fn page<'t>(mut ready: Ready<'t, ()>, mechanism: Mechanism) -> (Image, Pending<'
         "MSG_STOPFEEDER",
     );
     let info = ready.image_info().expect("DAT_IMAGEINFO");
-    let (width, length) = (info.ImageWidth, info.ImageLength);
-    let format =
-        Format::from_image_info(info.PixelType, info.SamplesPerPixel, info.BitsPerSample[0])
-            .expect("a format the sample has");
+    let (width, length) = (info.width, info.length);
+    let format = Format::from_image_info(
+        info.pixel_type,
+        info.samples_per_pixel,
+        info.bits_per_sample[0],
+    )
+    .expect("a format the sample has");
     assert!(width > 0 && length > 0, "the image is {width} by {length}");
     match mechanism {
         Mechanism::Native => match ready
@@ -199,19 +202,23 @@ fn batch<'t>(
     mut ready: Ready<'t, ()>,
     mechanism: Mechanism,
     pages: usize,
+    counted: Option<u16>,
 ) -> (Vec<Image>, Enabled<'t, ()>) {
     let mut images = Vec::new();
     loop {
         let (image, pending) = page(ready, mechanism);
         images.push(image);
         match pending {
-            Pending::More(next) => {
+            Pending::More(next, pending) => {
                 assert!(
                     images.len() < pages,
                     "page {} of {pages} and more pending",
                     images.len()
                 );
-                assert_eq!(next.pending(), None, "the sample doesn't say how many");
+                // With CAP_XFERCOUNT -1 the sample doesn't say how many
+                // (0xFFFF); with a count, how many are left of it.
+                let left = counted.map(|n| n - images.len() as u16);
+                assert_eq!(pending, left, "pending after page {}", images.len());
                 ready = next;
             }
             Pending::Done(enabled) => {
@@ -243,9 +250,15 @@ fn pages_come_native_and_through_memory_with_either_delivery() {
                     Err(outcome) => return outcome,
                 };
                 for delivery in [Delivery::Callback, Delivery::Events] {
-                    for mechanism in [Mechanism::Native, Mechanism::Memory] {
-                        let first = ready(opened, &sample, delivery, mechanism, -1, ffi::TWPT_RGB);
-                        let (images, enabled) = batch(first, mechanism, 3);
+                    for (mechanism, count) in [
+                        (Mechanism::Native, -1),
+                        (Mechanism::Memory, -1),
+                        (Mechanism::Memory, 3),
+                    ] {
+                        let first =
+                            ready(opened, &sample, delivery, mechanism, count, ffi::TWPT_RGB);
+                        let counted = (count > 0).then_some(count as u16);
+                        let (images, enabled) = batch(first, mechanism, 3, counted);
                         println!(
                             "{delivery:?}, {mechanism:?}: {} pages of {}x{}",
                             images.len(),
@@ -293,7 +306,7 @@ fn native_and_memory_pages_are_the_same_pixels() {
                         1,
                         pixel_type,
                     );
-                    let (mut images, enabled) = batch(first, mechanism, 1);
+                    let (mut images, enabled) = batch(first, mechanism, 1, Some(1));
                     let source = enabled
                         .disable()
                         .map_err(|r| r.into_error())

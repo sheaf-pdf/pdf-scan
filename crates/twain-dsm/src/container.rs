@@ -157,7 +157,8 @@ impl ItemType {
         }
     }
 
-    /// Whether a range may hold it: the integers and `FIX32`.
+    /// Whether a range may hold it: the integers, `FIX32`, and `BOOL` (which
+    /// some sources offer as a range of 0 to 1).
     pub fn is_number(self) -> bool {
         matches!(
             self,
@@ -168,6 +169,7 @@ impl ItemType {
                 | ItemType::UInt16
                 | ItemType::UInt32
                 | ItemType::Fix32
+                | ItemType::Bool
         )
     }
 }
@@ -236,6 +238,24 @@ impl Fix32 {
         Fix32 {
             whole: i16::from_le_bytes([w0, w1]),
             frac: u16::from_le_bytes([f0, f1]),
+        }
+    }
+}
+
+impl From<ffi::TW_FIX32> for Fix32 {
+    fn from(fix: ffi::TW_FIX32) -> Self {
+        Fix32 {
+            whole: fix.Whole,
+            frac: fix.Frac,
+        }
+    }
+}
+
+impl From<Fix32> for ffi::TW_FIX32 {
+    fn from(fix: Fix32) -> Self {
+        ffi::TW_FIX32 {
+            Whole: fix.whole,
+            Frac: fix.frac,
         }
     }
 }
@@ -321,6 +341,7 @@ impl Item {
         }
         let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
         let fix_at = |i: usize| Fix32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let max = item_type.max_len().unwrap_or(0);
         Ok(match item_type {
             ItemType::Int8 => Item::Int8(i8::from_le_bytes([b[0]])),
             ItemType::Int16 => Item::Int16(u16_at(0) as i16),
@@ -336,17 +357,18 @@ impl Item {
                 right: fix_at(8),
                 bottom: fix_at(12),
             }),
-            ItemType::Str32 => Item::Str32(to_nul(b)),
-            ItemType::Str64 => Item::Str64(to_nul(b)),
-            ItemType::Str128 => Item::Str128(to_nul(b)),
-            ItemType::Str255 => Item::Str255(to_nul(b)),
-            ItemType::Str1024 => Item::Str1024(to_nul(b)),
+            ItemType::Str32 => Item::Str32(to_nul(b, max)),
+            ItemType::Str64 => Item::Str64(to_nul(b, max)),
+            ItemType::Str128 => Item::Str128(to_nul(b, max)),
+            ItemType::Str255 => Item::Str255(to_nul(b, max)),
+            ItemType::Str1024 => Item::Str1024(to_nul(b, max)),
             ItemType::Uni512 => {
                 let (units, _) = b.as_chunks::<2>();
                 Item::Uni512(
                     units
                         .iter()
                         .map(|&u| u16::from_le_bytes(u))
+                        .take(max)
                         .take_while(|&u| u != 0)
                         .collect(),
                 )
@@ -408,6 +430,7 @@ impl Item {
             ItemType::UInt16 => Item::UInt16(slot as u16),
             ItemType::UInt32 => Item::UInt32(slot),
             ItemType::Fix32 => Item::Fix32(Fix32::from_le_bytes(slot.to_le_bytes())),
+            ItemType::Bool => Item::Bool(slot as u16 != 0),
             other => return Err(ContainerError::RangeOf(other)),
         })
     }
@@ -429,8 +452,11 @@ impl Item {
     }
 }
 
-/// The bytes before the first NUL, or all of them.
-fn to_nul(b: &[u8]) -> Vec<u8> {
+/// The bytes before the first NUL, at most `max` of them (a source that
+/// filled the field without one wrote one past what the type holds): so what
+/// was read can be sent back.
+fn to_nul(b: &[u8], max: usize) -> Vec<u8> {
+    let b = &b[..b.len().min(max)];
     let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
     b[..end].to_vec()
 }
@@ -504,12 +530,20 @@ impl Items {
                 needed,
             });
         }
+        if count > MAX_ITEMS as u64 {
+            return Err(ContainerError::TooMany(
+                count.min(usize::MAX as u64) as usize
+            ));
+        }
         // `needed` fits in the slice's length, so in a usize, and so does
         // `count`.
-        let items = bytes[..needed as usize]
-            .chunks_exact(size)
-            .map(|b| Item::read(item_type, b))
-            .collect::<Result<_, _>>()?;
+        let mut items = Vec::new();
+        items
+            .try_reserve_exact(count as usize)
+            .map_err(|_| ContainerError::TooMany(count as usize))?;
+        for b in bytes[..needed as usize].chunks_exact(size) {
+            items.push(Item::read(item_type, b)?);
+        }
         Ok(Items { item_type, items })
     }
 
@@ -522,7 +556,18 @@ impl Items {
     }
 }
 
-/// `TWON_RANGE`'s contents: numbers of one type, the integers' or `FIX32`'s.
+/// The most items a list (an enumeration's, an array's, extended image
+/// info's) is read with: a source's lists are a few hundred at most.
+pub(crate) const MAX_ITEMS: usize = 65_536;
+/// The largest block a container is encoded into.
+const MAX_BLOCK: u64 = 16 << 20;
+/// The widest item, a `TW_STR1024`: a `TW_ONEVALUE` sent is padded to hold
+/// it, so a source that reads the value as the capability's own type reads
+/// nothing past the block.
+const WIDEST_ITEM: usize = size_of::<ffi::TW_STR1024>();
+
+/// `TWON_RANGE`'s contents: numbers of one type, the integers', `FIX32`'s or
+/// `BOOL`'s.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Range {
     item_type: ItemType,
@@ -608,8 +653,14 @@ pub enum ContainerError {
     Nul { at: usize },
     #[error("index {index} of an enumeration of {len} items")]
     Index { index: u32, len: usize },
-    #[error("{0} items: more than a container's 32-bit sizes hold")]
+    #[error("{0} items: more than a container is taken with")]
     TooMany(usize),
+    #[error("a block of {len} bytes: more than the {max} a container is taken in")]
+    TooLarge { len: u64, max: u64 },
+    #[error("container type {0:#06x} where one value was expected")]
+    NotOneValue(u16),
+    #[error("a handle another entry named already")]
+    RepeatedHandle,
     #[error("a handle, which only a source gives")]
     Handle,
 }
@@ -719,10 +770,22 @@ impl Container {
             let total = (len as u64)
                 .checked_mul(items.item_type().size() as u64)
                 .and_then(|n| n.checked_add(head as u64))
-                .filter(|&n| n <= u64::from(u32::MAX))
                 .ok_or(ContainerError::TooMany(len))?;
-            // At most u32::MAX, checked above.
-            let mut block = vec![0; total as usize];
+            if total > MAX_BLOCK {
+                return Err(ContainerError::TooLarge {
+                    len: total,
+                    max: MAX_BLOCK,
+                });
+            }
+            // At most 16 MiB, checked above.
+            let mut block = Vec::new();
+            block
+                .try_reserve_exact(total as usize)
+                .map_err(|_| ContainerError::TooLarge {
+                    len: total,
+                    max: MAX_BLOCK,
+                })?;
+            block.resize(total as usize, 0);
             block[..2].copy_from_slice(&items.item_type().raw().to_le_bytes());
             items.write(&mut block[head..])?;
             Ok(block)
@@ -733,7 +796,8 @@ impl Container {
         match self {
             Container::One(item) => {
                 let size = item.item_type().size();
-                let mut block = vec![0; size_of::<ffi::TW_ONEVALUE>().max(ONEVALUE_ITEM + size)];
+                let mut block =
+                    vec![0; size_of::<ffi::TW_ONEVALUE>().max(ONEVALUE_ITEM + WIDEST_ITEM)];
                 block[..2].copy_from_slice(&item.item_type().raw().to_le_bytes());
                 match item.to_slot() {
                     Some(slot) => {
@@ -808,17 +872,21 @@ pub(crate) mod tests {
 
     #[test]
     fn a_signed_onevalue_is_sign_extended_into_its_item_field() {
+        // And padded to hold the widest item, so a source that reads it as
+        // another type reads nothing past the block.
         let block = Container::One(Item::Int16(-2)).encode().unwrap();
-        assert_eq!(block, [0x01, 0x00, 0xfe, 0xff, 0xff, 0xff]);
+        assert_eq!(&block[..6], &[0x01, 0x00, 0xfe, 0xff, 0xff, 0xff]);
+        assert_eq!(block.len(), 2 + 1026);
+        assert!(block[6..].iter().all(|&b| b == 0));
         let block = Container::One(Item::UInt8(0xff)).encode().unwrap();
-        assert_eq!(block, [0x03, 0x00, 0xff, 0, 0, 0]);
+        assert_eq!(&block[..6], &[0x03, 0x00, 0xff, 0, 0, 0]);
     }
 
     #[test]
     fn a_wide_onevalue_runs_on_past_the_struct() {
         let item = Item::Str255(b"TWAIN2 Software Scanner".to_vec());
         let block = Container::One(item.clone()).encode().unwrap();
-        assert_eq!(block.len(), 2 + 256);
+        assert_eq!(block.len(), 2 + 1026);
         assert_eq!(&block[2..25], b"TWAIN2 Software Scanner");
         assert!(block[25..].iter().all(|&b| b == 0));
         assert_eq!(
@@ -896,11 +964,22 @@ pub(crate) mod tests {
             Item::Str32(vec![]),
         );
         assert_eq!(strings, Err(ContainerError::RangeOf(ItemType::Str32)));
+        // A range of booleans (0 to 1) is one some sources offer; of frames,
+        // none.
         let mut block = vec![0; 22];
         block[0] = 0x06;
+        block[6] = 1;
+        let Ok(Container::Range(bools)) = Container::decode(ffi::TWON_RANGE, &block) else {
+            panic!("a range of booleans");
+        };
+        assert_eq!(
+            (bools.min(), bools.max()),
+            (&Item::Bool(false), &Item::Bool(true))
+        );
+        block[0] = 0x08;
         assert_eq!(
             Container::decode(ffi::TWON_RANGE, &block),
-            Err(ContainerError::RangeOf(ItemType::Bool))
+            Err(ContainerError::RangeOf(ItemType::Frame))
         );
     }
 
@@ -925,8 +1004,53 @@ pub(crate) mod tests {
         );
         let wide = Container::One(Item::Uni512("Scanner".encode_utf16().collect()));
         let block = wide.encode().unwrap();
-        assert_eq!(block.len(), 2 + 1024);
+        assert_eq!(block.len(), 2 + 1026);
         assert_eq!(Container::decode(ffi::TWON_ONEVALUE, &block), Ok(wide));
+    }
+
+    #[test]
+    fn a_list_past_the_cap_is_refused_before_it_is_built() {
+        // 65537 one-byte items, all there: refused for their count, not
+        // built (a 32-bit process would run out of address space at a few
+        // times that).
+        let mut block = vec![0u8; 6 + 65_537];
+        block[0] = 0x03;
+        block[2..6].copy_from_slice(&65_537u32.to_le_bytes());
+        assert_eq!(
+            Container::decode(ffi::TWON_ARRAY, &block),
+            Err(ContainerError::TooMany(65_537))
+        );
+        block[2..6].copy_from_slice(&65_536u32.to_le_bytes());
+        assert!(
+            matches!(Container::decode(ffi::TWON_ARRAY, &block), Ok(Container::Array(a)) if a.len() == 65_536)
+        );
+        // Sent, a block past 16 MiB is refused.
+        let items = Items::new(ItemType::Str1024, vec![Item::Str1024(vec![]); 17_000]).unwrap();
+        assert!(matches!(
+            Container::Array(items).encode(),
+            Err(ContainerError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn a_string_filling_its_field_reads_as_what_its_type_holds() {
+        // A TW_STR32 of 34 bytes and no NUL: read as its first 32, which can
+        // be sent back.
+        let mut block = vec![0x09, 0x00];
+        block.extend([b'a'; 34]);
+        let Ok(Container::One(item)) = Container::decode(ffi::TWON_ONEVALUE, &block) else {
+            panic!("a one value");
+        };
+        assert_eq!(item, Item::Str32(vec![b'a'; 32]));
+        assert!(Container::One(item).encode().is_ok());
+        // A TW_UNI512 of 512 units and no NUL: its first 511.
+        let mut block = vec![0x0e, 0x00];
+        block.extend([0x41, 0x00].repeat(512));
+        let Ok(Container::One(Item::Uni512(units))) = Container::decode(ffi::TWON_ONEVALUE, &block)
+        else {
+            panic!("a one value");
+        };
+        assert_eq!(units.len(), 511);
     }
 
     #[test]
