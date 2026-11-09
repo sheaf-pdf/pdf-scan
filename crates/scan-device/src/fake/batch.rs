@@ -1,7 +1,7 @@
 //! A scripted device's batch: the settings clamped, sheets taken and their pages sent, and the
 //! faults a sheet's script holds fired.
 
-use std::{process, sync::mpsc::SyncSender, thread};
+use std::{process, sync::mpsc::SyncSender, thread, time::Duration};
 
 use in_progress::{Progress, Unit};
 
@@ -14,6 +14,9 @@ use crate::{
 /// The most bytes the fake draws a raw page in: past it, a page is a mistake in a test's
 /// settings or caps, refused before anything is allocated.
 const MOST_PAGE_BYTES: usize = 512 * 1024 * 1024;
+
+/// How often a side waiting on [`Fault::AwaitCancel`] checks the progress.
+const AWAIT_CANCEL_POLL: Duration = Duration::from_millis(1);
 
 /// `device`'s batch, as the module's docs say ("A batch").
 pub(super) fn scan(
@@ -230,8 +233,8 @@ impl Batch<'_> {
         Ok(())
     }
 
-    /// A scripted fault, fired: an error to end the batch with, or the thread or the process
-    /// ended.
+    /// A scripted fault, fired: an error to end the batch with, the thread or the process ended,
+    /// or a wait for the batch's cancel.
     fn fire(&self, fault: Fault) -> Result<(), ScanError> {
         match fault {
             Fault::Error(error) => {
@@ -246,6 +249,13 @@ impl Batch<'_> {
             },
             Fault::Crash => process::abort(),
             Fault::Exit(code) => process::exit(code),
+            Fault::AwaitCancel => {
+                // Nothing locked here: the sheet is the batch's own, out of the device's paper.
+                while self.progress.check().is_ok() {
+                    thread::sleep(AWAIT_CANCEL_POLL);
+                }
+                Ok(())
+            }
         }
     }
 

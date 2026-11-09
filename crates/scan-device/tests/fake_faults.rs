@@ -1,7 +1,7 @@
 //! The fake backend's faults and controls: a driver's errors scripted on a sheet's side (a jam then
 //! Continue, a double feed, an open cover, the device gone, an error to show), each fired once and
-//! the sheet kept; a hang, a crash and an exit; a cancel between sheets; a batch held by a full
-//! channel, and one whose receiver is gone.
+//! the sheet kept; a hang, a crash and an exit; a cancel between sheets, and a side that waits for
+//! it; a batch held by a full channel, and one whose receiver is gone.
 
 use std::{
     io::{self, Read, Seek, SeekFrom, Write},
@@ -629,6 +629,109 @@ fn a_cancel_after_a_duplex_front_still_delivers_its_back() {
         assert_eq!(outline(&rest), ["page 1 back"], "{taken}");
         assert_eq!((scanner.fed(), scanner.in_feeder()), (1, 2), "{taken}");
     }
+}
+
+/// A batch of three duplex sheets in gray, sheet 2 scripted with `AwaitCancel` on `side`
+/// `when`, on a thread of its own with a rendezvous channel: the events up to the wait taken, then
+/// nothing sent while the side waits, then the cancel, and the rest. Gives the events taken
+/// before the cancel and after it.
+fn await_cancel(side: Side, when: When) -> (Vec<Event>, Vec<Event>) {
+    let scanner = scanner();
+    scanner.load([
+        Sheet::new(),
+        faulting(side, when, Fault::AwaitCancel),
+        Sheet::new(),
+    ]);
+    let mut device = open(&scanner);
+    let tracker = Tracker::new();
+    // A rendezvous channel: each `send` returns once the test has taken its event.
+    let (events, received) = mpsc::sync_channel(0);
+    let batch = {
+        let tracker = tracker.clone();
+        thread::spawn(move || device.scan(&gray(Source::Feeder, true), 1, &events, &tracker))
+    };
+    // Up to the side that waits: sheet 2's `Sheet`, and its front's page where the back waits.
+    let before = match side {
+        Side::Front => 5,
+        Side::Back => 6,
+    };
+    let mut taken = Vec::new();
+    for _ in 0..before {
+        taken.push(
+            received
+                .recv_timeout(AT_MOST)
+                .expect("an event before the wait"),
+        );
+    }
+    // Where the side waits: half its rows counted midway; at a back's start, its front's whole
+    // and none of the back's yet.
+    let page = ROWS * ROW_BYTES;
+    let waits_at = match when {
+        When::Midway => ROWS / 2 * ROW_BYTES,
+        _ => page,
+    };
+    wait_for("the side waiting", || {
+        let snapshot = tracker.snapshot();
+        snapshot.total == Some(page) && snapshot.done == waits_at
+    });
+    // It waits, sending nothing and taking no sheet, until the cancel.
+    assert_eq!(
+        received.recv_timeout(A_WHILE),
+        Err(RecvTimeoutError::Timeout)
+    );
+    assert!(!batch.is_finished());
+    assert_eq!(tracker.snapshot().done, waits_at);
+    assert_eq!(within_10_s(&scanner, FakeDevice::fed), 2);
+    tracker.cancel();
+    let after: Vec<Event> = received.iter().collect();
+    assert_eq!(batch.join().unwrap(), Ok(Done::Cancelled));
+    // Sheet 3 never taken.
+    assert_eq!((scanner.fed(), scanner.in_feeder()), (2, 1));
+    (taken, after)
+}
+
+#[test]
+fn awaiting_the_cancel_midway_through_a_front_finishes_the_sheet_and_feeds_no_more() {
+    let (before, after) = await_cancel(Side::Front, When::Midway);
+    assert_eq!(
+        outline(&before),
+        [
+            "applied",
+            "sheet 1",
+            "page 1 front",
+            "page 1 back",
+            "sheet 2"
+        ]
+    );
+    // Both of sheet 2's sides, whole.
+    assert_eq!(outline(&after), ["page 2 front", "page 2 back"]);
+    for page in pages(&after) {
+        assert_eq!(
+            raw(page),
+            &pattern(Format::Gray8, 425, 550, 2, page.side).unwrap()
+        );
+    }
+}
+
+#[test]
+fn awaiting_the_cancel_at_a_back_s_start_delivers_the_front_first() {
+    let (before, after) = await_cancel(Side::Back, When::Start);
+    assert_eq!(
+        outline(&before),
+        [
+            "applied",
+            "sheet 1",
+            "page 1 front",
+            "page 1 back",
+            "sheet 2",
+            "page 2 front"
+        ]
+    );
+    assert_eq!(outline(&after), ["page 2 back"]);
+    assert_eq!(
+        raw(pages(&after)[0]),
+        &pattern(Format::Gray8, 425, 550, 2, Side::Back).unwrap()
+    );
 }
 
 #[test]

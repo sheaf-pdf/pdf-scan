@@ -12,6 +12,7 @@ use crate::{Encoding, Format};
 /// fields being public, so code that decodes caps from outside the process (from a pipe, say)
 /// checks them as it decodes and refuses caps that break them.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct Caps {
     /// The device's sources, each with what it can do: never empty.
@@ -34,6 +35,7 @@ impl Caps {
 
 /// What one source of a device can do.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SourceCaps {
     /// The source.
@@ -70,6 +72,7 @@ impl SourceCaps {
 
 /// Where the paper is scanned from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Source {
     /// The glass: one page a batch.
@@ -80,6 +83,7 @@ pub enum Source {
 
 /// Whole dpi: a list never empty, a range's `min` never past its `max`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Resolutions {
     /// These resolutions alone.
     List(Vec<u32>),
@@ -96,6 +100,7 @@ pub enum Resolutions {
 
 /// A paper size in millimetres, width by height.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SizeMm {
     /// Across, in millimetres.
     pub width: f32,
@@ -127,6 +132,7 @@ impl SizeMm {
 /// `encodings`: the encoded forms the app takes, in its order; empty (`Settings::new`'s) for raw
 /// only.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct Settings {
     /// The source to scan from.
@@ -161,6 +167,7 @@ impl Settings {
 
 /// The paper's size, as a scan asks for it.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Paper {
     /// Found by the driver, where the source can ([`SourceCaps::paper_auto`]).
@@ -171,6 +178,7 @@ pub enum Paper {
 
 /// The settings a device took for a batch, and what it changed of those asked for.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct Applied {
     /// The settings the batch scans with.
@@ -188,6 +196,7 @@ impl Applied {
 
 /// What was asked of a setting the device changed; what it took is in `Applied::settings`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Clamped {
     /// The source asked for.

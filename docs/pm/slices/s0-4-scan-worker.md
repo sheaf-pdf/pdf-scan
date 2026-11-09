@@ -899,3 +899,75 @@ need (spawning, pipes, `process_group`, `creation_flags`, `kill`) is `std`'s saf
    step would hold a client that can't finish a call.
 
 ## So far
+
+**Step 1, `scan-device`'s changes: the `serde` feature and `Fault::AwaitCancel`** (2026-11-09; one commit, "Give
+scan-device a serde feature and a fake fault that awaits the cancel", on `73f7b02`, the plan's commit). The checks
+before it: none (the plan review's are in "Plan review"; no step had been checked).
+
+- **The workspace:** `[workspace.dependencies]` gains `serde = { version = "1", features = ["derive"] }` and
+  `serde_json = "1"` (decision 37); until step 2's `scan-worker` takes them, `scan-device` is the one member
+  that does, which the manifest's comment ("joins once a second member takes it") is true of again from step 2.
+  `/Cargo.lock` gains seven packages, nothing else changed ("Locking 7 packages to highest Rust 1.89 compatible
+  versions", offline): `serde`, `serde_core` and `serde_derive` 1.0.229, `serde_json` 1.0.154, `itoa` 1.0.19,
+  `memchr` 2.8.3, `zmij` 1.0.23; `syn` stays at 3.0.9.
+- **`scan-device`'s manifest:** `serde = { workspace = true, optional = true }` and the feature `serde =
+  ["dep:serde"]`, with a comment; the self dev-dependency takes `["fake", "serde"]`, and `serde_json` joins the
+  dev-dependencies.
+- **The derives:** `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]` on the 22
+  types "`scan-device`'s changes" names, each beside its `#[derive]`; serde's defaults, no attribute else.
+- **The tests:** six unit tests in `/crates/scan-device/src/round_trip.rs`, a module of its own behind
+  `#[cfg(all(test, feature = "serde"))]`, one place listing every type the feature encodes: a function for each
+  enum giving its values (a value of every variant, those with fields at their edges, `Clamped` over every
+  source, format and paper, `Driver::Twain` at 32 and 64), passing them through `every`, which numbers each
+  value's variant by an exhaustive `match` and asserts every number has a value, so a variant added fails the
+  build until it's numbered and the test until it has a value; every variant of the 14 enums through JSON and
+  back, equal; every struct with each field set (none as its `new` leaves it; ids and messages with quotes,
+  backslashes and characters past ASCII; `WindowOwner` at 0 and `u64::MAX`), equal; `SizeMm`'s constants and
+  the `f32` edges (`0.0`, `-0.0`, the smallest subnormal, the smallest normal, `EPSILON`, `MAX`, `-MAX`) bit
+  for bit, alone and in `Paper::Size`; `NaN` and both infinities written `null` and refused on reading; the
+  form pinned on literal JSON (a `DeviceInfo`, `Driver::Twain`, `Source`, a `Range`, both `Paper`s, two
+  `ScanError`s, a `WindowOwner`); and what the model can't hold refused as it's read (a step of 0, a variant
+  it hasn't, a `DeviceInfo` missing a field). Two in `tests/fake_faults.rs` through one helper: `AwaitCancel`
+  at sheet 2's front midway in duplex, and at its back's start; each takes the events up to the wait on a
+  rendezvous channel, waits for the tracker to stand where the side waits (half the front's bytes; the front's
+  whole), sees nothing sent for 300 ms, the batch unfinished and `fed()` answering 2 (no lock held), then
+  cancels: the rest of sheet 2 delivered (both sides midway, the back alone at the back's start), each page
+  `pattern`'s, `Done::Cancelled`, `fed()` 2 and one sheet left in the feeder.
+- **The fault:** `Fault::AwaitCancel` in `/crates/scan-device/src/fake/`, fired as the others are (once, at a
+  side's start or midway), polling `progress.check()` each millisecond (`AWAIT_CANCEL_POLL`, the check the
+  batch makes between sheets), holding nothing: the sheet is the batch's own, out of the device's paper.
+- **The docs:** the crate docs' plain-data paragraph points at the feature, and "Features" gains `serde` (the
+  types, serde's default form with two literal examples, no page or event and why, a step of 0 refused,
+  JSON's `null` for a size not finite, provisional as the model is) and the cancel's wait in `fake`'s bullet;
+  the fake module's "Faults" list and `Fault`'s docs gain `AwaitCancel`; the README's paragraph and
+  "Features" both. No CHANGELOG: `scan-device` takes one when it's made ready to publish (its manifest).
+- **The MSRV probe** (`scratch/work/s0-4/msrv-probe/scan-device/`, its README): over `cargo tree -e
+  normal,build,dev --target all`, the probe's graph (newest versions, resolved offline) and the workspace's own
+  alike, 32 packages, the highest `rust-version` still 1.85 (`in-progress`, and `getrandom` through
+  `rusty-fork`'s `tempfile`); the new packages 1.71 at most (`serde_derive`, `serde_json`, `zmij`). So 1.89
+  stays. `cargo tree -p scan-device -e normal,build --target all --all-features`: 11 packages, slice 3's 8 and
+  `serde`, `serde_core` and `serde_derive`, the only new ones. `cargo +1.89 check --locked -p scan-device
+  --all-targets` clean, as a quick check.
+- **Make-fails** (`scratch/work/s0-4/step-1/make-fail.md`, its script beside it), on a worktree there, removed
+  after, the branch unchanged; each failed as it should, and the base passed after: a variant added to
+  `Status`, and one to `ScanError`, each building the library and failing the unit tests' build (`E0004` in
+  `round_trip.rs`); a variant numbered with no value, failing `every`; `SourceCaps::paper_auto` skipped by
+  serde; sizes written to three decimals (the subnormal lost); `null` read as `NaN`; `Driver` renamed snake
+  case (the literal form); and `AwaitCancel` a no-op, ending the side with an error once cancelled, and holding
+  the paper locked while it waits, each failing both new tests. The two `AwaitCancel` tests run 30 times in a
+  loop under the memory scope, none failing (`scratch/work/s0-4/step-1/await-cancel-loop.txt`, 0.3 s a run).
+- **Quick checks:** `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets -- -D
+  warnings`, the same with `--all-features`, `--lib`, and `-p scan-device --lib --features serde` (the feature
+  alone); `cargo doc` with `-D warnings`, default features, all, and `serde` alone; `cargo test --locked -p
+  scan-device` (31 units, 6 of them new; `fake_faults` 21, 2 new; the rest as they were). The core (`just
+  ci`, the test list, the commit's scans) is the step's check's.
+- **Departures from the plan, each small:** the serde tests sit in one module rather than beside each type,
+  and do more than the plan listed (`every`'s runtime half, the form pinned, the refusals, more `f32` edges
+  and both infinities); the `AwaitCancel` tests also see the side send nothing while it waits and the paper
+  unlocked, and compare the pages with `pattern`'s. The fault's docs say a batch from the feeder ends
+  `Done::Cancelled` after the wait; on the glass the batch has its one page as any cancel there leaves it
+  (`Done::OnePage`, the fake as slice 3 built it), which nothing here tests or changes.
+- **Decisions, for review with the plan's:** `round_trip.rs` named so a module called `serde` doesn't shadow
+  the crate in the derives' paths; `check()` polled rather than `is_cancelled()`, as the batch's own checks
+  are, so a `Progress` whose `check` says more is read the same; no `#[serde(...)]` attribute anywhere, the
+  plan's "serde's defaults" kept for slice 11 to weigh (Q-8).

@@ -10,11 +10,13 @@ use crate::{Caps, Done, Event, ScanError, Settings};
 ///
 /// Compared whole, and read by no one but the backend that made it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeviceId(pub String);
 
 /// A device as a listing gives it, and as an app stores it and gives it back to
 /// [`Backend::open`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct DeviceInfo {
     /// Its id.
@@ -50,6 +52,7 @@ impl DeviceInfo {
 
 /// The driver API a device is reached through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Driver {
     /// SANE, on Linux and the other Unix-like systems.
@@ -156,6 +159,7 @@ pub trait Device: Send {
 
 /// How the driver's settings window closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum WindowClosed {
     /// Its settings were accepted, and apply to scans until they're changed.
@@ -166,4 +170,5 @@ pub enum WindowClosed {
 
 /// The app's window, to own the driver's: a native handle as an integer (an `HWND` on Windows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WindowOwner(pub u64);

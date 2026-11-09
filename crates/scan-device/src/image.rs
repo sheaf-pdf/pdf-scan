@@ -7,6 +7,7 @@ use std::fmt;
 /// Each is laid out as the crate's docs say ("The raw layout"): rows top down and packed, 0 the
 /// least intensity, 16-bit samples little-endian.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Format {
     /// Black and white, a bit a pixel, eight pixels a byte with the leftmost in its most
