@@ -8,9 +8,10 @@ use crate::{Encoding, Format};
 /// its own.
 ///
 /// A backend keeps the rules its fields' docs give (at least one source, each with at least one
-/// format, and its resolutions as [`Resolutions`] says). The constructors don't check them, the
-/// fields being public, so code that decodes caps from outside the process (from a pipe, say)
-/// checks them as it decodes and refuses caps that break them.
+/// format, its resolutions as [`Resolutions`] says, and its largest paper, where it says one,
+/// finite and above 0). The constructors don't check them, the fields being public, so code that
+/// decodes caps from outside the process (from a pipe, say) checks them as it decodes and
+/// refuses caps that break them.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -48,7 +49,8 @@ pub struct SourceCaps {
     pub formats: Vec<Format>,
     /// The encoded forms it can give a page in, beside the raw ones; empty for raw only.
     pub encodings: Vec<Encoding>,
-    /// The largest paper it takes, where the driver says.
+    /// The largest paper it takes, where the driver says: its width and height finite and
+    /// above 0.
     pub max_area: Option<SizeMm>,
     /// Whether the driver can find the paper's size itself ([`Paper::Auto`]).
     pub paper_auto: bool,
@@ -81,7 +83,8 @@ pub enum Source {
     Feeder,
 }
 
-/// Whole dpi: a list never empty, a range's `min` never past its `max`.
+/// Whole dpi, each above 0: a list never empty, a range's `min` above 0 and never past its
+/// `max`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Resolutions {

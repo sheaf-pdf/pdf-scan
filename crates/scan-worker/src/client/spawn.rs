@@ -13,6 +13,16 @@ use tempfile::TempDir;
 
 use super::WorkerCommand;
 
+/// Why a worker wasn't started.
+#[derive(Debug)]
+pub(super) enum NotStarted {
+    /// Its program: not an absolute path, or the system couldn't start it.
+    Program(io::Error),
+    /// The work directory: not an absolute path, or the worker's directory, or its SANE
+    /// configuration, couldn't be made there.
+    WorkDir(io::Error),
+}
+
 /// `command` started for `driver`, to list or to open `opens`, in a private directory made under
 /// `work_dir`, its three pipes the client's; and the directory, to remove once it has exited.
 pub(super) fn spawn(
@@ -20,16 +30,20 @@ pub(super) fn spawn(
     work_dir: &Path,
     driver: Driver,
     opens: Option<&DeviceId>,
-) -> io::Result<(Child, TempDir)> {
+) -> Result<(Child, TempDir), NotStarted> {
     // A bare name would be searched for, on Windows from the current directory first.
     if !command.program.is_absolute() {
-        return Err(invalid("the worker's program isn't an absolute path"));
+        return Err(NotStarted::Program(invalid(
+            "the worker's program isn't an absolute path",
+        )));
     }
     // A relative one would be read from wherever the app then stands.
     if !work_dir.is_absolute() {
-        return Err(invalid("the work directory isn't an absolute path"));
+        return Err(NotStarted::WorkDir(invalid(
+            "the work directory isn't an absolute path",
+        )));
     }
-    let dir = private_dir(work_dir)?;
+    let dir = private_dir(work_dir).map_err(NotStarted::WorkDir)?;
     let mut process = Command::new(&command.program);
     process
         .args(&command.args)
@@ -45,11 +59,11 @@ pub(super) fn spawn(
         let name = sane_name(id);
         let backend = name.as_deref().and_then(backend_of);
         let config = ConfigDir::write(dir.path(), backend, Search::BeforeSystem)
-            .map_err(io::Error::other)?;
+            .map_err(|error| NotStarted::WorkDir(io::Error::other(error)))?;
         process.env(CONFIG_DIR_VARIABLE, config.value());
     }
     set_apart(&mut process);
-    let child = process.spawn()?;
+    let child = process.spawn().map_err(NotStarted::Program)?;
     Ok((child, dir))
 }
 

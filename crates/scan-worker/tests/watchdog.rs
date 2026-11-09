@@ -11,7 +11,7 @@ use std::{
 
 use scan_worker::scan_device::in_progress::Tracker;
 use scan_worker::scan_device::{Done, Driver, Event, Format, Source};
-use scan_worker::{Error, Timeouts};
+use scan_worker::{Error, Timeout, Timeouts};
 
 use support::{
     AT_MOST, client, client_of, outline, pages_are_pattern_s, scan, scenarios, settings, stored,
@@ -33,12 +33,19 @@ fn a_driver_that_hangs_is_stopped_after_the_silence_with_the_pages_before_it_kep
         1,
     );
     let elapsed = start.elapsed();
-    let Err(Error::Stopped { silence, stderr }) = ended else {
+    let Err(Error::Stopped {
+        timeout,
+        waited,
+        stderr,
+        ..
+    }) = ended
+    else {
         panic!("{ended:?}");
     };
+    assert_eq!(timeout, Timeout::Silence);
     assert!(
-        silence >= Duration::from_millis(500) && silence < Duration::from_secs(5),
-        "{silence:?}"
+        waited >= Duration::from_millis(500) && waited < Duration::from_secs(5),
+        "{waited:?}"
     );
     assert!(elapsed < AT_MOST, "{elapsed:?}");
     assert!(stderr.contains(scenarios::FAILING), "{stderr:?}");
@@ -71,10 +78,16 @@ fn a_worker_silent_as_it_starts_is_stopped_after_the_start_s_time() {
         client.list(Driver::Fake, AT_MOST).map(|_| ()),
         client.open(&stored(), AT_MOST).map(|_| ()),
     ] {
-        let Err(Error::Stopped { silence, .. }) = started else {
+        let Err(Error::Stopped {
+            timeout, waited, ..
+        }) = started
+        else {
             panic!("{started:?}");
         };
-        assert_eq!(silence, Duration::from_millis(300));
+        assert_eq!(
+            (timeout, waited),
+            (Timeout::Start, Duration::from_millis(300))
+        );
     }
 }
 

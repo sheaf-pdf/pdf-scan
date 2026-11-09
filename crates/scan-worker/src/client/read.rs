@@ -7,6 +7,7 @@ use std::{
     io::{self, BufRead, BufReader, Read},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -17,7 +18,7 @@ use scan_device::{Encoded, Pixels, RawImage, RawPage};
 
 use super::Limits;
 use crate::ProtocolError;
-use crate::wire::{self, Line, PageHeader, PixelsHeader, Reply};
+use crate::wire::{self, AnyHello, Line, PROTOCOL, PageHeader, PixelsHeader, Reply};
 
 /// What the reader hands the calling thread: each message as it comes, then how the output
 /// ended, or what broke the protocol, after which it reads nothing more.
@@ -44,12 +45,19 @@ impl Incoming {
 }
 
 /// The reader: `output`'s messages handed on `messages` in turn, until it ends or breaks the
-/// protocol, or the calling side is gone.
-pub(super) fn read_output(output: impl Read, limits: Limits, messages: &SyncSender<Incoming>) {
+/// protocol, or the calling side is gone; `in_page` set while it reads a page's bytes, so a
+/// caller that finds the worker exited with the output still held open knows whether a page
+/// was cut short.
+pub(super) fn read_output(
+    output: impl Read,
+    limits: Limits,
+    messages: &SyncSender<Incoming>,
+    in_page: &AtomicBool,
+) {
     let mut output = BufReader::with_capacity(1 << 16, output);
     let mut line = Vec::new();
     loop {
-        let incoming = next(&mut output, limits, &mut line);
+        let incoming = next(&mut output, limits, &mut line, in_page);
         let last = incoming.is_last();
         if messages.send(incoming).is_err() || last {
             return;
@@ -58,7 +66,12 @@ pub(super) fn read_output(output: impl Read, limits: Limits, messages: &SyncSend
 }
 
 /// `output`'s next message.
-fn next(output: &mut impl BufRead, limits: Limits, line: &mut Vec<u8>) -> Incoming {
+fn next(
+    output: &mut impl BufRead,
+    limits: Limits,
+    line: &mut Vec<u8>,
+    in_page: &AtomicBool,
+) -> Incoming {
     match wire::read_line(output, limits.line, line) {
         Ok(Line::Read) => {}
         // The rest is never read: the worker is ended.
@@ -74,7 +87,7 @@ fn next(output: &mut impl BufRead, limits: Limits, line: &mut Vec<u8>) -> Incomi
         }
     }
     match serde_json::from_slice::<Reply>(line) {
-        Ok(Reply::Page(header)) => match read_page(output, &header, limits.page) {
+        Ok(Reply::Page(header)) => match read_page(output, &header, limits.page, in_page) {
             Ok(page) => Incoming::Page(page),
             Err(None) => Incoming::End {
                 page_cut_short: true,
@@ -82,9 +95,17 @@ fn next(output: &mut impl BufRead, limits: Limits, line: &mut Vec<u8>) -> Incomi
             Err(Some(error)) => Incoming::Broken(error),
         },
         Ok(reply) => Incoming::Message(reply),
-        Err(error) => Incoming::Broken(ProtocolError::Unreadable {
-            message: error.to_string(),
-        }),
+        Err(error) => match serde_json::from_slice::<AnyHello>(line) {
+            // Another protocol's hello, read for its protocol alone, the one field a later
+            // protocol keeps: its version is never read, so none is kept.
+            Ok(hello) if hello.protocol() != PROTOCOL => Incoming::Message(Reply::Hello {
+                protocol: hello.protocol(),
+                version: String::new(),
+            }),
+            _ => Incoming::Broken(ProtocolError::Unreadable {
+                message: error.to_string(),
+            }),
+        },
     }
 }
 
@@ -95,6 +116,7 @@ fn read_page(
     output: &mut impl Read,
     header: &PageHeader,
     limit: u64,
+    in_page: &AtomicBool,
 ) -> Result<RawPage, Option<ProtocolError>> {
     let broken = |error| Err(Some(error));
     let too_large = ProtocolError::PageTooLarge {
@@ -135,7 +157,10 @@ fn read_page(
         return broken(too_large);
     };
     let mut bytes = vec![0; length];
-    if output.read_exact(&mut bytes).is_err() {
+    in_page.store(true, Ordering::Relaxed);
+    let read = output.read_exact(&mut bytes);
+    in_page.store(false, Ordering::Relaxed);
+    if read.is_err() {
         return Err(None);
     }
     let pixels = match header.pixels {
@@ -185,7 +210,8 @@ impl Stderr {
     }
 
     /// The end of what was written, once the worker's standard error has ended or `wait` has
-    /// passed: lossy where it isn't UTF-8.
+    /// passed (a process the worker started may hold it open after the worker has ended):
+    /// lossy where it isn't UTF-8.
     pub(super) fn tail(&self, wait: Duration) -> String {
         // Only ever disconnected, or timed out: nothing is sent.
         let _ = self.ended.recv_timeout(wait);
@@ -229,7 +255,9 @@ mod tests {
     fn read_all(output: &[u8], limits: Limits) -> Vec<Incoming> {
         let (sent, received) = mpsc::sync_channel(0);
         let output = output.to_vec();
-        let reader = thread::spawn(move || read_output(Cursor::new(output), limits, &sent));
+        let reader = thread::spawn(move || {
+            read_output(Cursor::new(output), limits, &sent, &AtomicBool::new(false));
+        });
         let read = received.iter().collect();
         reader.join().expect("the reader");
         read
@@ -398,6 +426,11 @@ mod tests {
             "{\"sheet\":-1}\n",
             "{\"hello\":{}}\n",
             "\"page\"\n",
+            // This protocol's hello, broken.
+            "{\"hello\":{\"protocol\":1}}\n",
+            "{\"hello\":{\"protocol\":1,\"version\":1}}\n",
+            // A hello whose protocol isn't a number.
+            "{\"hello\":{\"protocol\":\"2\",\"version\":\"9.9.9\"}}\n",
         ] {
             assert!(
                 matches!(
@@ -407,6 +440,65 @@ mod tests {
                 "{line:?}"
             );
         }
+    }
+
+    #[test]
+    fn another_protocol_s_hello_is_read_for_its_protocol_alone() {
+        for line in [
+            "{\"hello\":{\"protocol\":2}}\n",
+            "{\"hello\":{\"protocol\":2,\"version\":{\"crate\":\"9.9.9\"},\"more\":[]}}\n",
+            "{\"hello\":{\"protocol\":0,\"version\":\"0.0.0\"}}\n",
+        ] {
+            let read = read_all(line.as_bytes(), Limits::default());
+            assert!(
+                matches!(
+                    read[0],
+                    Incoming::Message(Reply::Hello { protocol, .. }) if protocol != PROTOCOL
+                ),
+                "{line:?}: {read:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_s_bytes_are_said_while_they_re_read() {
+        // A reader that stops within a page's bytes, as one does whose worker exited with its
+        // output held open by another process.
+        struct Stalls<'a>(&'a [u8], usize);
+        impl Read for Stalls<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.1 == self.0.len() {
+                    // Never, while the test holds it.
+                    thread::sleep(Duration::from_secs(3600));
+                }
+                let n = buf.len().min(self.0.len() - self.1);
+                buf[..n].copy_from_slice(&self.0[self.1..self.1 + n]);
+                self.1 += n;
+                Ok(n)
+            }
+        }
+        let output = page_line(&gray(4, 4), "[300.0,300.0]", 16) + "12345678";
+        let output: &'static [u8] = Box::leak(output.into_bytes().into_boxed_slice());
+        let in_page = Arc::new(AtomicBool::new(false));
+        let (sent, received) = mpsc::sync_channel(0);
+        let flag = Arc::clone(&in_page);
+        thread::spawn(move || read_output(Stalls(output, 0), Limits::default(), &sent, &flag));
+        let start = std::time::Instant::now();
+        while !in_page.load(Ordering::Relaxed) {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "never within the page"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(received.try_recv().is_err());
+        // Read whole, and it's said no more.
+        let whole = page_line(&gray(1, 1), "[300.0,300.0]", 1) + "x";
+        let (sent, received) = mpsc::sync_channel(2);
+        let in_page = AtomicBool::new(false);
+        read_output(Cursor::new(whole), Limits::default(), &sent, &in_page);
+        assert!(matches!(received.recv(), Ok(Incoming::Page(_))));
+        assert!(!in_page.load(Ordering::Relaxed));
     }
 
     #[test]

@@ -4,14 +4,20 @@
 
 mod support;
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
+use scan_worker::scan_device::in_progress::Tracker;
+
+use scan_worker::scan_device::Driver;
 use scan_worker::scan_device::{Event, Format, Pixels, Source};
-use scan_worker::{Error, RemoteDevice, Timeouts};
+use scan_worker::{Client, Error, RemoteDevice, Timeout, Timeouts};
 
 use support::{
     AT_MOST, aborted, client, client_of, entries, open, outline, pages_are_pattern_s, reaped, scan,
-    scenarios, settings, stored,
+    scenarios, settings, stored, worker_of,
 };
 
 /// A duplex batch through `scenario`'s worker of five sheets, whose driver ends its process
@@ -60,6 +66,7 @@ fn a_driver_s_crash_keeps_the_pages_before_it_and_says_the_abort() {
         status,
         page_cut_short,
         stderr,
+        ..
     } = error
     else {
         panic!("{error:?}");
@@ -78,6 +85,7 @@ fn a_driver_s_exit_keeps_the_pages_before_it_and_says_its_code() {
         status,
         page_cut_short,
         stderr,
+        ..
     } = error
     else {
         panic!("{error:?}");
@@ -117,7 +125,7 @@ fn a_whole_page_just_before_the_output_ends_is_kept() {
         &settings(Source::Feeder, 300, Format::Gray8, false),
         1,
     );
-    let [Event::Page(page)] = &events[..] else {
+    let [Event::Applied(_), Event::Sheet(1), Event::Page(page)] = &events[..] else {
         panic!("{events:?}");
     };
     let Pixels::Raw(image) = &page.pixels else {
@@ -176,8 +184,84 @@ fn close_and_drop_kill_and_reap_a_worker_that_won_t_exit_within_the_grace() {
     let limit = Duration::from_secs(5);
     let closed = ends_reaped(opened(), &work, limit, RemoteDevice::close);
     assert!(
-        matches!(closed, Err(Error::Stopped { silence, .. }) if silence == timeouts.grace),
+        matches!(
+            closed,
+            Err(Error::Stopped { timeout: Timeout::Exit, waited, .. }) if waited == timeouts.grace
+        ),
         "{closed:?}"
     );
     ends_reaped(opened(), &work, limit, drop);
+}
+
+#[test]
+fn a_grace_past_the_worker_s_own_10_s_lets_a_slow_driver_close() {
+    // The worker's exit, once it's asked to quit, takes 11 s: past the 10 s after its input's
+    // end at which a worker aborts, within the grace.
+    let mut timeouts = Timeouts::default();
+    timeouts.grace = Duration::from_secs(30);
+    let client = Client::new()
+        .worker(Driver::Fake, worker_of("slow-exit", 11))
+        .timeouts(timeouts);
+    let device = open(&client);
+    let start = Instant::now();
+    let closed = device.close();
+    let elapsed = start.elapsed();
+    assert!(closed.is_ok(), "{closed:?} after {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_secs(10) && elapsed < timeouts.grace,
+        "{elapsed:?}"
+    );
+}
+
+/// The worker ended unasked through `call`, by a driver that started a process holding the
+/// worker's pipes: said at once, as how it exited, not when that process lets them go.
+fn ended_with_its_pipes_held(
+    call: impl FnOnce(&mut RemoteDevice) -> Result<(), Error>,
+    scenario: &str,
+) -> Option<std::process::ExitStatus> {
+    let mut timeouts = Timeouts::default();
+    timeouts.silence = Duration::from_secs(20);
+    let mut device = open(&client(scenario).timeouts(timeouts));
+    let start = Instant::now();
+    let ended = call(&mut device);
+    let elapsed = start.elapsed();
+    assert!(elapsed < Duration::from_secs(5), "{scenario}: {elapsed:?}");
+    let Err(Error::Crashed {
+        status,
+        page_cut_short,
+        ..
+    }) = ended
+    else {
+        panic!("{scenario}: {ended:?}");
+    };
+    assert!(!page_cut_short);
+    assert!(matches!(device.caps(), Err(Error::Ended)));
+    status
+}
+
+#[test]
+fn a_worker_that_ends_with_its_output_held_open_is_seen_ended() {
+    let status = ended_with_its_pipes_held(
+        |device| device.settings_window(None).map(|_| ()),
+        "helper-window",
+    );
+    let status = status.expect("exited");
+    assert!(aborted(&status), "{status}");
+    let status = ended_with_its_pipes_held(
+        |device| {
+            let (events, received) = mpsc::sync_channel(16);
+            let ended = device.scan(
+                &settings(Source::Feeder, 300, Format::Gray8, false),
+                1,
+                &events,
+                &Tracker::new(),
+            );
+            drop(events);
+            let outline = outline(&received.iter().collect::<Vec<_>>());
+            assert_eq!(outline, ["applied", "sheet 1"]);
+            ended.map(|_| ())
+        },
+        "helper-batch",
+    );
+    assert_eq!(status.expect("exited").code(), Some(7));
 }

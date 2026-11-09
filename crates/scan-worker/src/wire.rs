@@ -15,12 +15,18 @@ use scan_device::{
 };
 use serde::{Deserialize, Serialize};
 
-/// The protocol's version: a worker's first line says it, and a client that speaks another
-/// refuses the worker.
+/// The protocol's version: a worker's first line, its `hello`, says it, and a client that speaks
+/// another refuses the worker.
 ///
-/// It changes whenever a message, or a type of the device model that a message carries, changes
-/// form, so a worker and a client built apart never misread each other: the two ship together,
-/// and a mismatch is an error, not a negotiation.
+/// It stays 1 while this crate and the device model whose types the protocol carries are
+/// provisional (0.0.x): until both are frozen, a message or a type of the model may change form
+/// without it, so a worker and its client must come from one build of this crate. Once they're
+/// frozen, it changes whenever a message, or a type a message carries, changes form, so a worker
+/// and a client built apart never misread each other. Either way the two ship together, and a
+/// mismatch is an error, not a negotiation.
+///
+/// The `hello` keeps one field in every protocol, `protocol`, a number: a client reads that
+/// alone where it can't read the rest, so a worker of any other protocol is refused as one.
 pub const PROTOCOL: u32 = 1;
 
 /// The longest request line a worker reads, its `\n` aside: 1 MiB, far more than any request
@@ -71,7 +77,8 @@ pub(crate) enum Reply {
     Hello {
         /// The protocol it speaks, [`PROTOCOL`].
         protocol: u32,
-        /// The crate's version it was built with, for a log.
+        /// The crate's version it was built with, for whoever reads the exchange: a client
+        /// reads only the protocol.
         version: String,
     },
     /// A listing's devices, every backend's in turn.
@@ -139,6 +146,25 @@ impl Reply {
             Reply::Error(_) => "error",
             Reply::Refused { .. } => "refused",
         }
+    }
+}
+
+/// A `hello` read for its protocol alone, the one field every protocol's keeps, where the rest
+/// of it isn't this protocol's.
+#[derive(Deserialize)]
+pub(crate) struct AnyHello {
+    hello: AnyHelloFields,
+}
+
+#[derive(Deserialize)]
+struct AnyHelloFields {
+    protocol: u32,
+}
+
+impl AnyHello {
+    /// The protocol it says.
+    pub(crate) fn protocol(&self) -> u32 {
+        self.hello.protocol
     }
 }
 
@@ -586,5 +612,16 @@ mod tests {
         let mut line = Vec::new();
         assert_eq!(read_line(&mut input, 10, &mut line).unwrap(), Line::TooLong);
         assert!(line.capacity() < 1024, "{}", line.capacity());
+    }
+
+    #[test]
+    fn a_number_past_f32_s_range_reads_as_an_infinity() {
+        // JSON can't write an infinity, but a worker can write a number that reads as one, so
+        // whatever reads a worker's sizes checks them itself.
+        let size: SizeMm = serde_json::from_str(r#"{"width":1e39,"height":-1e39}"#).unwrap();
+        assert_eq!(
+            (size.width, size.height),
+            (f32::INFINITY, f32::NEG_INFINITY)
+        );
     }
 }

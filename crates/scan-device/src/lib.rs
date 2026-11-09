@@ -98,7 +98,9 @@
 //!   [`RawImage`], [`Encoded`]) or an [`Event`], which may carry one: a page's bytes don't belong
 //!   in a text format, so whatever carries them carries the rest of the page beside them. A
 //!   [`Resolutions::Range`] step of 0 is refused as it's read. JSON has no `NaN` or infinity, so a
-//!   size in millimetres that isn't finite is written there as `null`, and refused on reading.
+//!   size in millimetres that isn't finite is written there as `null`, and refused on reading;
+//!   but a number past an `f32`'s range reads as an infinity, so whatever reads sizes written by
+//!   another program checks them for being finite itself.
 //!   Provisional, as the model is: until it's frozen, a change to the model changes the form, and
 //!   what was stored before may not read.
 //!

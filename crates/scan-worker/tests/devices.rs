@@ -5,14 +5,14 @@ mod support;
 
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use scan_worker::scan_device::{
     DeviceId, DeviceInfo, Driver, ScanError, WindowClosed, WindowOwner,
 };
-use scan_worker::{Client, Error, ProtocolError, RemoteDevice, Timeouts, WorkerCommand};
+use scan_worker::{Client, Error, ProtocolError, RemoteDevice, Timeout, Timeouts, WorkerCommand};
 
 use support::{AT_MOST, client, client_of, open, scenarios, stored, worker};
 
@@ -136,10 +136,16 @@ fn a_worker_that_never_answers_a_listing_is_stopped_past_its_deadline_and_grace(
     let client = client("deaf").timeouts(timeouts);
     let start = Instant::now();
     let listed = client.list(Driver::Fake, Duration::from_millis(200));
-    let Err(Error::Stopped { silence, .. }) = listed else {
+    let Err(Error::Stopped {
+        timeout, waited, ..
+    }) = listed
+    else {
         panic!("{listed:?}");
     };
-    assert_eq!(silence, Duration::from_millis(500));
+    assert_eq!(
+        (timeout, waited),
+        (Timeout::Deadline, Duration::from_millis(500))
+    );
     assert!(start.elapsed() < AT_MOST, "{:?}", start.elapsed());
     let opened = client.open(&stored(), Duration::from_millis(200));
     assert!(matches!(opened, Err(Error::Stopped { .. })), "{opened:?}");
@@ -208,21 +214,37 @@ fn a_driver_with_no_worker_is_refused() {
     ));
 }
 
-/// The start of a listing and an open through `client` refused, each with an error of `kind`.
-fn refused_at_start(client: &Client, program: &PathBuf, kind: io::ErrorKind) {
+/// The start of a listing and an open through `client` refused, each with an error of `kind`:
+/// the program `program`'s where it's given, else the work directory `dir`'s.
+fn refused_at_start(client: &Client, program: Option<&PathBuf>, dir: &Path, kind: io::ErrorKind) {
     for started in [
         client.list(Driver::Fake, AT_MOST).map(|_| ()),
         client.open(&stored(), AT_MOST).map(|_| ()),
     ] {
-        match started {
-            Err(Error::Start {
-                program: refused,
-                source,
-            }) => {
+        match (started, program) {
+            (
+                Err(Error::Start {
+                    program: refused,
+                    source,
+                    ..
+                }),
+                Some(program),
+            ) => {
                 assert_eq!(&refused, program);
                 assert_eq!(source.kind(), kind, "{source}");
             }
-            other => panic!("{other:?}"),
+            (
+                Err(Error::WorkDir {
+                    dir: refused,
+                    source,
+                    ..
+                }),
+                None,
+            ) => {
+                assert_eq!(refused, dir);
+                assert_eq!(source.kind(), kind, "{source}");
+            }
+            (other, _) => panic!("{other:?}"),
         }
     }
 }
@@ -231,17 +253,19 @@ fn refused_at_start(client: &Client, program: &PathBuf, kind: io::ErrorKind) {
 fn a_program_or_a_work_directory_not_absolute_or_missing_is_refused_at_start() {
     let relative = PathBuf::from("scan-worker-fake");
     let client = Client::new().worker(Driver::Fake, WorkerCommand::new(&relative).arg("feeder"));
-    refused_at_start(&client, &relative, io::ErrorKind::InvalidInput);
+    let temp = std::env::temp_dir();
+    refused_at_start(&client, Some(&relative), &temp, io::ErrorKind::InvalidInput);
     let work = tempfile::tempdir().unwrap();
     let missing = work.path().join("no-such-worker");
     let client = Client::new().worker(Driver::Fake, WorkerCommand::new(&missing));
-    refused_at_start(&client, &missing, io::ErrorKind::NotFound);
-    let program = PathBuf::from(env!("CARGO_BIN_EXE_scan-worker-fake"));
-    let client = support::client("feeder").work_dir("relative/work");
-    refused_at_start(&client, &program, io::ErrorKind::InvalidInput);
+    refused_at_start(&client, Some(&missing), &temp, io::ErrorKind::NotFound);
+    let relative_work = Path::new("relative/work");
+    let client = support::client("feeder").work_dir(relative_work);
+    refused_at_start(&client, None, relative_work, io::ErrorKind::InvalidInput);
     // A work directory that isn't there.
-    let client = support::client("feeder").work_dir(work.path().join("not-there"));
-    refused_at_start(&client, &program, io::ErrorKind::NotFound);
+    let not_there = work.path().join("not-there");
+    let client = support::client("feeder").work_dir(&not_there);
+    refused_at_start(&client, None, &not_there, io::ErrorKind::NotFound);
     // Nothing was left in the work directory.
     assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 0);
 }

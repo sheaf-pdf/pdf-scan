@@ -20,10 +20,10 @@ pub enum Error {
     /// No worker was given for this driver API ([`Client::worker`](crate::Client::worker)).
     #[error("no worker is given for {0:?} devices")]
     NoWorker(Driver),
-    /// The worker wasn't started: its program or the work directory isn't an absolute path, its
-    /// private directory or its SANE configuration couldn't be written, or the system couldn't
+    /// The worker wasn't started: its program isn't an absolute path, or the system couldn't
     /// start it.
     #[error("couldn't start the worker {}", program.display())]
+    #[non_exhaustive]
     Start {
         /// The worker's program.
         program: PathBuf,
@@ -31,20 +31,38 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
-    /// The worker said nothing for longer than its time allows ([`Timeouts`](crate::Timeouts)),
-    /// and was killed.
-    #[error("the worker said nothing for {silence:?}, and was ended")]
+    /// The worker's private directory wasn't made: the work directory
+    /// ([`Client::work_dir`](crate::Client::work_dir)) isn't an absolute path or isn't there, or
+    /// the directory or its SANE configuration couldn't be written in it. Nothing was started.
+    #[error("couldn't make the worker's directory under {}", dir.display())]
+    #[non_exhaustive]
+    WorkDir {
+        /// The work directory.
+        dir: PathBuf,
+        /// What went wrong.
+        #[source]
+        source: io::Error,
+    },
+    /// The worker was killed: silent for longer than its time allows, or slow to exit once asked
+    /// to quit ([`Timeouts`](crate::Timeouts)).
+    #[error("{}, and was ended", stopped(*.timeout, *.waited))]
+    #[non_exhaustive]
     Stopped {
-        /// How long it had been silent.
-        silence: Duration,
+        /// Which of its times ran out.
+        timeout: Timeout,
+        /// How long the client waited: since the worker's last line, or for [`Timeout::Exit`]
+        /// since it was asked to quit.
+        waited: Duration,
         /// The end of what it wrote to its standard error, its last 8 KiB at most, for a log.
         stderr: String,
     },
-    /// The worker's output ended unasked: it crashed, exited or was ended by a signal.
+    /// The worker ended unasked: it crashed, exited or was ended by a signal. Seen as its
+    /// output ends, or as its process exits, whatever it started may still hold its output.
     #[error("{}", crashed(.status, .page_cut_short))]
+    #[non_exhaustive]
     Crashed {
-        /// How it ended, where it had within [`Timeouts::grace`](crate::Timeouts::grace) of its
-        /// output's end; `None` where it hadn't, and was killed.
+        /// How it ended, where it had exited within [`Timeouts::grace`](crate::Timeouts::grace)
+        /// of its output's end; `None` where it hadn't, and was killed.
         status: Option<ExitStatus>,
         /// Whether its output ended within a page's bytes: that page is dropped, never given
         /// as a page.
@@ -56,13 +74,49 @@ pub enum Error {
     /// in step.
     #[error("the worker broke the protocol: {0}")]
     Protocol(ProtocolError),
-    /// The request holds a value JSON can't carry, such as a paper size that isn't finite:
-    /// nothing was sent, and the worker goes on.
-    #[error("the request holds a value the protocol can't carry, such as a size that isn't finite")]
+    /// The request can't cross to the worker: it holds a value JSON can't carry, such as a paper
+    /// size that isn't finite, or its line is longer than a worker reads (1 MiB, the protocol's
+    /// cap). Nothing was sent, and the worker goes on.
+    #[error(
+        "the request can't cross to the worker: a value JSON can't carry, such as a size that \
+         isn't finite, or a line past the protocol's 1 MiB"
+    )]
     Unsendable,
     /// An earlier failure ended the worker, so the device is closed.
     #[error("the worker ended at an earlier failure")]
     Ended,
+}
+
+/// Which of a worker's times ran out ([`Error::Stopped`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Timeout {
+    /// [`Timeouts::start`](crate::Timeouts::start), for its `hello`.
+    Start,
+    /// A listing's or an open's deadline, and [`Timeouts::grace`](crate::Timeouts::grace) past
+    /// it.
+    Deadline,
+    /// [`Timeouts::silence`](crate::Timeouts::silence), in a batch or for its caps.
+    Silence,
+    /// [`Timeouts::cancel`](crate::Timeouts::cancel), once a batch was cancelled.
+    Cancel,
+    /// [`Timeouts::grace`](crate::Timeouts::grace), to exit once asked to quit.
+    Exit,
+}
+
+/// `Stopped`'s message.
+fn stopped(timeout: Timeout, waited: Duration) -> String {
+    match timeout {
+        Timeout::Start => format!("the worker said nothing within {waited:?} of its start"),
+        Timeout::Deadline => {
+            format!("the worker hadn't answered {waited:?} after it was asked, its deadline past")
+        }
+        Timeout::Silence => format!("the worker said nothing for {waited:?}"),
+        Timeout::Cancel => {
+            format!("the worker said nothing for {waited:?} once its batch was cancelled")
+        }
+        Timeout::Exit => format!("the worker hadn't exited {waited:?} after it was asked to quit"),
+    }
 }
 
 /// `Crashed`'s message.

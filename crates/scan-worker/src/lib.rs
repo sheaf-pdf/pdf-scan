@@ -79,13 +79,29 @@
 //! ([`Limits::page`]) and, raw, checked against its format and size before anything is
 //! allocated, then made a page through [`RawImage::new`](scan_device::RawImage::new), which
 //! checks them again; a page's `dpi` must be finite and above 0; caps must keep the model's
-//! rules (a source at least, each with a format, a list of resolutions not empty, a range's `min`
-//! not past its `max`); a device listed or opened must be of the worker's driver API; and each
-//! message must come in its place. A worker that breaks one of these is killed
-//! ([`Error::Protocol`]): it can't be trusted to be in step.
+//! rules (a source at least, each with a format; a list of resolutions not empty and holding no
+//! 0, a range's `min` above 0 and not past its `max`; a largest paper finite and above 0); a
+//! device listed or opened must be of the worker's driver API, and an open must give the stored
+//! device, or another said renamed from the stored id; a batch must keep the model's order (its
+//! settings applied once, before its first sheet, with the paper finite and above 0 and each
+//! setting said changed with what was asked of it; its sheets numbered on from the first; each
+//! page of the sheet begun last, a side of it once, raw or encoded in a form the settings asked
+//! for; and the empty feeder an error only before any page); and each message must come in its
+//! place. A JSON number past an `f32`'s range reads as an infinity, so sizes are checked for
+//! being finite as they're read, not taken as finite for being JSON. A worker that breaks one of
+//! these is killed ([`Error::Protocol`]): it can't be trusted to be in step.
 //!
-//! A request is written only if it reads back from its own line as it was: JSON can't hold a
-//! paper size that isn't finite, so settings with one are [`Error::Unsendable`], nothing sent.
+//! A request is written only if it can cross: its line no longer than a worker reads (the
+//! protocol's 1 MiB), and reading back from it as it was, which a paper size that isn't finite
+//! doesn't (JSON writes it `null`). One that can't is [`Error::Unsendable`], nothing sent.
+//!
+//! On Unix, a write to a pipe whose reader has gone raises `SIGPIPE`, so a worker that ends,
+//! or closes its input, just before the client writes to it would end an app that takes the
+//! signal's default action. Rust's runtime leaves `SIGPIPE` ignored, so a write fails instead,
+//! and the client takes that as the worker's end; an app that sets the default action back (a
+//! command-line program may, for `| head`) must ignore it again before it uses a client. The
+//! client writes nothing to a worker it has found exited, which narrows the moment but can't
+//! close it.
 //!
 //! ## The watchdog, and cancel
 //!
@@ -101,7 +117,7 @@
 //! | A batch, once cancelled | `cancel`, 10 s, counted from the later of the cancel and the last line, so the sheet in flight finishes while it sends |
 //! | A listing or an open | its deadline, and `grace`, 5 s |
 //! | `caps` | `silence` |
-//! | The settings window | never: it's the user's |
+//! | The settings window | never: it's the user's, and only its answer or the worker's end ends the call |
 //!
 //! A worker writes a progress line only when the count moves, so a driver stuck mid-page goes
 //! silent. A batch's caller cancels through its [`Progress`](scan_device::in_progress::Progress),
@@ -114,15 +130,19 @@
 //! ## When a worker fails
 //!
 //! Every page a worker sent whole before it failed is the caller's already, sent on as it came.
-//! A worker whose output ends unasked is [`Error::Crashed`], with how it exited (its exit code,
-//! or on Unix the signal that ended it: an abort's is `SIGABRT`, where on Windows an abort exits
-//! with `0xC0000409`), and with a page its output ended within dropped and said; one killed for
-//! its silence is [`Error::Stopped`].
+//! A worker that ends unasked is [`Error::Crashed`], with how it exited (its exit code, or on
+//! Unix the signal that ended it: an abort's is `SIGABRT`, where on Windows an abort exits with
+//! `0xC0000409`), and with a page its output ended within dropped and said. It's seen as its
+//! output ends, or as its process exits: while a call waits on a silent worker, its process is
+//! asked after every 50 ms, so a process its driver started, which may hold the worker's pipes
+//! open long after, never holds the call. One killed for its silence is [`Error::Stopped`], with
+//! which of its times ran out ([`Timeout`]).
 //! Both keep the last 8 KiB of what the worker wrote to its standard error, which a thread drains
 //! as it comes, for the app's log. A worker that ended is closed: every later call on its device
 //! answers [`Error::Ended`]. A worker's end never holds the caller long: asked to quit, it's
-//! given [`Timeouts::grace`] to exit, then killed, and one that can't be reaped even then is left
-//! to a thread that waits for it.
+//! given [`Timeouts::grace`] to exit, its input kept open meanwhile (its end would be its client
+//! gone, which a worker aborts at 10 s later), then killed, and one that can't be reaped even
+//! then is left to a thread that waits for it.
 //!
 //! # The protocol
 //!
@@ -139,14 +159,19 @@
 //! ## The version
 //!
 //! A worker's first line, unasked, is its `hello`: the protocol it speaks, [`PROTOCOL`], and
-//! the version of this crate it was built with, for a log.
+//! the version of this crate it was built with, which a client doesn't read: it's for whoever
+//! reads the exchange.
 //!
 //! ```text
 //! {"hello":{"protocol":1,"version":"0.0.0"}}
 //! ```
 //!
 //! A client that speaks another protocol refuses the worker before it writes anything: a worker
-//! and its client ship together, so a mismatch is an error, not a negotiation.
+//! and its client ship together, so a mismatch is an error, not a negotiation. Every protocol's
+//! `hello` keeps `protocol`, a number, where it is, and a client reads that alone where it can't
+//! read the rest, so a worker of any other protocol is refused as one. While this crate is
+//! 0.0.x, the protocol stays 1 and may change form without it ([`PROTOCOL`]): a worker and its
+//! client come from one build.
 //!
 //! ## Requests, and their answers
 //!
@@ -238,10 +263,11 @@
 //! ## The end
 //!
 //! After `quit`, a worker drops its device and its backends, so the driver is closed, ends its
-//! output, and exits with success. The end of its input, its client gone, is a cancel and a
-//! `quit`; and should the call in progress not have returned 10 seconds later (a driver's call
-//! that never does), the worker aborts. Its output failing, its client gone, ends a running
-//! batch at its next event and the worker with 1.
+//! output, and exits with success; a client keeps the worker's input open until then. The end
+//! of its input, its client gone, is a cancel and a `quit`; and should the worker not have
+//! finished 10 seconds later (a driver's call, or its close, that never returns), it aborts.
+//! Its output failing, its client gone, ends a running batch at its next event and the worker
+//! with 1.
 //!
 //! ## An exchange
 //!
@@ -265,8 +291,8 @@
 //! # Stability
 //!
 //! Provisional, as the device model is: 0.0.x and unpublished. The protocol carries the model's
-//! types, so a change to the model changes the protocol, and [`PROTOCOL`] with it once the two
-//! are frozen.
+//! types, so a change to the model changes the protocol; [`PROTOCOL`] stays 1 until the two are
+//! frozen, and changes with every change of form from then on.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -277,7 +303,7 @@ mod serve;
 mod wire;
 
 pub use client::{Client, Limits, RemoteDevice, Timeouts, WorkerCommand};
-pub use error::{Error, ProtocolError};
+pub use error::{Error, ProtocolError, Timeout};
 pub use serve::serve;
 pub use wire::PROTOCOL;
 

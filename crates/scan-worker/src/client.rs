@@ -33,6 +33,9 @@ use worker::Worker;
 ///
 /// `Send` and `Sync`: a listing can run on one thread while a device scans on another.
 ///
+/// On Unix, the app keeps `SIGPIPE` ignored, as Rust's runtime leaves it: a write to a worker
+/// that has just ended would otherwise end the app (the crate's docs, "The client").
+///
 /// ```no_run
 /// use std::{sync::mpsc, thread, time::Duration};
 ///
@@ -108,6 +111,10 @@ impl Client {
     /// The devices `driver`'s worker finds now, within `deadline`: a worker started for the
     /// listing alone, and quit once it answers.
     ///
+    /// The call returns once that worker has exited, so its process and its directory are gone:
+    /// a driver slow to close holds the answer up to [`Timeouts::grace`], and one that won't
+    /// exit within it is killed and given the grace again to be reaped.
+    ///
     /// The worker's backends' errors are [`Error::Scan`]; [`ScanError::TimedOut`], the listing
     /// past its deadline, also kills the worker at once, since its driver may still be at it. A
     /// worker that hasn't answered by the deadline and [`Timeouts::grace`] is killed
@@ -139,14 +146,18 @@ impl Client {
     /// it doesn't form.
     ///
     /// Errors: [`Error::NoWorker`] where no worker is given for the driver; [`Error::Start`]
-    /// where the worker can't be started (a program or a work directory that isn't an absolute
-    /// path among it); the worker's start's, as a call's ([`Error::Stopped`] where it says
-    /// nothing within [`Timeouts::start`], [`Error::Crashed`], [`Error::Protocol`], its
-    /// [`PROTOCOL`](crate::PROTOCOL) another's among them); and the backend's, as
-    /// [`Error::Scan`]. A worker whose open failed is quit, or killed at once where it answered
-    /// [`ScanError::TimedOut`]. A worker that hasn't answered by the deadline and
-    /// [`Timeouts::grace`] is killed ([`Error::Stopped`]), and an opened device of another driver
-    /// API than the stored one's is [`Error::Protocol`].
+    /// where the worker can't be started (a program that isn't an absolute path among it), and
+    /// [`Error::WorkDir`] where its directory can't be made (a work directory that isn't an
+    /// absolute path among it); the worker's start's, as a call's ([`Error::Stopped`] where it
+    /// says nothing within [`Timeouts::start`], [`Error::Crashed`], [`Error::Protocol`], its
+    /// [`PROTOCOL`](crate::PROTOCOL) another's among them); [`Error::Unsendable`] for a stored
+    /// device whose request is longer than a worker reads; and the backend's, as
+    /// [`Error::Scan`]. A worker whose open failed is quit, the call waiting for its exit as
+    /// [`Client::list`]'s does, or killed at once where it answered [`ScanError::TimedOut`]. A
+    /// worker that hasn't answered by the deadline and [`Timeouts::grace`] is killed
+    /// ([`Error::Stopped`]). The device opened must be of the stored one's driver API, and the
+    /// stored device itself or another said renamed from the stored id
+    /// ([`RemoteDevice::renamed_from`]); else [`Error::Protocol`].
     pub fn open(&self, device: &DeviceInfo, deadline: Duration) -> Result<RemoteDevice, Error> {
         let mut worker = self.start(device.driver, Some(&device.id))?;
         match worker.open(device, deadline) {
@@ -261,8 +272,9 @@ pub struct Timeouts {
     /// line, so the sheet in flight can finish while it sends: 10 s by default.
     pub cancel: Duration,
     /// Past a listing's or an open's deadline before the worker is killed; and for a worker to
-    /// exit once it's asked to, or once its output has ended, before it's killed: 5 s by
-    /// default.
+    /// exit once it's asked to (its input kept open meanwhile, so a worker never takes its
+    /// client for gone and aborts while its driver closes), or once its output has ended, before
+    /// it's killed: 5 s by default.
     pub grace: Duration,
 }
 
@@ -319,9 +331,10 @@ impl RemoteDevice {
     /// What the device can do, per source.
     ///
     /// The worker's answer is checked as the model's rules have it: at least one source, each
-    /// with at least one format, a list of resolutions not empty and a range's `min` not past its
-    /// `max`; caps that break one are [`Error::Protocol`]. A worker silent past
-    /// [`Timeouts::silence`] is killed ([`Error::Stopped`]).
+    /// with at least one format, a list of resolutions not empty and holding no 0, a range's
+    /// `min` above 0 and not past its `max`, and a largest paper finite and above 0; caps that
+    /// break one are [`Error::Protocol`]. A worker silent past [`Timeouts::silence`] is killed
+    /// ([`Error::Stopped`]).
     pub fn caps(&mut self) -> Result<Caps, Error> {
         self.worker.caps()
     }
@@ -334,7 +347,12 @@ impl RemoteDevice {
     /// Each page's bytes are capped ([`Limits::page`]) and checked against its format and size
     /// before they're read, and a raw page is made through
     /// [`RawImage::new`](scan_device::RawImage::new), which checks them again; its `dpi` must be
-    /// finite and above 0. The pages before any failure are the caller's already.
+    /// finite and above 0. The events must keep the model's order: the settings applied once,
+    /// before the first sheet, their paper finite and above 0 and each setting said changed with
+    /// what was asked; the sheets numbered on from `first_sheet`; each page of the sheet begun
+    /// last, a side of it once, raw or encoded in a form `settings` asked for; and
+    /// [`ScanError::FeederEmpty`] only before any page. The pages before any failure are the
+    /// caller's already.
     ///
     /// `progress` is read for a cancel every 50 ms and at each message, and a cancel is sent to
     /// the worker once: the worker finishes the sheet in flight, front and back, feeds no more,
@@ -344,11 +362,12 @@ impl RemoteDevice {
     /// unlike a backend in process, the worker finishes the sheet in flight first.
     ///
     /// Errors: the backend's as [`Error::Scan`], the worker going on; [`Error::Unsendable`] for
-    /// settings JSON can't carry (a paper size that isn't finite), nothing sent; and the
-    /// worker's failures, each ending it: silent past [`Timeouts::silence`], or once cancelled
-    /// past [`Timeouts::cancel`] counted from the later of the cancel and its last line
-    /// ([`Error::Stopped`]); its output ending ([`Error::Crashed`], a page cut short dropped and
-    /// said); what the protocol or the model refuses ([`Error::Protocol`]).
+    /// settings that can't cross (a paper size that isn't finite, or encodings past the
+    /// protocol's 1 MiB line), nothing sent; and the worker's failures, each ending it: silent
+    /// past [`Timeouts::silence`], or once cancelled past [`Timeouts::cancel`] counted from the
+    /// later of the cancel and its last line ([`Error::Stopped`]); its output ending, or its
+    /// process exiting ([`Error::Crashed`], a page cut short dropped and said); what the protocol
+    /// or the model refuses ([`Error::Protocol`]).
     pub fn scan(
         &mut self,
         settings: &Settings,
@@ -361,6 +380,10 @@ impl RemoteDevice {
 
     /// Opens the driver's own settings window, owned by `owner`'s window where it gives one, and
     /// answers how it closed. The worker is never timed while it's open: it's the user's.
+    ///
+    /// So only the window's closing, or the worker's end ([`Error::Crashed`]), ends the call: a
+    /// driver whose window never closes holds the calling thread until the app ends, and nothing
+    /// ends it from another thread.
     pub fn settings_window(&mut self, owner: Option<WindowOwner>) -> Result<WindowClosed, Error> {
         self.worker.settings_window(owner)
     }
@@ -369,11 +392,16 @@ impl RemoteDevice {
     /// [`Timeouts::grace`] to exit, and killed if it hasn't; its directory is removed once it
     /// has exited.
     ///
+    /// Its input is kept open while it exits: a worker takes its input's end for its client gone,
+    /// and aborts 10 s later if it hasn't finished, so a grace longer than that still lets a slow
+    /// driver close.
+    ///
     /// Errors: a worker that exits with a failure, [`Error::Crashed`]; one killed past the grace,
-    /// [`Error::Stopped`]. A worker an earlier failure ended is closed already, so `Ok`. A worker
-    /// that can't be reaped even once killed (a process stuck in the system) is left to a
-    /// thread that waits for it and then removes its directory, so the caller is never held
-    /// past twice the grace.
+    /// [`Error::Stopped`] ([`Timeout::Exit`](crate::Timeout::Exit)). A worker an earlier failure
+    /// ended is closed already, so `Ok`. A worker that can't be reaped even once killed (a
+    /// process stuck in the system) is left to a thread that waits for it and then removes its
+    /// directory, so the caller is held at most twice the grace, and a moment more for the end
+    /// of its standard error.
     pub fn close(mut self) -> Result<(), Error> {
         self.worker.close()
     }

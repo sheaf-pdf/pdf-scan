@@ -69,6 +69,57 @@ fn a_worker_of_another_protocol_is_refused_before_anything_is_sent() {
 }
 
 #[test]
+fn a_later_protocol_s_hello_is_read_for_its_protocol_alone() {
+    assert_eq!(
+        open_breaks("later-hello"),
+        ProtocolError::Version {
+            worker: 2,
+            client: PROTOCOL
+        }
+    );
+}
+
+#[test]
+fn an_open_that_gives_another_device_unsaid_or_renamed_from_another_id_is_refused() {
+    for (scenario, what) in [
+        (
+            "opened-another",
+            "an opened device of another id than the stored one's, not said renamed",
+        ),
+        (
+            "renamed-elsewhere",
+            "an opened device said renamed from another id than the stored one's",
+        ),
+    ] {
+        assert_eq!(open_breaks(scenario), ProtocolError::Invalid { what });
+    }
+}
+
+#[test]
+fn a_batch_out_of_the_model_s_order_is_refused() {
+    let invalid = |what| ProtocolError::Invalid { what };
+    for (scenario, broken) in [
+        ("page-first", ProtocolError::Unexpected { got: "page" }),
+        ("applied-late", ProtocolError::Unexpected { got: "applied" }),
+        ("sheet-out-of-turn", invalid("a sheet numbered out of turn")),
+        (
+            "empty-after-page",
+            invalid("an empty feeder as an error after pages, where the batch is done"),
+        ),
+        (
+            "encoded-unasked",
+            invalid("a page encoded in a form the settings didn't ask for"),
+        ),
+        (
+            "huge-paper",
+            invalid("settings applied whose paper isn't finite and above 0"),
+        ),
+    ] {
+        assert_eq!(scan_breaks(scenario), broken, "{scenario}");
+    }
+}
+
+#[test]
 fn a_first_line_that_isn_t_its_hello_is_refused() {
     assert_eq!(open_breaks("no-hello"), ProtocolError::NoHello);
     assert!(matches!(

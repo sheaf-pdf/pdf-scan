@@ -5,10 +5,14 @@
 //! Its first argument names a scenario, a second a count of sheets where one takes it (3 if
 //! none). Through `serve`: those of `scenarios.rs`; `env`, a backend reporting where it was
 //! started; `slow-listing`, whose listing takes a minute and whose exit is held; `slow-exit`,
-//! whose device opens at once and whose exit is held. By hand, the protocol written as literal
-//! lines: `version`, `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`,
-//! `refuses`, `no-source`, `big-page`, `page-length`, `padding`, `zero-dpi`, `cut-short` and
-//! `page-then-end`.
+//! whose device opens at once and whose exit is held, a minute or the seconds its second
+//! argument says. By hand, the protocol written as literal lines: `version`, `later-hello`,
+//! `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`, `refuses`,
+//! `opened-another`, `renamed-elsewhere`, `no-source`, `big-page`, `page-length`, `padding`,
+//! `zero-dpi`, `cut-short`, `page-then-end`, `page-first`, `applied-late`, `sheet-out-of-turn`,
+//! `empty-after-page`, `encoded-unasked`, `huge-paper`, `helper-window` and `helper-batch`.
+//! And `held`, the process the last two start: it holds the pipes it inherits until its input
+//! ends.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +21,7 @@ mod scenarios;
 use std::{
     env, fs,
     io::{self, BufRead, Write},
-    process::ExitCode,
+    process::{Command, ExitCode},
     thread,
     time::Duration,
 };
@@ -45,13 +49,18 @@ fn main() -> ExitCode {
         "slow-listing" => {
             let backend = FakeBackend::new()
                 .with(scenarios::desk())
-                .listing_takes(Duration::from_secs(60));
-            scan_worker::serve(vec![Box::new(HeldExit(backend))])
+                .listing_takes(MINUTE);
+            scan_worker::serve(vec![Box::new(HeldExit(backend, MINUTE))])
         }
         "slow-exit" => {
             let backend = FakeBackend::new().with(scenarios::desk());
-            scan_worker::serve(vec![Box::new(HeldExit(backend))])
+            let held = args
+                .get(1)
+                .and_then(|seconds| seconds.parse().ok())
+                .map_or(MINUTE, Duration::from_secs);
+            scan_worker::serve(vec![Box::new(HeldExit(backend, held))])
         }
+        "held" => held(),
         _ => by_hand(name),
     }
 }
@@ -114,13 +123,16 @@ fn started(id: DeviceId) -> DeviceInfo {
     DeviceInfo::new(id, name, maker, model.to_string(), Driver::Sane)
 }
 
-/// A backend whose drop takes a minute, so a worker asked to quit holds its exit that long: a
-/// test sees whether its client killed it instead.
-struct HeldExit(FakeBackend);
+/// A minute.
+const MINUTE: Duration = Duration::from_secs(60);
+
+/// A backend whose drop takes as long as it says, so a worker asked to quit holds its exit that
+/// long: a test sees whether its client killed it instead, or let it finish.
+struct HeldExit(FakeBackend, Duration);
 
 impl Drop for HeldExit {
     fn drop(&mut self) {
-        thread::sleep(Duration::from_secs(60));
+        thread::sleep(self.1);
     }
 }
 
@@ -131,6 +143,32 @@ impl Backend for HeldExit {
 
     fn open(&mut self, device: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
         self.0.open(device, deadline)
+    }
+}
+
+/// A process a driver started, which inherits the worker's standard input, output and error and
+/// holds them, until its input ends, as the client lets the worker's go; a minute at most.
+fn held() -> ExitCode {
+    thread::spawn(|| {
+        thread::sleep(MINUTE);
+        std::process::exit(0);
+    });
+    let _ = io::copy(&mut io::stdin().lock(), &mut io::sink());
+    ExitCode::SUCCESS
+}
+
+/// The worker's driver's process, a `held` one, started with the worker's own standard input,
+/// output and error.
+fn start_held() {
+    let started = env::current_exe().and_then(|me| {
+        Command::new(me)
+            .arg("held")
+            // Not the worker's directory, which the client removes as the worker ends.
+            .current_dir(env::temp_dir())
+            .spawn()
+    });
+    if let Err(error) = started {
+        eprintln!("scan-worker-fake: couldn't start the held process: {error}");
     }
 }
 
@@ -152,6 +190,11 @@ fn by_hand(name: &str) -> ExitCode {
     match name {
         // Another protocol's.
         "version" => say(r#"{"hello":{"protocol":2,"version":"9.9.9"}}"#, &[]),
+        // A later protocol's, which keeps its `protocol` alone.
+        "later-hello" => say(
+            r#"{"hello":{"protocol":2,"build":{"version":[9,9,9]}}}"#,
+            &[],
+        ),
         "not-json" => say("hello, client", &[]),
         // Another message first.
         "no-hello" => say(r#"{"done":"FeederEmpty"}"#, &[]),
@@ -159,8 +202,11 @@ fn by_hand(name: &str) -> ExitCode {
         "silent" => {}
         // Its hello, and never an answer.
         "deaf" => say(HELLO, &[]),
-        "long-line" | "out-of-place" | "refuses" | "no-source" | "big-page" | "page-length"
-        | "padding" | "zero-dpi" | "cut-short" | "page-then-end" => {
+        "long-line" | "out-of-place" | "refuses" | "opened-another" | "renamed-elsewhere"
+        | "no-source" | "big-page" | "page-length" | "padding" | "zero-dpi" | "cut-short"
+        | "page-then-end" | "page-first" | "applied-late" | "sheet-out-of-turn"
+        | "empty-after-page" | "encoded-unasked" | "huge-paper" | "helper-window"
+        | "helper-batch" => {
             say(HELLO, &[]);
             let Some(open) = request(&mut input) else {
                 return ExitCode::SUCCESS;
@@ -170,16 +216,32 @@ fn by_hand(name: &str) -> ExitCode {
                 "long-line" => say(&"x".repeat((1 << 20) + 1), &[]),
                 "out-of-place" => say(r#"{"devices":[]}"#, &[]),
                 "refuses" => say(r#"{"refused":{"reason":"not today"}}"#, &[]),
+                // Another device than the stored one, not said renamed; and one said renamed
+                // from another id than the stored one's.
+                "opened-another" | "renamed-elsewhere" => {
+                    let mut info = open["open"]["device"].clone();
+                    info["id"] = json!("fake:somebody-else");
+                    let renamed_from = match name {
+                        "renamed-elsewhere" => json!("fake:never-stored"),
+                        _ => Value::Null,
+                    };
+                    let opened = json!({"opened": {"info": info, "renamed_from": renamed_from}});
+                    say(&opened.to_string(), &[]);
+                }
                 _ => {
                     let device = &open["open"]["device"];
                     say(
                         &json!({"opened": {"info": device, "renamed_from": null}}).to_string(),
                         &[],
                     );
-                    // `caps` or `scan`, answered as one would be.
-                    if request(&mut input).is_none() {
+                    // `caps`, `scan` or `settings_window`, answered as one would be.
+                    let Some(asked) = request(&mut input) else {
                         return ExitCode::SUCCESS;
-                    }
+                    };
+                    let asked = &asked["scan"]["settings"];
+                    let applied = |settings: &Value| {
+                        json!({"applied": {"settings": settings, "clamped": []}}).to_string()
+                    };
                     let page = |pixels: &str, dpi: &str, bytes: usize| {
                         format!(
                             r#"{{"page":{{"pixels":{pixels},"dpi":{dpi},"sheet":1,"side":"Front","side_known":"Inferred","bytes":{bytes}}}}}"#
@@ -217,6 +279,51 @@ fn by_hand(name: &str) -> ExitCode {
                             &[0xff, 0xff],
                         ),
                         "zero-dpi" => say(&page(&gray(1, 1), "[0.0,300.0]", 1), &[0]),
+                        // Out of the model's order, each where its line says.
+                        "page-first" => say(&page(&gray(1, 1), "[300.0,300.0]", 1), &[0]),
+                        "applied-late" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
+                            say(&applied(asked), &[]);
+                        }
+                        "sheet-out-of-turn" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
+                            say(r#"{"sheet":3}"#, &[]);
+                        }
+                        "empty-after-page" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
+                            say(&page(&gray(1, 1), "[300.0,300.0]", 1), &[0]);
+                            say(r#"{"error":"FeederEmpty"}"#, &[]);
+                        }
+                        // A JPEG, where the settings ask for raw pages alone.
+                        "encoded-unasked" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
+                            say(
+                                &page(r#"{"encoded":{"kind":"Jpeg"}}"#, "[300.0,300.0]", 4),
+                                b"JPEG",
+                            );
+                        }
+                        // A paper too large for its number: it reads as an infinity.
+                        "huge-paper" => {
+                            let mut settings = asked.clone();
+                            settings["paper"] = json!({"Size": {"width": 1e39, "height": 297.0}});
+                            say(&applied(&settings), &[]);
+                        }
+                        // The driver starts a process that holds the worker's pipes, then ends the
+                        // worker: an abort as its window opens, an exit with 7 within a batch.
+                        "helper-window" => {
+                            start_held();
+                            std::process::abort();
+                        }
+                        "helper-batch" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
+                            start_held();
+                            std::process::exit(7);
+                        }
                         // Half its bytes, then the end.
                         "cut-short" => {
                             say(&page(&gray(100, 100), "[300.0,300.0]", 10_000), &[0; 5000]);
@@ -224,6 +331,8 @@ fn by_hand(name: &str) -> ExitCode {
                         }
                         // A whole page, then the end, with no `done`.
                         "page-then-end" => {
+                            say(&applied(asked), &[]);
+                            say(r#"{"sheet":1}"#, &[]);
                             say(
                                 &page(&gray(100, 100), "[300.0,300.0]", 10_000),
                                 &[7; 10_000],

@@ -23,15 +23,18 @@ opens, and makes the device model's calls through it, with an error of its own b
 starts in a private directory of its own, where a SANE worker opening a stored device finds a configuration
 naming only that device's backend. The client trusts nothing a worker says: every line and page is capped
 before it's read, a page checked against its format and size before anything is allocated, and the model's
-rules checked. A watchdog kills a worker silent past its time, a cancel allowed to finish the sheet in flight;
-the pages sent before any failure are the caller's, and a crash says how the worker exited and keeps the end of
-its standard error.
+rules checked, a batch's order among them. A watchdog kills a worker silent past its time, a cancel allowed to
+finish the sheet in flight, and a silent worker's process is watched, so its end is seen even where a process
+its driver started holds its pipes; the pages sent before any failure are the caller's, and a crash says how the
+worker exited and keeps the end of its standard error. On Unix, an app keeps `SIGPIPE` ignored, as Rust's
+runtime leaves it.
 
 ## Features
 
 - `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, and workers that break the
   protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang, crash and exit by
-  design. The library is the same with it or without.
+  design. It turns on `scan-device`'s own `fake`, which then appears through the re-exported
+  `scan_worker::scan_device::fake`; the rest of the library is the same with it or without.
 
 Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
 together. No `unsafe` code.

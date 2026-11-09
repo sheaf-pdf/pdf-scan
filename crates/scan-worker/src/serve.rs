@@ -20,8 +20,8 @@ use scan_device::{
 
 use crate::wire::{self, Line, PROTOCOL, PageHeader, PixelsHeader, REQUEST_LIMIT, Reply, Request};
 
-/// How long a worker whose input has ended waits for its call in progress to return before it
-/// aborts.
+/// How long a worker whose input has ended waits for its call in progress, or its driver's
+/// close, to return before it aborts.
 const ORPHAN_GRACE: Duration = Duration::from_secs(10);
 
 /// How long a batch's events may pause before its progress is read anyway.
@@ -43,13 +43,14 @@ const PROGRESS_POLL: Duration = Duration::from_millis(100);
 ///
 /// It returns once the device and the backends are dropped (closing the driver): with success
 /// after `quit` or the end of its input, which also cancels a running batch; with 1 where its
-/// output failed, the client gone, which ends a running batch at its next event. A client gone
-/// while a driver's call never returns leaves nothing to answer, so 10 seconds after its input
-/// ends, if that call still hasn't returned, the worker ends its process with
-/// [`std::process::abort`], which runs no exit handler beside the stuck driver: a worker never
-/// outlives its client by more than that, and the system may keep a crash report or a core of
-/// it. A backend's panic isn't caught: the worker ends as a panicking program does, its message
-/// on standard error.
+/// output failed, the client gone, which ends a running batch at its next event. A client keeps
+/// the worker's input open after `quit` until the worker has exited, so its input's end means
+/// its client is gone; and a client gone while a driver's call, or the driver's close as the
+/// worker quits, never returns leaves nothing to answer. So 10 seconds after its input ends, if
+/// it still hasn't returned, the worker ends its process with [`std::process::abort`], which
+/// runs no exit handler beside the stuck driver: a worker never outlives its client by more
+/// than that, and the system may keep a crash report or a core of it. A backend's panic isn't
+/// caught: the worker ends as a panicking program does, its message on standard error.
 ///
 /// ```no_run
 /// use std::process::ExitCode;
