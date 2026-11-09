@@ -33,8 +33,14 @@ As of 2026-11-08.
     them (`crates/scan-device-seam.md`, first version written 2026-11-08), the model provisional until S4's
     `twain` backend; S4's spike made end to end; sheaf's adoption of the device crates after S4 at the
     earliest (`sheaf/swaps.md`).
-- **Next:** Greg's rulings on `asks.md` and the proposals' handoff; then S1 slice 1 (the workspace and the
-  harness), reading sheaf and pdf-lint for drift first.
-- **Waiting on Greg:** `asks.md`, 6 questions; whether the repository goes public (ask 7 bears on it); PL-1 to
-  PL-3, ready to hand off on his OK; PL-4, which first needs his call on pdf-lint's "the interpreter stays
-  out" line.
+  - S0 added, the scan devices first (Greg): S3 and S4 folded into `milestones/s0-devices.md`, twelve slices,
+    Linux then Windows; S1 and S2 follow. The workspace S1 slice 1 had built (stashed; copied into
+    `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it; 6
+    and 7 taken as S0 slice 1 starts.
+- **Running: S0 slice 1, `sane-dl` and the workspace it starts**, on branch `s0-1-sane-dl`, through the
+  `scan-slice` workflow (`.claude/workflows/scan-slice.js`, local): its plan in `slices/`, a commit per step
+  on the branch, nothing pushed.
+- **Next:** the slice's run, its code review and fixes; then Greg's review, and on his word the push and the
+  pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note revised.
+- **Waiting on Greg:** the slice's review and its push; `asks.md`, asks 2 and 5; PL-1 to PL-3, ready to hand
+  off on his OK; PL-4, which first needs his call on pdf-lint's "the interpreter stays out" line.

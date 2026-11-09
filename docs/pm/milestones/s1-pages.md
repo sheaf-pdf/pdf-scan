@@ -3,12 +3,15 @@
 **The pixel crates cut from sheaf, sheaf's output held byte for byte.** Needs nothing unbuilt: no scanner,
 no PDF crate.
 
-1. **The workspace.** `Cargo.toml` (resolver 3, edition 2024, MSRV measured against image, imageproc, tiff
-   and rxing, the family's 1.89 if they allow), MIT and Apache-2.0 license files, a justfile (`ci`, `clippy`,
-   `test`, `fuzz`, the gates), CI on Ubuntu, Windows and macOS, and the boundary gates over `cargo tree`.
-   The harness: an export of sheaf at a pinned commit beside the crates, as pdf-lint's `scratch/harness` is,
-   so each crate's output is compared with sheaf's own code's on the same inputs. A git repository; its
-   remote on Greg's word (ask 1).
+1. **The four crates join the workspace, and the harness.** The workspace itself comes with S0 slice 1; this
+   slice adds `scan-fixtures`, `scan-image`, `scan-cleanup` and `patch-codes`, empty, with their MSRVs, the
+   pages layer's gates, and the harness: an export of sheaf at a pinned commit beside the crates, as
+   pdf-lint's `scratch/harness` is, so each crate's output is compared with sheaf's own code's on the same
+   inputs. Started once on 2026-11-08 before S0 took the lead, its work kept in `scratch/stash-s1-1/` (and git's
+   stash): the MSRVs measured then (`scan-image` 1.92, for hayro-ccitt 0.5.0; the other three 1.89, the
+   family's floor; each over its own dependency graph), the gates and each shown to fail on its violation, and
+   the harness building sheaf's `sheaf-image` at `3232a35` (`scratch/harness/`). Checked: as then, again on
+   the workspace S0 leaves.
 2. **scan-fixtures.** `codes::fixture` moved: the synthetic pages, the degradations, codes drawn. Checked:
    the same pixels as sheaf's for every seed and step, through the harness.
 3. **scan-image.** `io` and `encode` moved, anyhow to thiserror, with BUG-1 to BUG-4 fixed (sheaf's B24,

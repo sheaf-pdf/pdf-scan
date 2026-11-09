@@ -75,18 +75,39 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   it; published alphas are pinned exactly (Greg, the same day: "pin alphas exactly is fine"), unpublished
   crates taken by path; the family is read again before each slice that touches it (`pdf-lint/README.md`).
 - **The device layer is built bindings first, its model frozen late** (Greg, 2026-11-08, taking the
-  recommendation: "make the edits"). `sane-dl` comes first in S3 (it follows SANE alone and needs no model);
-  a seam note (`crates/scan-device-seam.md`) records how each API delivers each concept, before
-  `scan-device`'s code; the model stays provisional (0.0.x) through S3 and is frozen in S4, once the `twain`
-  backend has been through it (`milestones/s3-linux-devices.md`, `milestones/s4-windows.md`).
-- **sheaf adopts the device crates after S4 at the earliest, and maybe later** (Greg, the same day: "for
+  recommendation: "make the edits"). `sane-dl` comes first (it follows SANE alone and needs no model); a
+  seam note (`crates/scan-device-seam.md`) records how each API delivers each concept, before
+  `scan-device`'s code; the model stays provisional (0.0.x) through the Linux slices and is frozen once the
+  `twain` backend has been through it (`milestones/s0-devices.md`, slice 11).
+- **sheaf adopts the device crates after S0 at the earliest, and maybe later** (Greg, the same day: "for
   swaps we may delay sheafs adoption even further"; `sheaf/swaps.md`).
 - **Where the crates live: this workspace, its own repository** (ask 1, answered by Greg, 2026-11-08: "push
   to a new repo under sheaf-pdf/pdf-scan"): github.com/sheaf-pdf/pdf-scan, created private, its plan in
-  `docs/pm/` and local-only material in `scratch/`. Whether it goes public is open; ask 7 (tracked files
-  naming sheaf) bears on it.
+  `docs/pm/` and local-only material in `scratch/`. It went public the same day (below).
 - **The repository is public; nothing private goes in it** (Greg, 2026-11-08: "it can be public as long as
   we don't have any private info in the docs"). So: no local paths, usernames or session paths (crate sources
   are cited by docs.rs, sheaf's by GitHub at its pinned commit); nothing from pdf-lint's unpublished plan (its
   backlog and audit IDs, its slices, its unpushed branches), whose assessment and the proposals to it stay
   local in `scratch/pdf-lint/`; facts about sheaf only as its own public plan has them.
+- **S0, the scan devices, comes first** (Greg, 2026-11-08: "we want to add a s0 milestone for the scan
+  devices. the first slice that i want to start a workflow for is the sane-dl"; taking the recommendations
+  he was offered). So:
+  - S0 takes all the device work, S3 and S4 as they were: Linux slices first (`sane-dl` first), then
+    Windows; then S1 pages and S2 PDF. This answers ask 3 (the order: devices first, the option it didn't
+    recommend) and ask 4 (device work starts before a scanner is at hand). Slices waiting on hardware don't
+    hold S1 back (`milestones/s0-devices.md`).
+  - The workspace (`Cargo.toml`, licenses, justfile, CI, gates, README), first built for S1 and stashed, is
+    laid by S0 slice 1, reshaped around `sane-dl`; S1 slice 1 keeps the pixel crates, their MSRVs and the
+    harness.
+  - Slices run through a reusable workflow, `scan-slice` (`.claude/workflows/scan-slice.js`, local and
+    untracked), modelled on pdf-lint's `family-slice`: plan, plan review, an implementing and a checking agent
+    per step, code review, fixes; steered by a control file, restartable part-way.
+  - The workflow's agents commit on the slice's branch as they go (the `Co-Authored-By` trailer, messages
+    never naming sheaf); the branch isn't pushed and no pull request opened without Greg's word.
+- **Asks 6 and 7, taken as recommended as S0 slice 1 starts** (the asks' standing rule), each open to Greg's
+  review:
+  - ask 6, the names: `scan-device`, `sane-dl`, `twain-dsm`, `scan-worker`, `scan-image`, `scan-cleanup`,
+    `patch-codes`, `pdf-images`, `pdf-scan`, `scan-fixtures`;
+  - ask 7, the standing rules: pdf-lint's, with the first narrowed: code, crate docs, crate READMEs and commit
+    messages never name sheaf (the org's name in a URL aside); `docs/pm/` may, keeping nothing private.
+    `just gates` checks the files.

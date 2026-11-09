@@ -21,7 +21,7 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
     `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so none outlives the app; the worker's stdout and stderr always
     drained (undrained pipes stall a worker; NAPS2 has a TODO for it); an optional spare worker kept warm.
 - **Stability:** provisional with `scan-device`'s model, whose types its protocol carries; frozen with it at
-  0.1.0 in S4, the protocol's version bumped once then.
+  0.1.0 in S0 slice 11, the protocol's version bumped once then.
 - **Tested by:** the `fake` backend through a real worker process on every runner: a hang killed with pages
   kept, a crash with pages kept, a cancel mid-page, a protocol mismatch, a truncated page. The throughput
   share of M5 slice 6's speed gate: 300 dpi color pages (about 25 MB raw) at 2.3 a second through the pipe,

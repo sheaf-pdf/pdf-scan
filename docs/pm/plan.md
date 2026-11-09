@@ -82,16 +82,15 @@ Ten crates in three layers, nine published and one for tests (details and bounda
 
 ## The milestones
 
-Details in `milestones/`. Order by what can be checked here: what needs neither a scanner nor the family
-first, then the PDF crates on the family, then devices on fakes, then what needs Windows and real drivers.
+Details in `milestones/`. Devices first, by Greg's order (2026-11-08), on fakes and SANE's own test backend
+where no scanner is at hand; then the pixel crates cut from sheaf; then the PDF crates on the family.
 
 | # | Milestone | Crates | Needs | State |
 |---|---|---|---|---|
+| S0 | **Scan devices:** SANE, the device model (provisional) and the worker on Linux; then TWAIN and WIA on Windows; the model frozen | `sane-dl`, `scan-device` (`fake`, `sane`, `twain`, `wia`), `scan-worker`, `twain-dsm` | Nothing unbuilt; by hand, scanners; for Windows, a Windows machine | Planned |
 | S1 | **Pages:** the pixel crates cut from sheaf, sheaf's output held byte for byte | `scan-fixtures`, `scan-image`, `scan-cleanup`, `patch-codes` | Nothing unbuilt | Planned |
 | S2 | **PDF:** scanned pages to PDF and back, on the family | `pdf-images`, `pdf-scan` | S1's `scan-image`; the family (alphas; its writers built, unpublished) | Planned |
-| S3 | **Devices on Linux:** SANE, then the model (provisional), the worker | `sane-dl`, `scan-device` (`fake`, `sane`), `scan-worker` | Nothing unbuilt; by hand, a scanner (ask 4) | Planned |
-| S4 | **Windows:** TWAIN in both bitnesses, and WIA; the device model frozen | `twain-dsm`, `scan-device` (`twain`, `wia`) | S3; a Windows machine with a scanner (ask 4) | Planned |
-| — | Later: macOS (`ica`), a second barcode engine, a faster cleanup if S3's speed gate asks for it | | | — |
+| — | Later: macOS (`ica`), a second barcode engine, a faster cleanup if S0 slice 4's throughput asks for it | | | — |
 
 **sheaf's side** is sheaf's own track, as pdf-lint's family has "sheaf's migration": sheaf swaps its copy
 for each crate in a PR of its own, when Greg says, and its copy goes, as it went for pdf-lint's checker.
@@ -101,12 +100,13 @@ which of sheaf's entries it closes.
 
 ## Standing rules
 
-Proposed (ask 7): pdf-lint's, which Greg set for that workspace, and sheaf's on licenses. One is ruled already:
-sheaf isn't changed from here (decisions.md, "Made here").
+pdf-lint's, which Greg set for that workspace, and sheaf's on licenses, taken as S0 slice 1 starts (ask 7,
+as recommended; decisions.md, "Made here").
 
-- **Tracked files and commit messages never mention** sheaf, its milestones, the corpus or anything counted on
-  it, or `scratch/` (`docs/pm/`, tracked and naming all of them, is ask 7's open point). They say what the
-  code does, not where it came from.
+- **Code, crate docs, crate READMEs and commit messages never mention** sheaf, its milestones, the corpus
+  or anything counted on it, or `scratch/`; the org's name in a URL (`github.com/sheaf-pdf/…`) aside. They
+  say what the code does, not where it came from. `docs/pm/` may name them, keeping nothing private
+  (decisions.md). `just gates` checks every file outside `docs/pm/`.
 - **Nothing is published** (crates.io, tags, releases), pushed or merged without Greg's word. The PDF
   crates can't publish before the family crates they take are on crates.io (no path dependencies there):
   `pdf-images`' are, as alphas; `pdf-scan`'s pdf-structure and pdf-content-streams aren't yet

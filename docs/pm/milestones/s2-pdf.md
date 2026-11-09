@@ -37,5 +37,5 @@ PL-4 (`pdf-lint/README.md`).
 
 **Done when** both crates pass, and a scan written by `pdf-scan` and read back by it gives the same samples
 and words. Publishing waits on the family's: `pdf-images` on pdf-structure's first alpha (and
-pdf-content-streams', for inline images); `pdf-scan` on pdf-content-streams' and pdf-semantics' too. With exact pins, each family alpha
-means a release here.
+pdf-content-streams', for inline images); `pdf-scan` on pdf-content-streams' and pdf-semantics' too. With
+exact pins, each family alpha means a release here.

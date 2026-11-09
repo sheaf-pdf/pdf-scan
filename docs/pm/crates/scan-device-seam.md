@@ -4,13 +4,14 @@
 ImageCaptureCore (ICA) deliver it, what the model makes of it, and what's still to settle. Paths are from
 `docs/pm/`.
 
-**Status: first version, 2026-11-08, written before any driver layer exists** (Greg asked for it ahead of S3).
-It's drawn from M5 proposals 4 to 10 (`scratch/reference/sheaf/m05-scan/proposals/`), sheaf's
+**Status: first version, 2026-11-08, written before any driver layer exists** (Greg asked for it ahead of the
+device slices). It's drawn from M5 proposals 4 to 10 (`scratch/reference/sheaf/m05-scan/proposals/`), sheaf's
 `research/scanners.md`, the survey's notes (`research/prior-art/notes/sane-and-network-scanning.md`,
-`twain-wia-ica.md`), `sane.h` (sane-backends' master) and `twain.h` 2.5 (twain-dsm), the last two read for
-the constants named here. ICA's names are Apple's, unchecked here: each is marked "to confirm". It's revised
-in S3 step 2 (after `sane-dl` is written), after S4's spike, and whenever a backend finds the model lacking,
-each change said. The model it describes is provisional until S4 freezes it (`milestones/s4-windows.md`).
+`twain-wia-ica.md`), `sane.h` (sane-backends' master) and `twain.h` 2.5 (twain-dsm), the last two read for the
+constants named here. ICA's names are Apple's, unchecked here: each is marked "to confirm". It's revised in S0
+slice 2 (after `sane-dl` is written), after the TWAIN spike (S0 slice 7), and whenever a backend finds the
+model lacking, each change said. The model it describes is provisional until S0 slice 11 freezes it
+(`milestones/s0-devices.md`).
 
 ## The rules it keeps
 
@@ -27,7 +28,7 @@ each change said. The model it describes is provisional until S4 freezes it (`mi
 
 | API | How |
 |---|---|
-| SANE | `sane_get_devices` (optionally local only) gives each device's `name`, `vendor`, `model`, `type`. Slow (10.7 s here with nothing attached). No attach or detach events. The name is the backend's: fujitsu's carries the model and a serial (`fujitsu:fi-6130dj:…`), others a USB bus address that changes on replugging (to confirm per backend in S3). |
+| SANE | `sane_get_devices` (optionally local only) gives each device's `name`, `vendor`, `model`, `type`. Slow (10.7 s here with nothing attached). No attach or detach events. The name is the backend's: fujitsu's carries the model and a serial (`fujitsu:fi-6130dj:…`), others a USB bus address that changes on replugging (to confirm per backend in S0 slice 1). |
 | TWAIN | The DSM lists sources (`DAT_IDENTITY`, `MSG_GETFIRST`/`MSG_GETNEXT`) as `TW_IDENTITY`s: product name, manufacturer, product family, version. Fast and local, but per bitness: a 64-bit DSM lists 64-bit sources only. A source is opened by its identity. No serial. `MSG_DEVICEEVENT` reports events of an open source, not attach and detach. |
 | WIA | `IWiaDevMgr2::EnumDeviceInfo`: a device id string, name, manufacturer. `RegisterEventCallbackInterface` can report connect and disconnect. |
 | ICA | `ICDeviceBrowser` and its delegate: devices added and removed as they come (`didAddDevice`, `didRemoveDevice`), asynchronously; each with a persistent id (to confirm). |
@@ -112,7 +113,7 @@ right only while no page is dropped, hence asking drivers not to drop blanks (se
 and turn backs (proposal 10's "Scan backs") knowing which it has.
 
 **To settle:** which drivers fill `TWEI_PAGESIDE` (the fi-6130's FUJITSU TWAIN32 and PaperStream IP, by hand
-in S4); whether WIA or ICA says the side anywhere.
+in S0 slice 12); whether WIA or ICA says the side anywhere.
 
 ## 5. The end of a batch
 
@@ -146,7 +147,7 @@ surfaced. `Stopped` stays the watchdog's (proposal 4). Pages before an error are
 not.
 
 **To settle:** what "Continue" after a jam is in each API (SANE: `sane_cancel`, then `sane_start` again;
-TWAIN: whether the source stays enabled or needs `MSG_RESET` and enabling again, S4's spike and the hand
+TWAIN: whether the source stays enabled or needs `MSG_RESET` and enabling again, S0's TWAIN spike and the hand
 check; WIA: a new `Download`); whether `Busy` and `Gone` need telling apart for the user beyond their words.
 
 ## 7. Cancel
@@ -164,8 +165,8 @@ calls it). Each backend does it its way: SANE by not calling `sane_start` again 
 stuck), TWAIN by `MSG_RESET` after the current transfer ends, WIA by refusing the next stream, ICA to confirm.
 Stopping mid-page is the watchdog's: it kills the worker (proposal 4).
 
-**To settle:** whether each API can finish the page in flight and feed no more, or only stop at once (S3 for
-SANE; S4's spike for TWAIN; WIA and ICA by hand).
+**To settle:** whether each API can finish the page in flight and feed no more, or only stop at once (S0's SANE
+slices for SANE; the TWAIN spike for TWAIN; WIA and ICA by hand).
 
 ## 8. Threads and events
 
@@ -195,7 +196,7 @@ cancels and requests to it. `scan-worker` sees one shape for all of them.
 it is a backend call, and its settings then apply to scans until changed (proposal 7).
 
 **To settle:** which window owns the dialog: the worker's hidden window owns it, so it can open behind the app;
-passing the app's window handle to the worker for the driver to use as its owner is the likely answer (S4).
+passing the app's window handle to the worker for the driver to use as its owner is the likely answer (S0 slice 9).
 
 ## 10. What drivers report beside a page
 
@@ -222,15 +223,15 @@ Each section's "To settle", gathered, with what settles it:
 
 | Unknown | Settled by |
 |---|---|
-| SANE names that change on replugging, per backend; a fallback by vendor and model | S3 step 1, SANE's backends' sources and the office's scanners |
-| Whether SANE can stop after the page in flight | S3 step 1, the `test` backend |
-| Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | S4's spike |
-| How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S4 step 3 |
-| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | S4's spike |
-| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S4's hand checks; the `ica` slice |
-| "Continue" after a jam in TWAIN | S4's spike and hand check |
-| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S3's throughput gate; S4 |
-| The raw layout's 1-bit polarity and 16-bit byte order | S3 step 3 |
-| The driver window's owner across processes | S4 step 3 |
+| SANE names that change on replugging, per backend; a fallback by vendor and model | S0 slice 1, SANE's backends' sources and the office's scanners |
+| Whether SANE can stop after the page in flight | S0 slice 1, the `test` backend |
+| Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | S0 slice 7, the spike |
+| How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S0 slice 9 |
+| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | S0 slice 7, the spike |
+| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S0 slice 12, the hand checks; the `ica` slice |
+| "Continue" after a jam in TWAIN | S0 slices 7 and 12 |
+| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S0 slice 4's throughput gate; slice 9 |
+| The raw layout's 1-bit polarity and 16-bit byte order | S0 slice 3 |
+| The driver window's owner across processes | S0 slice 9 |
 | Every ICA name marked "to confirm"; its run loop in a worker | The `ica` slice (later) |
 | Where driver-reported patch codes go (FEAT-5) | Later |

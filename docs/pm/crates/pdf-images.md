@@ -55,6 +55,7 @@ Layer: PDF (`crates/README.md`). Paths are from `docs/pm/`.
     decoders are crate-private and keep nothing), and pins `hayro-ccitt = "0.3"`, two breaking releases
     behind 0.5.0: one version across the two workspaces is PL-3 (Q-1). Cargo unifies features, so turning on
     zune-jpeg's SIMD here turns it on for `image-ends` too.
-  - Publishes once pdf-structure's first alpha is out, and pdf-content-streams' for inline images; pdf-objects, pdf-filters and pdf-color are on crates.io already, pinned exactly.
+  - Publishes once pdf-structure's first alpha is out, and pdf-content-streams' for inline images;
+    pdf-objects, pdf-filters and pdf-color are on crates.io already, pinned exactly.
   - Whether hayro-jpeg2000's `components()` come before or after its color conversion and upsampling: read
     or test it.

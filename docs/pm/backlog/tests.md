@@ -14,13 +14,11 @@ From the prior-art survey's "What is still unverified" (`research/prior-art/READ
 
 - **TEST-1** · pdf-scan · S2 · open — **The text layer's viewer matrix.** Early in S2, before the layer is called done: the layer in PDFium, pdf.js and Poppler (`pdftotext` run as a process), and Preview by hand, for right-to-left words, CJK, combining marks, text beyond the BMP, vertical lines, and a word across a `BT`; selection boxes and copy and paste as well as extraction. It settles Q-2 and Q-3 and checks BUG-6. Also: the cause of OCRmyPDF 17.13's "lost characters" in PDFium-based viewers with glyphless fonts (undescribed in its notes), and whether it touches a font that maps every CID to glyph 1; whether sheaf's separately scaled space avoids OCRmyPDF 17.4's selection running past the words; how pdf.js treats render mode 3 in extraction. veraPDF for `.notdef` (its license unread). *(survey, pdf images and writing; OCRmyPDF 17.x release notes)*
 
-## For S3 (devices on Linux)
+## For S0 (scan devices)
 
-- **TEST-2** · sane-dl · S3 · open — **SANE in CI: the `test` and `pnm` backends, and the bindings against the header.** Check that Ubuntu runners' `libsane1` includes `pnm` (Debian's build enables it); whether the `test` backend's hand-scanner mode combines with its feeder to give `lines = -1` from a feeder (else the fake does it); a test that the hand-written bindings and status table match the installed `sane.h` (sanetui's idea, Apache-2.0). *(survey, SANE and network scanning)*
+- **TEST-2** · sane-dl · S0 · open — **SANE in CI: the `test` and `pnm` backends, and the bindings against the header.** Check that Ubuntu runners' `libsane1` includes `pnm` (Debian's build enables it); whether the `test` backend's hand-scanner mode combines with its feeder to give `lines = -1` from a feeder (else the fake does it); a test that the hand-written bindings and status table match the installed `sane.h` (sanetui's idea, Apache-2.0). *(survey, SANE and network scanning)*
 
-## For S4 (Windows)
-
-- **TEST-3** · twain-dsm · S4 · open — **TWAIN's sample source on a hosted runner.** Whether `Twain_DS_sample01` (BSD-3) installs silently on `windows-latest` (`msiexec /qn`), or runs from yushulx/virtual-scanner's portable zip, or works with the DSM and the source copied into `twain_32` and `twain_64` (if the runner lets us write `C:\Windows\twain_*`); whether it scans with a hidden window in both bitnesses; `CAP_XFERCOUNT` from its environment variable sets the page count. *(survey, TWAIN, WIA and ICA)*
+- **TEST-3** · twain-dsm · S0 · open — **TWAIN's sample source on a hosted runner.** Whether `Twain_DS_sample01` (BSD-3) installs silently on `windows-latest` (`msiexec /qn`), or runs from yushulx/virtual-scanner's portable zip, or works with the DSM and the source copied into `twain_32` and `twain_64` (if the runner lets us write `C:\Windows\twain_*`); whether it scans with a hidden window in both bitnesses; `CAP_XFERCOUNT` from its environment variable sets the page count. *(survey, TWAIN, WIA and ICA)*
 
 ## Later
 

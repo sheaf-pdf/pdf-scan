@@ -36,7 +36,7 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 - **For the seam** (`crates/scan-device-seam.md`): per transfer, its image info (`DAT_IMAGEINFO`:
   size, resolution, pixel type, bits per pixel); the pending-transfer count; the extended image info the
   source offers (a page's side, patch codes for FEAT-5), all as TWAIN gives them. Whether a memory transfer
-  comes back assembled or as tiles is the seam note's to settle, after S4's spike.
+  comes back assembled or as tiles is the seam note's to settle, after the TWAIN spike (S0 slice 7).
 - **Prior art:** `twain` 0.1.0 (2021, the only TWAIN crate) loads a DLL by a relative path, passes an
   immutable local as an out-pointer, never calls `GlobalLock`, and bundles the DSM and Qt's `qwindows.dll`
   without their LGPL text: study only. TWAIN Direct has had no commit since 2022: study only. pytwain is
@@ -46,7 +46,7 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   (`Twain_DS_sample01`, BSD-3; it reads its images from disk, its page count from a `CAP_XFERCOUNT`
   environment variable) on `windows-latest`, through its MSI installers, yushulx/virtual-scanner's portable
   zip (which keeps the BSD notice), or the DSM and the source copied into `twain_32` and `twain_64`, if any
-  installs silently and scans with a hidden window (S4's spike: unverified); by hand on a real driver.
+  installs silently and scans with a hidden window (S0 slice 7, the spike: unverified); by hand on a real driver.
 - **Open:**
   - `twain.h`'s license, settled 2026-11-08: no copy grants a license (copyright notices, "All rights
     reserved", outside the DSM's LGPL); the only grant is twain.org's TWAIN License, whose reach to a Rust

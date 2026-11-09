@@ -8,8 +8,9 @@ pdf-scan is the workspace for the scanning crates sheaf will depend on: scanners
 driver API, page images cleaned up and read for codes, and scanned pages written to PDF and read back. Its
 PDF crates are built on the PDF family in pdf-lint's workspace (`~/repos/sheaf-arlington`), as its consumer.
 
-These files name sheaf, its plan and its corpus, which pdf-lint's rule keeps out of tracked files: ask 7 says
-how that's settled before anything is pushed. **Paths** in them are from `docs/pm/`, except those starting
+These files may name sheaf, its plan and its corpus; the code, crate docs, crate READMEs and commit messages
+never do (ask 7; `just gates` checks it). The repository is public, so nothing private goes in here
+(`decisions.md`). **Paths** in them are from `docs/pm/`, except those starting
 `scratch/` (from the repository's root, local and gitignored) and `~`.
 
 ## What's where
@@ -21,7 +22,7 @@ how that's settled before anything is pushed. **Paths** in them are from `docs/p
 | `decisions.md` | What's settled, in sheaf's plan, pdf-lint's or here, with where it was ruled | Before changing anything foundational |
 | `asks.md` | Questions waiting on Greg, the recommended answer first | When work waits on a ruling |
 | `crates/` | `README.md`: the layers and an index; then a file per crate: what it does, its boundary, its dependencies, its prior art, how it's tested, what's open | Planning or building a crate |
-| `milestones/` | `README.md`, then a file per milestone (S1 to S4, `later.md`): its slices, what each builds and how it's checked | Planning or running a slice |
+| `milestones/` | `README.md`, then a file per milestone (S0, S1, S2, `later.md`): its slices, what each builds and how it's checked | Planning or running a slice |
 | `slices/` | The plans of slices while they run, one file each; none yet | Running a slice |
 | `backlog/` | Everything open, a file per kind: BUG, FEAT, DOC, TEST, Q (the plan's questions), UP (contributions to other projects) | Planning a slice; when something turns up |
 | `research/` | Surveys and assessments, a folder each (`README.md` the document, `notes/` behind it): `prior-art/` | Before deciding to build anything |

@@ -50,13 +50,14 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
     layer over ImageCaptureCore is a hole nobody fills.
   - Patch codes the driver reports, optional, as hints beside pixel reading (FEAT-5).
 - **Boundary:** no image codecs, imageproc, PDF crate or GUI toolkit under it. A gate keeps it so.
-- **Stability:** provisional (0.0.x, unpublished) through S3, with one real backend behind it; frozen at
-  0.1.0 in S4, once the `twain` backend has been through it (`decisions.md`, "Made here"). sheaf takes it no
-  sooner (`sheaf/swaps.md`).
+- **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
+  frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
+  sheaf takes it no sooner (`sheaf/swaps.md`).
 - **The seam:** `crates/scan-device-seam.md`: for each concept of the model, how SANE, TWAIN, WIA and ICA
   deliver it, what the model makes of it, and what's still to settle, with the known unknowns. First version
-  2026-11-08, before any driver layer; revised in S3 step 2, after S4's spike, and whenever a backend finds
-  the model lacking. It changes proposal 9's model in seven places (its "Changes from proposal 9's model").
+  2026-11-08, before any driver layer; revised in S0 slice 2, after the TWAIN spike (S0 slice 7), and whenever
+  a backend finds the model lacking. It changes proposal 9's model in seven places (its "Changes from proposal
+  9's model").
 - **Not here:** network scanning. The office's fi-6130, fi-7160 and fi-8170 scan over USB only, as far as
   any source shows, and of sane-airscan's 205 tested devices one desktop document scanner speaks eSCL.
   Network copiers reach sheaf through WIA and sane-airscan already. If it's ever wanted: FEAT-10.
@@ -69,4 +70,4 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
     proposal 9 (namespaced ids, `FeederEmpty`, partial pages kept), with WIA and WSD backends and SANE-net
     and eSCL in open PRs. Not a dependency: its pages are encoded images, its `scan` feature puts `image`,
     `png` and `tiff` under the device layer, it needs Rust 1.95, and it's one account's, days old. Study
-    its contract; check it again before S3 and S4.
+    its contract; check it again before S0 slices 3 and 9.
