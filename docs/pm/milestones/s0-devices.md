@@ -128,7 +128,7 @@ S1 back: S1 can start once the Linux slices are done.
      DSM loaded only after its signer is checked; TWAIN's states as owned types on the caller's thread, a
      record apart from them that the teardown trusts; capabilities, both transfers, both deliveries, cancels
      and requests, tested through the sample source in both bitnesses. `twain-spike` is deleted, its record
-     kept. Code-reviewed and fixed 2026-11-09; CI green on a pull request and approval close it.
+     kept. Code-reviewed and fixed 2026-11-09; CI green on pull request #4 and approval close it.
 9. **scan-device's `twain` backend** and a 32-bit worker in CI (`i686-pc-windows-msvc`, the worker alone),
    the client's merge of both lists. The model's changes the backend asks for are made here, in
    `scan-device`, the `fake` and `sane` backends and the worker's protocol together. Checked: 10 images

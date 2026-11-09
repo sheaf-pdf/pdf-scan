@@ -1,7 +1,8 @@
 # S0 slice 8: twain-dsm
 
-Status: running, on branch `s0-8-twain-dsm`, from 2026-11-08: planned, reviewed, its six steps built and
-pushed, code-reviewed and fixed; CI on a pull request and approval close it. Milestone:
+Status: done on its branch, `s0-8-twain-dsm`, from 2026-11-08: planned, reviewed, its six steps built and
+pushed, code-reviewed and fixed, rebased onto `master` after pull requests #2 and #3; CI on pull request #4 and
+approval close it. Milestone:
 `milestones/s0-devices.md`, slice 8. Run on the Windows machine, the same way as slice 7
 (`archive/slices/s0-7-twain-spike.md`): this plan, an adversarial review (below), the steps (each committed and
 pushed), parallel code reviews, a fix stage.
@@ -627,3 +628,14 @@ said in `fixes.md` with why. The high ones:
   `RunReport::closed_source` and `closed_connection`.
 - **CI and tools:** the TWAIN job runs the crate's clippy for i686 too; the justfile says what `just ci` covers.
 - **The check:** as step 6's; 78 tests in each bitness and on 1.89, the 2 by hand besides.
+
+**Rebased onto `master`** (2026-11-09, after pull requests #2 and #3, slices 1 and 2, merged; the scripts in
+`scratch/work/s0-8/rebase/`): the branch's ten commits replayed on `master`'s tip, each conflict in the docs, CI
+and the justfile resolved keeping both sides (`sane-dl-package` beside the TWAIN jobs and recipes, `master`'s
+wording kept); the crate's code and the bindings script unchanged by it. Slice 8's TEST-7 is TEST-11, since
+`master` holds a TEST-7 to TEST-10, as slice 2's plan said the merge landing second would renumber it; the
+backlog's counts hold it. The seam note's revisions stand newest first, slice 8's between slice 2's and slice
+7's. The twain-dsm recipes end their comments with a line for `just --list`, as `master`'s do.
+- **The check:** `just fmt`, `clippy`, `test` (296 passed) and `doc`; `twain-dsm-test` in both bitnesses, the
+  sample and the header required, 78 each, none skipped; `twain-dsm-clippy` for i686; `just msrv` (1.89);
+  `twain-bindings --check`; the name gate.

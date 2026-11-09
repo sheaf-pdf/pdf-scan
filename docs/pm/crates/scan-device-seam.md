@@ -33,25 +33,26 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 `Encoded` is asked for, the settings window takes an owner, `Stopped` moves to `scan-worker`'s client, and
 `ScanError` gains `SettingsRefused`, `AccessDenied`, `TimedOut` and `Unsupported`.
 
-**Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (slice 7 ran first, on the Windows
-machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against
-the TWAIN Working Group's sample data source in both bitnesses, here and on `windows-latest`
-(`archive/slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which signals
-synchronously, has one image, and can't jam, feed two sides or report extended image info; the hand checks
-(S0 slice 12) settle the rest. SANE's rows are as they were, for slice 2.
+**Revised 2026-11-08 and 09 by S0 slice 8, `twain-dsm`, on the Windows machine beside slice 2, merged after it**
+(`slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
+these changes), in sections 3, 8 and the unknowns, where building the crate changed what the spike had:
+`twain-dsm` serves requests in every state (another thread's `Remote<T>`, the caller's own request type;
+`Twain::wait`, `Enabled::next_event`, `take_request` between buffers), and hands the source's messages over
+first; it rolls back as the spike did, from a record of where the source is that it keeps apart from the states,
+so a state dropped or forgotten anywhere is stepped down, and what a drop couldn't do is kept for the backend
+(`drop_errors`); and it closes a source left open itself at the end, since the DSM's own closing stops before
+the last source it lists. Each failure carries both parties' condition codes, the DSM's read in the order its
+clearing needs. After its code review: the thread's messages are offered to `MSG_PROCESSEVENT` in either
+delivery (the source's own windows need it), and the source's messages are kept in process memory, not in the
+posts that wake the loop, so another message loop on the TWAIN thread (a driver's dialog, a message box) loses
+none; one run per process holds across copies of the crate.
 
-**Revised 2026-11-08 by S0 slice 8, `twain-dsm`** (`slices/s0-8-twain-dsm.md`, "So far"), in sections 3, 8 and
-the unknowns, where building the crate changed what the spike had: `twain-dsm` serves requests in every state
-(another thread's `Remote<T>`, the caller's own request type; `Twain::wait`, `Enabled::next_event`,
-`take_request` between buffers), and hands the source's messages over first; it rolls back as the spike did,
-from a record of where the source is that it keeps apart from the states, so a state dropped or forgotten
-anywhere is stepped down, and what a drop couldn't do is kept for the backend (`drop_errors`); and it closes a
-source left open itself at the end, since the DSM's own closing stops before the last source it lists. Each
-failure carries both parties' condition codes, the DSM's read in the order its clearing needs. After its code
-review: the thread's messages are offered to `MSG_PROCESSEVENT` in either delivery (the source's own windows
-need it), and the source's messages are kept in process memory, not in the posts that wake the loop, so
-another message loop on the TWAIN thread (a driver's dialog, a message box) loses none; one run per process
-holds across copies of the crate.
+**Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (slice 7 ran first, on the Windows
+machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against the
+TWAIN Working Group's sample data source in both bitnesses, here and on `windows-latest`
+(`archive/slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which
+signals synchronously, has one image, and can't jam, feed two sides or report extended image info; the hand
+checks (S0 slice 12) settle the rest. SANE's rows are as they were, for slice 2.
 
 ## The rules it keeps
 
@@ -315,16 +316,16 @@ becomes.
 columns, rows, bytes per row and bytes written) and **the DIB's bytes as a block**; the `twain` backend
 assembles and decodes, checking each against its bounds before reading. The sample only ever sent full-row
 strips, in order; tiles in two dimensions, out of order, are handled (the spike's `image` module, in
-`twain-dsm`'s tests' support since slice 8, with an
-`Assembler` that places each buffer as it comes and holds nothing but the image) but shown only by unit tests
-on made-up data, and which drivers send them is slice 12's. The refusals (overlaps, gaps, 1-bit tiles that
-start or end within a byte, an 8-bit color palette) are the backend's policy, not the sample's behaviour.
-**A DIB's palette is the backend's to apply:** a 1-bit palette black then white (the sample's) or white then
-black, read into the raw layout's polarity; an 8-bit gray palette read through (the sample's is an identity
-ramp); a color palette on 8 bits refused until a driver sends one. A memory transfer's 1-bit and gray polarity
-is `ICAP_PIXELFLAVOR`'s (`TWPF_CHOCOLATE`, 0 black, is all the sample offers). The sample's native and memory
-pages matched pixel for pixel in RGB, gray and black and white once decoded so. Its `ICAP_BITORDER` swaps
-color order the opposite way in the two paths, so the backend never sets it.
+`twain-dsm`'s tests' support since slice 8, with an `Assembler` that places each buffer as it comes and holds
+nothing but the image) but shown only by unit tests on made-up data, and which drivers send them is slice 12's.
+The refusals (overlaps, gaps, 1-bit tiles that start or end within a byte, an 8-bit color palette) are the
+backend's policy, not the sample's behaviour. **A DIB's palette is the backend's to apply:** a 1-bit palette
+black then white (the sample's) or white then black, read into the raw layout's polarity; an 8-bit gray palette
+read through (the sample's is an identity ramp); a color palette on 8 bits refused until a driver sends one. A
+memory transfer's 1-bit and gray polarity is `ICAP_PIXELFLAVOR`'s (`TWPF_CHOCOLATE`, 0 black, is all the sample
+offers). The sample's native and memory pages matched pixel for pixel in RGB, gray and black and white once
+decoded so. Its `ICAP_BITORDER` swaps color order the opposite way in the two paths, so the backend never sets
+it.
 
 ## 4. Sheets, sides and order
 

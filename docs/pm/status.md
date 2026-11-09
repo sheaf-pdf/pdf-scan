@@ -9,7 +9,8 @@ use), ready to publish and not published, with `fake-libsane` for its tests; its
 fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged (pull request #1). It's a git
 repository at github.com/sheaf-pdf/pdf-scan (public; `master`). **S0 slice 2, the seam note revised, is done on
 `s0-2-seam-note`,** stacked on slice 1's branch, waiting on review, the push and its pull request; S0 slice 3
-next, once that's open.
+next, once that's open. **S0 slice 8, `twain-dsm`, is done on its branch, `s0-8-twain-dsm`,** on the Windows
+machine, code-reviewed and fixed, in pull request #4, rebased onto `master` after #2 and #3.
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -49,7 +50,7 @@ next, once that's open.
   and on `windows-latest`; TWAIN walked from state 1 to 7 and back in both bitnesses; native and memory
   transfers equal pixel for pixel; cancels from another thread; four code reviewers, every finding fixed; the
   seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
-- **Running: S0 slice 8, `twain-dsm`** (on the Windows machine, branch `s0-8-twain-dsm`;
+- **Done on its branch: S0 slice 8, `twain-dsm`** (on the Windows machine, branch `s0-8-twain-dsm`;
   `slices/s0-8-twain-dsm.md`): planned, reviewed (24 findings, all taken), its six steps built and pushed
   2026-11-08: the crate safe by construction (`decisions.md`; `crates/twain-dsm.md`), tested through the sample
   source in both bitnesses; the spike deleted. Three things the plan had wrong, found by its tests: the DSM
@@ -57,8 +58,9 @@ next, once that's open.
   Windows file can verify, as Microsoft's (refused either way). Code-reviewed by four reviewers in parallel and
   fixed, 2026-11-09 (the high findings: two copies of the crate in one process racing in the DSM, a source's
   message lost to another message loop on the thread, extended image info misread on 64-bit, a driver's large
-  container panicking a 32-bit worker, tests that passed with the thing broken). CI on a pull request and
-  approval close it.
+  container panicking a 32-bit worker, tests that passed with the thing broken). Pull request #4, rebased onto
+  `master` after #2 and #3 (its TEST-7 renumbered TEST-11, since `master` holds a TEST-7); CI on it and approval
+  close it.
 - **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
   `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
   (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.

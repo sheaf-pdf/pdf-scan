@@ -45,6 +45,7 @@ sane-dl-msrv:
     cargo +{{ sane_dl_msrv }} test --locked -p sane-dl
 
 # Off Windows, only its pure parts build and test.
+# twain-dsm's tests on its oldest supported Rust.
 twain-dsm-msrv:
     cargo +{{ twain_dsm_msrv }} test --locked -p twain-dsm
 
@@ -82,23 +83,27 @@ sane-dl-package:
 # they skipped, unless TWAIN_DSM_REQUIRE_HEADER=1 and
 # TWAIN_DSM_REQUIRE_SAMPLE=1. CI's TWAIN job installs both and sets both.
 # From Git Bash: just runs recipes with `sh`.
+# twain-dsm's tests for one Windows target, with the sample source and twain.h.
 twain-dsm-test target:
     cargo test --locked -p twain-dsm --target {{ target }}
 
 # twain-dsm's lints for `target`, its tests included: the 32-bit one too,
 # whose code the 64-bit build doesn't compile.
+# twain-dsm's lints for one Windows target, its tests included.
 twain-dsm-clippy target:
     cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
 
 # twain-dsm's doctests on nightly, whose rustdoc checks that each
 # `compile_fail` example fails with the error code it names (stable's checks
 # only that it fails). Needs `rustup toolchain install nightly`.
+# twain-dsm's compile_fail doctests on nightly, their error codes checked.
 twain-dsm-doc-codes:
     cargo +nightly test --locked -p twain-dsm --doc
 
 # twain-dsm's constants generated again from TWAINH.cs and checked against
 # twain.h, both fetched at their pinned commits; `just twain-bindings --check`
 # changes nothing, and fails if the file differs from what it would write.
+# twain-dsm's constants generated from TWAINH.cs and checked against twain.h.
 twain-bindings *args:
     python -I scripts/twain-bindings.py {{ args }}
 
