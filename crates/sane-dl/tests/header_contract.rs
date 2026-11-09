@@ -21,10 +21,10 @@
 //! the binding to the row's Rust type at compile time, so the two can't
 //! drift. The bindings are the crate's own source, `src/ffi.rs`, taken here
 //! by its path, so the function types the crate keeps inside it are checked
-//! too, in the very file the crate compiles. The header is `/usr/include/sane/sane.h`, or the path in
-//! `SANE_DL_SANE_H`; the compiler `$CC`, or `cc`. Where either is missing the
-//! test says so on standard error and passes, or fails with
-//! `SANE_DL_REQUIRE_HEADER=1`.
+//! too, in the very file the crate compiles. The header is
+//! `/usr/include/sane/sane.h`, or the path in `SANE_DL_SANE_H`; the compiler
+//! `$CC`, or `cc`. Where either is missing the test says so on standard
+//! error and passes, or fails with `SANE_DL_REQUIRE_HEADER=1`.
 
 mod common;
 

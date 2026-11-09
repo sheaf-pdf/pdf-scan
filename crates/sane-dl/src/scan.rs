@@ -276,19 +276,32 @@ pub struct Image {
     pub frames: Vec<Parameters>,
 }
 
-/// `Image { format: FrameFormat::GRAY, depth: 8, width: 4, height: 2,
-/// stride: 4, frames: [..], data: 8 bytes }`: every field but the data,
-/// whose length alone is given.
+/// Every field but the data, whose length alone is given, and each frame's
+/// parameters whole: `Image { format: FrameFormat::GRAY, depth: 8, width: 4,
+/// height: 2, stride: 4, frames: [Parameters { format: FrameFormat::GRAY,
+/// last_frame: 1, bytes_per_line: 4, pixels_per_line: 4, lines: 2, depth: 8
+/// }], data: 8 bytes }`.
 impl fmt::Debug for Image {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Taken apart, so a field added to `Image` fails to compile here
+        // until its `Debug` says how it's given.
+        let Image {
+            format,
+            depth,
+            width,
+            height,
+            stride,
+            data,
+            frames,
+        } = self;
         f.debug_struct("Image")
-            .field("format", &self.format)
-            .field("depth", &self.depth)
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("stride", &self.stride)
-            .field("frames", &self.frames)
-            .field("data", &ByteCount(self.data.len()))
+            .field("format", format)
+            .field("depth", depth)
+            .field("width", width)
+            .field("height", height)
+            .field("stride", stride)
+            .field("frames", frames)
+            .field("data", &ByteCount(data.len()))
             .finish()
     }
 }

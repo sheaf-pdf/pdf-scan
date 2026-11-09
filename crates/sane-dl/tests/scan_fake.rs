@@ -536,7 +536,6 @@ fn the_step_by_step_calls_say_what_sane_says() {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_select_fd_is_given() {
     let fake = Fake::new(
         "a_select_fd_is_given",
@@ -555,7 +554,6 @@ fn a_select_fd_is_given() {
 
 #[cfg(unix)]
 #[test]
-#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_negative_select_fd_is_refused() {
     let fake = Fake::new("a_negative_select_fd_is_refused", &script("select-fd -1\n"));
     in_child!(a_negative_select_fd_is_refused, fake.child(), || {

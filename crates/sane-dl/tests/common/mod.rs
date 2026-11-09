@@ -19,11 +19,11 @@
 //!
 //! Every library is loaded through [`Sane::load`], the crate's one loader.
 //! The fake is found there as SANE is: its parent copies it under SANE's
-//! own file name into a directory of its own ([`fake_library`]), and spawns
-//! the child with the system loader's search path naming that directory
-//! first (`LD_LIBRARY_PATH`; `DYLD_LIBRARY_PATH` on macOS). Windows has no
-//! default library, so no route to the fake: each test that loads it is
-//! ignored there, saying why.
+//! own file name into a directory of its own ([`fake_library_dir`]), and
+//! spawns the child with the system loader's search path naming that
+//! directory first (`LD_LIBRARY_PATH`; `DYLD_LIBRARY_PATH` on macOS).
+//! Windows has no default library, so no route to the fake: each test that
+//! loads it is ignored there, saying why.
 
 // Each test binary uses some of these.
 #![allow(dead_code)]
@@ -305,8 +305,8 @@ pub fn fresh_dir(dir: &Path) {
 /// half a copy, and a copy a running child maps is replaced, never written
 /// over. A child whose loader searches this directory first loads the fake
 /// from [`Sane::load`]. In the parent only, as a child's preparation.
-pub fn fake_library() -> &'static Path {
-    parent_only("building the fake libsane");
+pub fn fake_library_dir() -> &'static Path {
+    parent_only("building the fake libsane and its directory");
     static FAKE: OnceLock<PathBuf> = OnceLock::new();
     FAKE.get_or_init(|| {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -419,7 +419,7 @@ impl Fake {
             .prepare(move |command| {
                 fresh_dir(&dir);
                 fs::write(&script, text).expect("couldn't write the fake's script");
-                command.env(LOADER_PATH, loader_path(fake_library()));
+                command.env(LOADER_PATH, loader_path(fake_library_dir()));
             })
             .env(CONFIG_DIR_VARIABLE, &self.dir)
             .env("FAKE_LIBSANE_SCRIPT", &self.script)
