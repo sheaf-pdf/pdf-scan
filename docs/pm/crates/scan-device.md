@@ -2,7 +2,7 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 3 (`slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
+**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
 checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish = false`): the model, and the
 `fake` backend; no backend for a driver API yet (`sane` is slice 5's). MSRV 1.89 (`decisions.md`). No `unsafe`
 (`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`). Changed by S0 slice 4
@@ -41,9 +41,11 @@ for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fak
       `SourceCaps::new(source, resolutions, formats)` (no duplex, no encodings, `max_area` `None`, `paper_auto`
       false), `Applied::new(settings, clamped)` and `RawPage::new(pixels, dpi, sheet, side, side_known)`. The
       rules the docs put on these values (a `dpi` finite and above 0; at least one source, each with at least
-      one format; a `Resolutions::List` never empty, a `Range`'s `min` not past its `max`) are each a
-      backend's to keep, the fake's among them, and a decoder's to check (slice 4's client); the
-      constructors don't check them (the code review's wording, `Caps`' and `RawPage`'s docs).
+      one format; resolutions above 0, a `Resolutions::List` never empty, a `Range`'s `min` not past its
+      `max`; a `max_area` finite and above 0, the last two said in the docs by S0 slice 4's code review, as
+      the fake already checked them) are each a backend's to keep, the fake's among them, and a decoder's to
+      check (slice 4's client); the constructors don't check them (the code review's wording, `Caps`' and
+      `RawPage`'s docs).
     - `RawImage::new(format, width, height, data)` refuses, in order: a width or height of 0 (`Empty`); a row's
       bytes or the image's past `u64`, in checked arithmetic, or past what one buffer can hold on the platform,
       `isize::MAX`, the most any allocation can be (`TooLarge`; `usize::MAX` until the code review); a
@@ -66,7 +68,9 @@ for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fak
       variants by their Rust names, an enum externally tagged), with no attribute; not on `RawImage`,
       `Encoded`, `Pixels`, `RawPage` or `Event`, whose bytes don't belong in a text format, so a transport
       carries them beside it, as `scan-worker`'s protocol does. A `NonZeroU32` step of 0 is refused as it's
-      read, and JSON writes a size that isn't finite as `null`, which reading refuses. It's how
+      read, and JSON writes a size that isn't finite as `null`, which reading refuses; but `serde_json` reads
+      a number past an `f32`'s range as an infinity (`1e39`), so a reader of sizes another program wrote
+      checks them for being finite itself, as slice 4's client does (its code review). It's how
       `scan-worker`'s protocol carries the model, and how an app stores a `DeviceInfo`; provisional as the
       model is, its names and the fields added after data is stored settled before the freeze (Q-8). Its unit
       tests (`/crates/scan-device/src/round_trip.rs`) take a value of every variant of every enum above,

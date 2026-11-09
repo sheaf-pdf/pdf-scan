@@ -538,7 +538,7 @@ no caller (S0 slice 2's code review).
 
 ## The model, for slice 3
 
-**Built as written by S0 slice 3** (2026-11-09, `slices/s0-3-scan-device.md`), every name kept: what
+**Built as written by S0 slice 3** (2026-11-09, `archive/slices/s0-3-scan-device.md`), every name kept: what
 `scan-device` adds to the block (a constructor for each `#[non_exhaustive]` struct, `RawImage::data_len`,
 `Debug` by hand for `Opened`, the `fake` backend) is said in `crates/scan-device.md`. Its code review changed
 the block in two places, written into it below: `Paper` `#[non_exhaustive]`, since paper may yet grow (section

@@ -65,9 +65,11 @@ S1 back: S1 can start once the Linux slices are done.
    taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
    row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
    copy (an image codec added to `scan-device`).
-   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), pushed, in pull request #6, waiting on
-   review and CI: branch `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes),
-   then the record, and `master` merged in after #5; four steps, each checked, then its code review's 18 findings (15 distinct, 1 major) all fixed.
+   **Done, merged 2026-11-09** as pull request #6 (squashed `5a4bff2`; `archive/slices/s0-3-scan-device.md`), CI
+   green on it (the run on `master` at `5a4bff2`, 42644985306, all ten jobs: TEST-13 closed): branch
+   `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes), then the record, and
+   `master` merged in after #5; four steps, each checked, then its code review's 18 findings (15 distinct, 1
+   major) all fixed.
    `scan-device` 0.0.0, unpublished, MSRV 1.89: the note's model type for type, nothing renamed, with a
    constructor for each `#[non_exhaustive]` struct, `RawImage::data_len` and `Debug` by hand for `Opened` besides
    (`crates/scan-device.md`); the `fake` feature, turned on for the crate's tests by a dev-dependency on itself,
@@ -96,7 +98,9 @@ S1 back: S1 can start once the Linux slices are done.
    throughput of 300 dpi pages in color and black and white at 2.3 a second (M5 slice 6's gate, its pipe's
    share), measured on every run.
    **Done on the branch** (2026-11-09; `slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
-   at `5a4bff2`, five steps, each checked; its code review and fixes follow. `scan-worker` 0.0.0, unpublished,
+   at `5a4bff2`, to `510d349` (the code review's fixes), then the record; five steps, each checked, then its
+   code review's 20 findings (5 major), 18 fixed whole and two in part, their other halves deferred (FEAT-16,
+   FEAT-17), none refuted. Waiting on review, then the push with `master` merged in, the pull request and CI. `scan-worker` 0.0.0, unpublished,
    MSRV 1.89, no `unsafe` (`crates/scan-worker.md`): the protocol as the seam note asks it, the model's types
    through a new `serde` feature of `scan-device` (every variant round-tripped, a variant added failing the
    build until it's listed), a page's header, `Event`'s and `Pixels`' variants and a message's level carried
@@ -109,9 +113,19 @@ S1 back: S1 can start once the Linux slices are done.
    `scan-worker-fake`: each check above, the raw layout byte for byte against the fake's `pattern`, and the
    throughput, asserted on every run, at about 29 pages a second in color in the debug build the tests run
    (13 times the gate; 15.8 at the lowest, under outside load). On Windows and macOS: CI's run of its pull
-   request (TEST-16). Left: the Job object and a tree kill (FEAT-14, slice 9), a spare worker kept warm
-   (FEAT-15), TEST-12 to slice 9's 32-bit job. For review: the plan's "Decisions taken alone, for review"
-   (40, and each step's own in its "So far") and "For review (security)" (8).
+   request (TEST-16). The code review's fixes: a worker's process watched while a call waits, so its end is
+   seen even where a process its driver started holds its pipes (a crash under such a helper had been taken
+   for silence, or held the settings window for good); the worker's input kept open while it quits, so a grace
+   past 10 s doesn't turn a slow close into the worker's abort; a request past 1 MiB `Unsendable`; caps,
+   applied settings, a batch's order, encodings and an open's ids checked against the model's rules (the caps
+   rules now in the model's docs); another protocol's hello read for its protocol; `Stopped`'s `Timeout` and
+   `WorkDir`; each library linted and documented alone, so `scan-device` is built without `serde` again; the
+   `SIGPIPE` requirement documented. Left: the Job object and a tree kill (FEAT-14, slice 9), a stop handle
+   (FEAT-17, slice 9), a worker's end harmless whatever the app's `SIGPIPE` disposition (FEAT-16, before slice
+   11), a spare worker kept warm (FEAT-15), TEST-12 to slice 9's 32-bit job. For review: the plan's
+   "Decisions taken alone, for review" (55, of which 41 to 55 the code review's, and each step's own in its "So
+   far"), above all 41 (how a worker's end is seen), 42 (the input kept open on quit), 43 (`SIGPIPE`) and 46
+   (the model's rules checked, a clamped value against what was asked); and "For review (security)" (11).
 5. **scan-device's `sane` backend**, mapping `sane-dl` onto the model as the seam note's SANE rows and its table
    in "The model, for slice 3" say. Checked: SANE's `test` backend in CI (a 10-sheet feeder then empty; gray,
    color, 1- and 16-bit; unknown height; three-pass; injected jam, cover open, no documents, I/O error: a jam

@@ -1,9 +1,9 @@
 # pdf-scan: the plan
 
-As of 2026-11-09. S0 slices 1, 2, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
-tests, the seam note revised, the TWAIN spike and `twain-dsm`. S0 slice 3 has built `scan-device`, provisional,
-done on its branch and waiting on review (`slices/s0-3-scan-device.md`). S0 slice 4 has built `scan-worker` on
-it, done on its branch (`slices/s0-4-scan-worker.md`); the rest is planned.
+As of 2026-11-09. S0 slices 1, 2, 3, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
+tests, the seam note revised, `scan-device` provisional (`archive/slices/s0-3-scan-device.md`), the TWAIN spike
+and `twain-dsm`. S0 slice 4 has built `scan-worker` on `scan-device`, done on its branch with its code review's
+findings fixed, waiting on review (`slices/s0-4-scan-worker.md`); the rest is planned.
 
 pdf-scan is a workspace of crates for getting paper into PDF, which sheaf will depend on: scanners driven
 through each system's own driver API, in a worker process; page images cleaned up, judged blank or not, and

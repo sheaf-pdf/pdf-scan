@@ -11,12 +11,12 @@ settles, and its upstream contributions.
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | 1 | 5 | 1 | | 7 | |
-| feature (FEAT) | `features.md` | 3 | 2 | 2 | 7 | 14 | |
+| feature (FEAT) | `features.md` | 5 | 2 | 2 | 7 | 16 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 7 | 2 | 1 | 1 | 11 | |
+| test (TEST) | `tests.md` | 6 | 2 | 1 | 1 | 10 | |
 | question (Q) | `questions.md` | 4 | 1 | 2 | | 7 | |
 | upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
-| **all** | | **22** | **15** | **7** | **9** | **53** | **12** |
+| **all** | | **23** | **15** | **7** | **9** | **54** | **12** |
 
 ## Where to start
 
@@ -31,11 +31,13 @@ settles, and its upstream contributions.
   5; TEST-9 (what only the fi-6130 shows of names and cancels) in slice 6's hand check; UP-12 and UP-13
   (`scanimage`, sane-dll(5)) wait on review. From slice 3: TEST-12 (`scan-device`'s layout tests on a 32-bit
   `usize` again, in CI) by slice 9's 32-bit worker job, where slice 4 left it; TEST-13 (its code on CI's
-  Windows and macOS) closed by CI's run of its pull request; Q-5 (the packaged crate's tests without the fake)
-  and Q-6 (what else of the model may grow) in slice 11. From slice 4: FEAT-14 (the Windows Job object and a
-  tree kill) in slice 9; TEST-16 (its code on CI's Windows and macOS) closed by CI's run of its pull request;
-  Q-8 (the serde form, fields added after data is stored, and what the protocol carries by name) and Q-5's
-  question of `scan-worker` in slice 11; FEAT-15 (a spare worker kept warm) later.
+  Windows and macOS) closed by CI's run on `master` after #6 (`archive/backlog-done.md`); Q-5 (the packaged
+  crate's tests without the fake) and Q-6 (what else of the model may grow) in slice 11. From slice 4: FEAT-14
+  (the Windows Job object and a tree kill) and FEAT-17 (a stop handle, for a driver's window that never
+  closes) in slice 9; TEST-16 (its code on CI's Windows and macOS) closed by CI's run of its pull request;
+  FEAT-16 (a worker's end harmless whatever the app's `SIGPIPE` disposition) before slice 11; Q-8 (the serde
+  form, fields added after data is stored, and what the protocol carries by name) and Q-5's question of
+  `scan-worker` in slice 11; FEAT-15 (a spare worker kept warm) later.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

@@ -2,25 +2,21 @@
 
 As of 2026-11-09.
 
-**S0 slice 3, `scan-device` provisional, is done on its branch, `s0-3-scan-device`** (from `master` at `3f33be5`,
-`master` merged in after #5), pushed, in pull request #6, waiting on review and CI ("Running", below). **S0 slices
-1, 2 and 8 are merged** (pull requests #2, #3 and #4, squashed; #5 recorded slice 8's close), as **S0 slice 7,
-the TWAIN spike,** is (#1); slices 7 and 8 from the Windows machine. S0 slice 1a, `sane-dl`'s public API made
+**S0 slice 4, `scan-worker`, is done on its branch, `s0-4-scan-worker`** (from `master` at `5a4bff2`), its code
+review's findings fixed, waiting on review and the push ("Running", below). **S0 slices 1, 2, 3 and 8 are
+merged** (pull requests #2, #3, #6 and #4, squashed; #5 recorded slice 8's close), as **S0 slice 7, the TWAIN
+spike,** is (#1); slices 7 and 8 from the Windows machine. S0 slice 1a, `sane-dl`'s public API made
 safe, runs beside slice 3 on a branch of its own. It's a git repository at github.com/sheaf-pdf/pdf-scan
 (public; `master`).
 
-- **Running: S0 slice 3, done on `s0-3-scan-device`** (`slices/s0-3-scan-device.md`; the code to `5a5c367`),
-  four steps, each checked, then its code review's 18 findings all fixed: `scan-device` 0.0.0, unpublished,
-  MSRV 1.89, the seam note's model as written (`Paper` now `#[non_exhaustive]`) and the `fake` backend, every
-  script of proposal 22 tested; `RawImage`'s sizes held to `isize::MAX` (the review's major finding). **Waits
-  on:** the maintainer's review (50 decisions, 6 security items); CI's run of pull request #6 on Ubuntu,
-  Windows and macOS (TEST-13). Later: TEST-12, Q-5, Q-6; its TEST-12 or slice 1a's is
-  renumbered at whichever merge comes second.
-- **Running: S0 slice 4, `scan-worker`, done on `s0-4-scan-worker`** (`slices/s0-4-scan-worker.md`, from
-  `master` at `5a4bff2`): five steps, each checked, its code review and fixes next; `scan-worker` 0.0.0,
-  unpublished, MSRV 1.89 (the protocol, `serve`, the client and its watchdog, through a test worker), and
-  `scan-device`'s `serde` feature and `Fault::AwaitCancel`. **Waits on:** its code review; the maintainer's
-  review (40 decisions, 8 security items); CI's run of its pull request on Windows and macOS (TEST-16).
+- **Running: S0 slice 4, done on `s0-4-scan-worker`** (`slices/s0-4-scan-worker.md`; the code to `510d349`):
+  five steps, each checked, then its code review's 20 findings (5 major), 18 fixed whole and two in part, none
+  refuted: `scan-worker` 0.0.0, unpublished, MSRV 1.89 (the protocol, `serve`, the client and its watchdog,
+  through a test worker), and `scan-device`'s `serde` feature and `Fault::AwaitCancel`; the review's fixes
+  watch a worker's process while a call waits, keep its input open while it quits, and check more of the
+  model's rules. **Waits on:** the maintainer's review (55 decisions, 11 security items); the main session's
+  merge of `master` (#7, slice 1a, and its bookkeeping), the push and the pull request; CI's run of it on
+  Ubuntu, Windows and macOS (TEST-16). Left: FEAT-14 and FEAT-17 (slice 9), FEAT-16 (before slice 11), FEAT-15.
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
@@ -73,14 +69,17 @@ safe, runs beside slice 3 on a branch of its own. It's a git repository at githu
 - **Done: S0 slice 1, `sane-dl` and the workspace it starts** (merged 2026-11-09 as pull request #2, squashed
   `3ebea15`, CI green; `archive/slices/s0-1-sane-dl.md`): `sane-dl` 0.1.0-alpha.1, ready to publish and not
   published, with `fake-libsane` for its tests; five steps, each checked, and its code review's 22 findings fixed.
+- **Done: S0 slice 3, `scan-device` provisional** (merged 2026-11-09 as pull request #6, squashed `5a4bff2`;
+  `archive/slices/s0-3-scan-device.md`): the seam note's model and the `fake` backend, every script of proposal
+  22 tested; CI green on all ten jobs (run 42644985306), which closed TEST-13. Later: TEST-12, Q-5, Q-6.
 - **Done: S0 slice 2, the seam note revised** (merged 2026-11-09 as pull request #3, squashed `70d7b20`;
   `archive/slices/s0-2-seam-note.md`; docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns
   answered, the raw layout fixed, and the model written down for slice 3, then revised by its code review (25
   findings fixed, BUG-7 deferred).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
   (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
-  3 (50 and 6); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3,
+  3 (50 and 6); S0 slice 4 (55 and 11); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3,
   ready to hand off on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the
   interpreter stays out" line.
 - **Next:** S0 slice 5, `scan-device`'s `sane` backend, run in a worker the `scan-worker` client starts, once
-  slice 4 is merged. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+  slice 4 is merged (its TEST-10, FEAT-12 and Q-4). On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

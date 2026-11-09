@@ -1,6 +1,9 @@
 # S0 slice 4: scan-worker
 
-Status: **running, on branch `s0-4-scan-worker`** (from `master` at `5a4bff2`), from 2026-11-09. Milestone:
+Status: **done on branch `s0-4-scan-worker`** (2026-11-09; from `master` at `5a4bff2`): its five steps, each
+checked, then its code review's 20 findings, 18 fixed whole and two fixed in part, their other halves deferred
+(FEAT-16, FEAT-17), none refuted ("Code review"). Waiting on review, then the push (with `master` merged in, the
+main session's), the pull request and CI's run on Ubuntu, Windows and macOS (TEST-16). Milestone:
 `milestones/s0-devices.md`, slice 4.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -59,8 +62,8 @@ sheaf's intake takes a `Client` and its own worker binary calling `serve`.
   wire types), and the kill after a cancel counted from the worker's last line ("What slice 4 needs of it").
   Its decisions behind them (S0 slice 2's 27 to 41, slice 3's 42 to 50) stay open to review where they are.
 - **The base: `master` at `5a4bff2`,** the run's. S0 slices 1 (#2), 2 (#3), 3 (#6), 7 (#1) and 8 (#4, closed
-  by #5) are merged there, each squashed. Slice 3's plan is still at `slices/s0-3-scan-device.md`; moving it to
-  `archive/` is this run's fix stage's (the control file), not a step's. The branch is made by the plan review
+  by #5) are merged there, each squashed. Slice 3's plan was still at `slices/s0-3-scan-device.md`; the fix
+  stage moved it to `archive/slices/` (the control file), not a step. The branch is made by the plan review
   if it's missing.
 - **`master` moved as this plan was drafted: S0 slice 1a merged as #7** (`42e4227`, 2026-11-09, `sane-dl`'s
   public API made safe), its branch and worktree gone. The steps are written for `5a4bff2`; bringing `master` in
@@ -589,7 +592,9 @@ each "Done when" says only what the step adds; a check whose subject the step do
 - **Probe F1** (this plan's, `scratch/work/s0-4/plan-probe/deps/f32-sweep.txt`): every finite `f32`,
   4,278,190,080 of them, through `serde_json` 1.0.154 and back, bit for bit equal (23 s on 16 threads, release);
   `NaN` and both infinities written `null` and refused on reading. So the model's `f32`s (paper sizes, a page's
-  `dpi`) cross exactly, and the non-finite can't cross at all (decision 6).
+  `dpi`) cross exactly, and the non-finite can't be written (decision 6). Not so read: `serde_json` reads a
+  number past an `f32`'s range (`1e39`) as an infinity, so a worker can send one, and the client checks every
+  size it reads for being finite (the code review's behaviour finding 3).
 - **The MSRV probes** (steps 1 to 3): each crate's own graph, normal, build and dev, every target.
 - **The spec, item by item:** the seam note's "What slice 4 needs of it", the milestone's slice 4 entry and
   `crates/scan-worker.md`, a row each in step 5's check, each met or said where it went.
@@ -618,9 +623,10 @@ each "Done when" says only what the step adds; a check whose subject the step do
 5. **JSON lines through `serde_json`,** message names snake case, a page's line then its bytes: the spec's
    shape, readable, and the bytes never in JSON.
 6. **A request is checked by its own round trip before it's sent;** one that doesn't come back equal is
-   `Unsendable`. JSON can't hold `NaN` or an infinity (probe F1: `null`), so the model's "settings clamped
+   `Unsendable`. JSON can't write `NaN` or an infinity (probe F1: `null`), so the model's "settings clamped
    whatever their values" stops at the pipe; refusing says so where clamping a value the worker never saw
-   couldn't.
+   couldn't. (Reading is another matter: a number past an `f32`'s range reads as an infinity, so what the client
+   reads is checked itself: decision 46.)
 7. **The version is the worker's `hello` alone,** compared by the client before it sends anything; `PROTOCOL`
    starts at 1 and slice 11 bumps it once. The worker doesn't check the client's: the client never writes to a
    worker it refused.
@@ -727,10 +733,11 @@ each "Done when" says only what the step adds; a check whose subject the step do
     BUG-8, FEAT-13, Q-7, TEST-14, TEST-15 and UP-14, as the control file says.
 36. **The seam note gets one sentence,** at the head of "What slice 4 needs of it", off every TWAIN line (the
     control file: the Windows machine edits those).
-37. **`serde` and `serde_json` join `[workspace.dependencies]`** (two members each); **`tempfile` doesn't
-    yet:** joining would change `sane-dl`'s manifest (`tempfile = "3"` in its dev-dependencies), which the
-    control file keeps this slice off (slice 1a was changing that crate as the run began). `scan-worker` takes
-    `tempfile = "3"` itself; it joins at the next slice that edits `sane-dl`'s manifest.
+37. **`serde` and `serde_json` join `[workspace.dependencies]`** (two members each); **`tempfile` didn't
+    then:** joining would change `sane-dl`'s manifest (`tempfile = "3"` in its dev-dependencies), which the
+    control file kept this slice off (slice 1a was changing that crate as the run began). `scan-worker` took
+    `tempfile = "3"` itself, to join at the next slice that edits `sane-dl`'s manifest. It joined in the code
+    review's fix instead (decision 54), slice 1a being merged by then.
 38. **A worker's program and the work directory must be absolute paths,** refused at start otherwise: a bare
     program would be searched for, and on Windows the search starts in the current directory; a relative work
     directory would be read from wherever the app stands when it opens a device, and `ConfigDir::write`
@@ -739,6 +746,89 @@ each "Done when" says only what the step adds; a check whose subject the step do
     behind it: the client never sends them, and a queued answer after a batch's `done` would only confuse.
 40. **No `#[non_exhaustive]` on `WorkerCommand` and `Client`** (fields private, built by methods); `Limits`
     and `Timeouts` are, with public fields set after `Default`, as the model's growing structs are.
+
+41. *(The code review's fixes, 2026-11-09, from here to 55.)* **A worker's end is seen as its output ends or
+    as its process exits,** whichever comes first: every wait on the reader is cut into slices of 50 ms, and
+    after each silent one the client asks the system whether the process has exited (`Child::try_wait`, which
+    reaps it). Once it has, what the reader still holds is taken, and a reader quiet for 250 ms after is the
+    output's end, a page cut short said where the reader stood within one (a flag the reader sets around a
+    page's bytes); a `Stopped` that would fall on a process found exited is `Crashed` instead. 250 ms because
+    what a process leaves in its pipe as it exits is a pipe's buffer at most, read in a moment, and a process it
+    started may hold the pipe for good. The end of standard error is waited for that long, not a grace, once the
+    worker has ended (exited, or killed and reaped or handed to the reaper), for the same reason. Weighed: a
+    thread blocked in `wait` beside the reader (a second thread per worker, and `Child` can't be shared
+    without a lock the waits would hold); a process-wide `SIGCHLD` handler (`wait-timeout`'s way, rejected in
+    the plan for being process-wide). The reader and standard error's threads stay blocked until the process
+    that holds the pipes lets go: a thread each, left, never the caller.
+42. **`close` keeps the worker's input open while the worker exits,** dropping it once the worker has exited or
+    the grace has passed, rather than `serve` not arming its abort once `quit` is in: the abort is what ends a
+    worker whose driver's close hangs after its client has gone, and a client that dies mid-close still closes
+    the input, so the 10 s bound holds in every case where the client can't act. A protocol client written
+    apart that closes its input at once after `quit` meets the abort at 10 s, which the crate docs say.
+43. **`SIGPIPE`: the requirement documented, the window narrowed, the transport left** (the API lens's major
+    finding 1). The crate docs, `Client`'s and the README say that on Unix the app keeps `SIGPIPE` ignored, as
+    Rust's runtime leaves it; the client writes nothing to a worker it has found exited. A worker that closes
+    its input while it lives (hostile: the reviewer's probe) still ends an app at the default action, shown again
+    after the fix (exit 141, `scratch/work/s0-4/fix/sigpipe-output.txt`). Making it hold whatever the app's
+    disposition is FEAT-16: on Linux a pipe write's `SIGPIPE` goes to the writing thread, so a writer thread
+    with it blocked would do, but on macOS the kernel raises it on the process for a pipe, so a pipe can't be
+    made safe there without `F_SETNOSIGPIPE` (no safe crate API found: `nix` 0.31 has neither it nor
+    `sigpending`); a Unix socket pair as the worker's input, written with `MSG_NOSIGNAL` (Linux, the BSDs) or
+    `SO_NOSIGPIPE` (macOS, through `socket2`'s safe API), would, and is a transport change worth its own
+    slice's checks; its test needs a process with `SIGPIPE` at its default action, which a Rust test sets only
+    with `unsafe` or nightly. Security item 9.
+44. **A listing, and a failed open, wait for their worker's exit** (the API lens's finding 4), documented on
+    `Client::list` and `Client::open` rather than handed to the reaper thread: when the call returns, the
+    process is reaped and its private directory gone, which an app that lists and exits relies on (a thread
+    would leave both to an app that exits first). A driver slow to close holds the answer up to the grace.
+45. **The settings window stays untimed, and nothing stops it from another thread yet** (the API lens's finding
+    9): documented on `settings_window`; a stop handle (`Send + Sync`, killing the worker) is additive API and
+    FEAT-17, for slice 9, where TWAIN's own windows are tried.
+46. **The client checks what the model promises,** each breach `ProtocolError::Invalid` or `Unexpected`, the
+    worker killed: caps' resolutions above 0 and a largest paper finite and above 0 (the rules the fake already
+    held, now in the model's docs: `Resolutions`, `SourceCaps::max_area`, `Caps`, slice 4's change to the model,
+    docs alone); a batch's order (its settings applied once, before the first sheet; the sheets numbered on from
+    `first_sheet`; each page of the sheet begun last, a side of it once; `ScanError::FeederEmpty` only before
+    any page); a page encoded only in a form the settings asked for; the applied paper finite and above 0, and
+    each `Clamped` value equal to what was asked (the model's "with what was asked"), which is stricter than the
+    reviewer's "finite" for a clamped paper: an app's own non-positive paper comes back clamped as asked, so
+    "above 0" would refuse a legitimate answer, and equality refuses an infinity the app never sent; an open's
+    `info.id` the stored one's unless it says it renamed, and `renamed_from` the stored id, and not said where
+    the stored device itself opened. A simplex batch's back page isn't refused: no rule of the model's says so
+    plainly yet (Q-6's to settle).
+47. **A hello is read for its protocol alone where the rest isn't this protocol's** (`AnyHello`): any line
+    whose `hello.protocol` is a number other than `PROTOCOL` is `Version`, whatever else it holds; this
+    protocol's own hello, broken, stays `Unreadable`. `PROTOCOL`'s docs say it stays 1 while the crate is
+    0.0.x, a worker and its client from one build, as decision 7 and the crate's "Stability" have it; the
+    hello's `version` is said to be unread by the client, not exposed (an app gains nothing from it before the
+    freeze).
+48. **A request longer than a worker reads is `Unsendable`,** checked in `sendable` beside the round trip: the
+    caller's data (a stored `DeviceInfo`, `Settings::encodings`) never kills a healthy worker.
+49. **`Error::Stopped` says which time ran out** (`Timeout`: `Start`, `Deadline`, `Silence`, `Cancel`, `Exit`)
+    and how long the client waited (`waited`, renamed from `silence`, since close's kill waited for an exit, not
+    a silence); **`Error::WorkDir`**, naming the work directory, where the worker's directory can't be made,
+    `Start` keeping the program's failures; `Start`, `WorkDir`, `Stopped` and `Crashed` `#[non_exhaustive]`.
+    Breaking, at 0.0.x and unpublished.
+50. **The bounds said as they are:** close and drop hold the caller at most twice the grace and a moment
+    (250 ms) for standard error's end; a listing waits for its worker's exit (decision 44).
+51. **Each library linted and documented alone** (the hygiene lens's major finding): the justfile's
+    `libraries` lists every member, the clippy and doc recipes run `-p` over it, and the gates check the list
+    against `cargo metadata`'s members, so the recipes need no `jq` on CI's three systems and a member added
+    later fails the gates until it's listed. The workspace line `cargo clippy --workspace --lib` goes, every
+    library now being linted alone.
+52. **The tests' `reaped` checks macOS through `ps`** (`-o stat= -p <id>` listing nothing once the process is
+    reaped) and says, past the harness's capture, where it checks nothing (Windows): only CI's macOS runner
+    shows the `ps` branch run.
+53. **`fake`'s wording:** the README and the manifest say the feature turns on `scan-device`'s `fake`, which
+    the re-export then shows; the feature stays (a binary can't take a dev-dependency, decision 29).
+54. **`tempfile` joins `[workspace.dependencies]`,** both members taking `tempfile.workspace = true`: one line of
+    `/crates/sane-dl/Cargo.toml` (its dev-dependencies), named here as the control file asks; the lock is
+    unchanged, and `master`'s slice 1a leaves that line and its neighbours as they were, so the merge meets
+    nothing there.
+55. **The new tests are timed loosely:** a worker ending with its pipes held must be seen ended within 5 s (it's
+    250 to 300 ms), and a held exit of 11 s against a grace of 30 s must close within 10 to 30 s; the
+    holding process the test worker starts ends once its input does, a minute at most, so a failing run leaves
+    nothing behind.
 
 ## For review (security)
 
@@ -764,6 +854,19 @@ each "Done when" says only what the step adds; a check whose subject the step do
    driver started is outside both, until slice 9's Job object (FEAT-14) on Windows.
 8. **A driver's text reaches the app's errors:** the last 8 KiB of a worker's standard error, kept in
    `Stopped` and `Crashed`, bounded, for the app to log or show.
+9. *(The code review's.)* **A worker can end an app that sets `SIGPIPE` back to its default action** (on Unix,
+   by closing its input while it lives, just before the client writes): documented as the app's to keep
+   ignored, as Rust's runtime leaves it, and narrowed (no write to a worker found exited); made to hold whatever
+   the disposition in FEAT-16 (decision 43).
+10. *(The code review's.)* **A process a driver started can no longer hide its worker's end:** the client
+    watches the process, so a crash under a helper holding the pipes is `Crashed` within about 300 ms, never an
+    untimed settings window held for good or a batch's silence; the reader and standard error's threads wait
+    for that helper to let go, a thread each (decision 41). The helper itself still outlives its worker until
+    FEAT-14 (Windows) or a group kill.
+11. *(The code review's.)* **More of the model's promises checked at the trust line** (decision 46): a hostile
+    worker's caps, applied settings, batch order, encodings and open ids, any one of which app code could
+    rely on (an `unreachable!` on a raw page, a stored record keyed by `renamed_from`), are refused and the
+    worker killed; a size read past an `f32`'s range is an infinity, and refused as one.
 
 ## Risks
 
@@ -1381,3 +1484,132 @@ past the page, which blocks, so it fails two tests beyond its target, whose own 
   `sane-dl`'s `DEFAULT_LIBRARIES.is_empty()` (step 3) not one either, since CI's clippy is stable's and
   `sane-dl` is left alone here; a worker's stray standard output kept as an "Open" of `crates/scan-worker.md`
   for slice 5 rather than an item.
+
+## Code review
+
+2026-11-09, on `5a4bff2..18f5b68`, by three reviewers in parallel through three lenses (behaviour and correctness;
+the crates as published libraries, adversarially; the repository's hygiene), their probes under
+`scratch/work/s0-4/review-behaviour/`, `review-api/` and `review-hygiene/`. The checks before it: step 5's check
+passed on `18f5b68` (`scratch/work/s0-4/flow/checks.md`): docs only, so `just ci` left out with step 4's run
+standing; 465 tests, as step 4's; `just gates` green (`scan-worker` 31 packages, 36 binaries read for libsane);
+FEAT-14, FEAT-15, TEST-16 and Q-8 still free on `origin/master` (`42e4227`); the backlog in its format and its
+table exact; every cited path found; the commit messages and `git grep` clean of the maintainer's name and
+private paths; the spec item by item, 28 rows, each met or placed. Its remarks (`docs/pm/README.md`'s slices
+row, `plan.md`'s and `status.md`'s slice 3 lines, the MSRV line's "1.89's std") are taken in the bookkeeping
+below.
+
+20 findings, 5 major and 15 minor, each verified against the code first, the behavioural ones reproduced (the
+reviewers' probes run again on the fixed code: `scratch/work/s0-4/review-behaviour/probe-output-after-fix.txt`,
+`scratch/work/s0-4/fix/api-probe-output.txt`): **18 fixed whole, two fixed in part with their other halves
+deferred** (FEAT-16, FEAT-17), none refuted. Fixed in `3f26cb7` (the client: its waits, its end, its checks, its
+errors and docs; the model's docs; the test worker), `510d349` (the justfile, `tempfile`, the tests' reaping
+check), and the last commit (this bookkeeping). Decisions 41 to 55 are the fixes' (above); "For review
+(security)" gains items 9 to 11.
+
+**Behaviour:**
+
+1. *Major: a worker's death was seen only as the end of its output, so a process the driver started, holding
+   the pipe, turned a crash into silence.* Holds: the reviewer's `grandchild-window` waited past 10 s on a
+   zombie, and `grandchild-batch` (an exit with 7) came back `Stopped` after the silence and a grace in
+   `Stderr::tail`. **Fixed** (`3f26cb7`; decision 41): every wait asks after the process each silent 50 ms,
+   what the reader holds is taken and its quiet 250 ms after is the end, `Stopped` on an exited process is
+   `Crashed`, and standard error's tail waits 250 ms once the worker has ended. After: the window `Crashed`
+   (status 134) in 1.7 s (the Python worker's core dump), the batch `Crashed` with status 7 in 0.55 s. Tests:
+   `ends.rs`'s `a_worker_that_ends_with_its_output_held_open_is_seen_ended`, through two new hand-written
+   scenarios, `helper-window` and `helper-batch`, whose driver starts `held` (the test worker again, holding
+   the pipes until its input ends) and then aborts or exits; and the reader's in-page flag, unit-tested.
+2. *Minor: caps the fake forbids (0 dpi, a range from 0, a largest paper not finite and above 0) passed.*
+   Holds (`zero-caps`, `inf-caps`). **Fixed** (`3f26cb7`; decision 46): `check_caps` takes the fake's rules,
+   unit-tested edge by edge; the model's docs (`Resolutions`, `SourceCaps::max_area`, `Caps`) say them, so
+   both checks have one source.
+3. *Minor: "the non-finite can't cross at all" is false on reading: `1e39` reads as an infinity.* Holds
+   (`inf-applied`, `inf-caps`). **Fixed:** the applied paper checked finite and above 0, a clamped paper equal
+   to what was asked (`3f26cb7`; decision 46); a unit test pinning `serde_json`'s reading of `1e39`; the three
+   texts corrected: `scan-device`'s crate docs (`3f26cb7`), probe F1's baseline and decision 6 here, and
+   `crates/scan-device.md` (this commit).
+4. *Minor: a batch's order wasn't checked.* Holds (`order`: a back page of sheet 7 first, sheets going
+   backwards, `applied` after them, `FeederEmpty` after a page, each passed on). **Fixed** (`3f26cb7`;
+   decision 46): the batch's `Order` (applied once and first, sheets numbered on, each page of the sheet begun,
+   a side once, `FeederEmpty` only before pages), unit-tested and through `page-first`, `applied-late`,
+   `sheet-out-of-turn` and `empty-after-page`.
+5. *Minor: an open's `renamed_from` and `info.id` weren't checked against the stored device.* Holds
+   (`renamed`). **Fixed** (`3f26cb7`): `check_opened`, unit-tested, and through `opened-another` and
+   `renamed-elsewhere`.
+6. *Minor: a later protocol's hello without `version` read as `Unreadable`.* Holds (`hello-v2`). **Fixed**
+   (`3f26cb7`; decision 47): another protocol's hello is read for `hello.protocol` alone, so it's `Version`;
+   `PROTOCOL`'s docs say that field keeps its form. Through `later-hello` and the reader's unit tests.
+
+**The crates as published libraries:**
+
+1. *Major: a write to a worker that has just died kills an app with `SIGPIPE` at its default action, unsaid.*
+   Holds (the reviewer's `sigpipe` probe: exit 141). **Fixed in part** (`3f26cb7`; decision 43): the
+   requirement documented (the crate docs, `Client`, the README), and no write made to a worker found exited.
+   **Deferred, its other half,** as FEAT-16: making it hold whatever the disposition takes a transport of
+   another kind on macOS, and a test with `unsafe` or nightly; out of a fix stage's reach. The probe still
+   dies (its worker closes its input while it lives): `scratch/work/s0-4/fix/sigpipe-output.txt`. Security
+   item 9.
+2. *Major: a `Timeouts::grace` past 10 s made a slow close the worker's own abort.* Holds (`long-grace-close`:
+   `Crashed`, status 134, at 11.1 s). **Fixed** (`3f26cb7`; decision 42): the input kept open while the worker
+   exits; `serve`'s docs and the crate docs say the abort covers a close after its client has gone. After:
+   `Stopped` (`Timeout::Exit`) at 30 s, as the grace says. Test (`ends.rs`):
+   `a_grace_past_the_worker_s_own_10_s_lets_a_slow_driver_close` (`slow-exit` held 11 s, its count now the
+   seconds, closing `Ok`).
+3. *Major: a request past the worker's 1 MiB cap came back `Protocol(Refused)` and killed a healthy worker.*
+   Holds (`big-request`, `big-settings`). **Fixed** (`3f26cb7`; decision 48): `Unsendable`, nothing sent,
+   unit-tested at the cap and one past; `Unsendable`'s docs and message say it. After: `Unsendable`, and
+   `caps` answers after it.
+4. *Minor: a listing, and a failed open, hold the caller for the worker's exit.* Holds (`slow-exit-list`: 5 s).
+   **Fixed** by its second recommendation (`3f26cb7`; decision 44): `list` and `open` say they wait for the
+   worker's exit, the grace and a kill's reaping.
+5. *Minor: the model's promises the docs claim the client checks (encodings asked, sheets numbered) weren't.*
+   Holds (`encoded-unasked`). **Fixed** (`3f26cb7`; decision 46), as behaviour finding 4, and
+   `encoded-unasked` by hand.
+6. *Minor: `PROTOCOL`'s docs promised a bump at every change of form; the hello's version dropped.* Holds.
+   **Fixed** (`3f26cb7`; decision 47): the docs say 1 while 0.0.x, worker and client from one build; the
+   version's "for a log" replaced by "a client doesn't read it".
+7. *Minor: close and drop could wait a third grace, in `Stderr::tail`.* Holds. **Fixed** (`3f26cb7`;
+   decisions 41 and 50): the tail waits 250 ms once the worker has ended; the docs say twice the grace and a
+   moment.
+8. *Minor: `Stopped` and `Start` didn't say which limit or which path failed.* Holds (`missing-dir`).
+   **Fixed** (`3f26cb7`; decision 49): `Timeout` and `waited`, `WorkDir` naming the directory, the struct
+   variants `#[non_exhaustive]`. After: `WorkDir "/nonexistent/dir" kind NotFound`.
+9. *Minor: the settings window is untimed and nothing ends it from another thread.* Holds. **Fixed in part**
+   (`3f26cb7`; decision 45): documented. **Deferred, its other half,** the stop handle, as FEAT-17 (additive
+   API; slice 9's TWAIN windows).
+10. *Minor: the README and the manifest said `fake` leaves the library unchanged.* Holds. **Fixed**
+    (`3f26cb7`; decision 53).
+
+**The repository's hygiene:**
+
+1. *Major: no check built `scan-device` without `serde` any more.* Holds (the reviewer's make-fail). **Fixed**
+   (`510d349`; decision 51): each library linted and documented alone from the justfile's `libraries`, which
+   the gates check against the members. Shown: the reviewer's ungated `pub use serde::Serialize` passes the
+   workspace lines and fails `just clippy` and `just doc` at `-p scan-device` (E0432); a member left out of
+   `libraries` fails `just gates` naming both lists (`scratch/work/s0-4/fix/make-fail-justfile.txt`).
+2. *Minor: `reaped` passed silently off Linux; TEST-16 misdescribed it.* Holds. **Fixed** (`510d349`; decision
+   52): macOS asks `ps`, elsewhere it says so past the capture; TEST-16's parenthesis corrected (this commit).
+3. *Minor: `tempfile` in two members, not the workspace's.* Holds. **Fixed** (`510d349`; decision 54).
+4. *Minor: `docs/pm/README.md`'s slices row named slice 3's plan alone.* Holds. **Fixed** (this commit): it
+   names slice 4's, slice 3's having moved to `archive/slices/`.
+
+**The fix's checks** (`scratch/work/s0-4/fix/`), on the committed tree (`510d349`): `just ci` green with both
+`SANE_DL_REQUIRE_*` set, the control file read before it (`pause: no`, `overlap: no`, `skip: []`): 913 tests,
+the four MSRV recipes on 1.89, `sane-dl-package` run, the gates holding (`scan-worker` 31 packages, 36 binaries
+read for libsane), 141 s (`just-ci.log`). The test list 465 to **478, none lost**
+(`scratch/work/s0-4/tests-fix.txt`, `tests-fix.norm.txt`, beside the steps'): five integration tests and eight units added, three doctests renamed by their line only.
+Make-fails on a worktree at `510d349`, its own target directory, restored after (`make-fail.txt`, its script
+beside it): 12 mutations, 11 failing as they should (the input dropped at once on quit; the process never asked
+after; the order unchecked; `FeederEmpty` after pages taken; the open's ids unchecked; another protocol's hello
+unread; a request's length unchecked; caps' new rules; a largest paper; an applied paper; the in-page flag
+never set), and one passing: `stopped`'s look for an exit, which only a deadline falling inside the 250 ms
+after an exit reaches, a race no test can place, kept as the order of the checks; the justfile's two
+(`make-fail-justfile.txt`). The timing binaries (`ends`, `protocol` twice, `watchdog`) eight rounds at once:
+32 of 32 (`loop.txt`). The throughput at the base and at the fix, alternating, four runs each: `Rgb8` 28.8 to
+30.5 pages a second at both (`throughput-paired.txt`), so the per-message checks cost nothing measurable.
+`cargo clippy -p scan-worker --all-targets --all-features -D warnings` for `x86_64-pc-windows-gnu` and
+`x86_64-apple-darwin`: clean. Not run again, and why: the MSRV probe and `cargo tree` (no package added or
+removed; `tempfile` moved to the workspace at the same version, the lock unchanged); the publish dry run
+(`publish = false`); the earlier gates' make-fails (the gates' old parts unchanged); the harness (nothing cut
+from sheaf). Only CI shows (TEST-16): the new tests on Windows and macOS (a held process inheriting the pipes
+there, `aborted` for the window's worker, the 11 s close), `reaped`'s `ps` branch on macOS, and the
+per-crate clippy and doc lines on the three systems.
