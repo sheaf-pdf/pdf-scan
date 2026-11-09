@@ -13,6 +13,13 @@ slice 2 (after `sane-dl` is written), after the TWAIN spike (S0 slice 7), and wh
 model lacking, each change said. The model it describes is provisional until S0 slice 11 freezes it
 (`milestones/s0-devices.md`).
 
+**Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (Greg ran slice 7 first, on the Windows
+machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against
+the TWAIN Working Group's sample data source in both bitnesses, here and on `windows-latest`
+(`slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which signals
+synchronously, has one image, and can't jam, feed two sides or report extended image info; the hand checks
+(S0 slice 12) settle the rest. SANE's rows are as they were, for slice 2.
+
 ## The rules it keeps
 
 - **The bindings say what their API says; the backends decide what it means.** `sane-dl` and `twain-dsm` expose
@@ -29,7 +36,7 @@ model lacking, each change said. The model it describes is provisional until S0 
 | API | How |
 |---|---|
 | SANE | `sane_get_devices` (optionally local only) gives each device's `name`, `vendor`, `model`, `type`. Slow (10.7 s here with nothing attached). No attach or detach events. The name is the backend's: fujitsu's carries the model and a serial (`fujitsu:fi-6130dj:…`), others a USB bus address that changes on replugging (to confirm per backend in S0 slice 1). |
-| TWAIN | The DSM lists sources (`DAT_IDENTITY`, `MSG_GETFIRST`/`MSG_GETNEXT`) as `TW_IDENTITY`s: product name, manufacturer, product family, version. Fast and local, but per bitness: a 64-bit DSM lists 64-bit sources only. A source is opened by its identity. No serial. `MSG_DEVICEEVENT` reports events of an open source, not attach and detach. |
+| TWAIN | The DSM lists sources (`DAT_IDENTITY`, `MSG_GETFIRST`/`MSG_GETNEXT`) as `TW_IDENTITY`s: product name, manufacturer, product family, version. Local, but per bitness: a 64-bit DSM lists 64-bit sources only. The DSM loads every source's library at `MSG_OPENDSM`, before anything is listed, so opening the DSM runs each installed driver's code (its log says so), and its cost grows with the drivers installed. DSM 2.5 deliberately skips Windows' own `wiatwain.ds` (its log: "We're deliberately skipping this file"), so WIA devices aren't reached through TWAIN. A source is opened by its identity. No serial. `MSG_DEVICEEVENT` reports events of an open source, not attach and detach. |
 | WIA | `IWiaDevMgr2::EnumDeviceInfo`: a device id string, name, manufacturer. `RegisterEventCallbackInterface` can report connect and disconnect. |
 | ICA | `ICDeviceBrowser` and its delegate: devices added and removed as they come (`didAddDevice`, `didRemoveDevice`), asynchronously; each with a persistent id (to confirm). |
 
@@ -73,7 +80,7 @@ sizes against a feeder's own size detection (`Auto`, proposal 9) in each API.
 | API | How |
 |---|---|
 | SANE | Per page, pulled: `sane_start`, then `sane_get_parameters` (format `GRAY`, `RGB`, or one of `RED`/`GREEN`/`BLUE`; `last_frame`; bytes and pixels per line; lines, or -1 for unknown; depth 1, 8 or 16), then `sane_read` in chunks to `EOF`. If not `last_frame`, `sane_start` again for the next frame (three-pass color). Raw rows, top down; 1-bit with 1 black and the first pixel in the high bit; 16-bit in the host's byte order. SANE 1 has only these five frame types: JPEG, CCITT and infrared frames are reserved for a later SANE under `#if 0`. Blocking, or non-blocking with a select fd. |
-| TWAIN | Per image, pushed then pulled: the source posts `MSG_XFERREADY` (state 6); `DAT_IMAGEINFO` gives width, height, resolution, pixel type, bits per pixel and compression; then a transfer (state 7): **native** (on Windows a handle to a DIB: a header, a palette, rows bottom up, each padded to four bytes), **memory** (buffers of rows or tiles with `XOffset`, `YOffset` and bytes per row, compressed if `ICAP_COMPRESSION` asked for G4 or JPEG), **file** or **memory file** (the driver writes a file format). After it, `DAT_EXTIMAGEINFO` (section 4), then `DAT_PENDINGXFERS`/`MSG_ENDXFER`, which says how many more are pending. |
+| TWAIN | Per image, pushed then pulled: the source posts `MSG_XFERREADY` (state 6), once per enable: after `MSG_ENDXFER` with pages pending the application transfers again, with no second signal. `DAT_IMAGEINFO` gives width, height, resolution, pixel type, bits per pixel and compression; then a transfer (state 7): **native** (on Windows a `GlobalAlloc` handle to a packed DIB, the application's to free: a header, a palette, rows bottom up, each padded to four bytes, BGR), **memory** (buffers of rows or tiles with `XOffset`, `YOffset` and bytes per row, compressed if `ICAP_COMPRESSION` asked for G4 or JPEG; the sample sends strips of full rows, top to bottom, rows padded to four bytes, as many rows as fit the preferred buffer), **file** or **memory file** (the driver writes a file format). After it, `DAT_EXTIMAGEINFO` (section 4), then `DAT_PENDINGXFERS`/`MSG_ENDXFER`, which says how many more are pending. |
 | WIA | Pushed: `IWiaTransfer::Download` calls back `GetNextStream` for each page (we hand it a stream) and `TransferCallback` with progress (`ulTransferredBytes`; not the percentage, which peaks near 40 then jumps), end of stream and end of transfer. The page's format is the driver's choice among what it lists (`EnumWIA_FORMAT_INFO`): a bitmap, WIA's raw format, PNG, JPEG or TIFF. |
 | ICA | Pushed, through delegates: memory-based transfers give bands (`ICScannerBandData`: the full image's size, bits per pixel and per component, rows from a start row, bytes per row, a buffer); file-based ones a file's URL (to confirm). |
 
@@ -98,6 +105,17 @@ it, and 16-bit little-endian, both said in the type); whether to ask TWAIN and W
 or tiles (leaning: tiles, assembled by the backend, so `twain-dsm` stays TWAIN alone); what a native DIB's
 palette becomes.
 
+**Settled by the TWAIN spike:** `twain-dsm` hands over **tiles as TWAIN gives them** (each buffer's offsets,
+columns, rows, bytes per row and bytes written) and **the DIB's bytes as a block**; the `twain` backend
+assembles and decodes, checking each against its bounds before reading (`twain-spike`'s `image` module is the
+shape: tiles in any order, overlaps and gaps refused, 1-bit tiles that start or end within a byte refused).
+**A DIB's palette is the backend's to apply:** a 1-bit palette black then white (the sample's) or white then
+black, read into the raw layout's polarity; an 8-bit gray palette read through (the sample's is an identity
+ramp); a color palette on 8 bits refused until a driver sends one. A memory transfer's 1-bit and gray polarity
+is `ICAP_PIXELFLAVOR`'s (`TWPF_CHOCOLATE`, 0 black, is all the sample offers). The sample's native and memory
+pages matched pixel for pixel in RGB, gray and black and white once decoded so. Its `ICAP_BITORDER` swaps
+color order the opposite way in the two paths, so the backend never sets it.
+
 ## 4. Sheets, sides and order
 
 | API | How |
@@ -120,7 +138,7 @@ in S0 slice 12); whether WIA or ICA says the side anywhere.
 | API | How |
 |---|---|
 | SANE | `NO_DOCS` from `sane_start`: on the first page the feeder is empty, later it's done. Some backends return it from `sane_read`. A flatbed: one page per press (some give the same page forever). |
-| TWAIN | `CAP_FEEDERLOADED` false before enabling: empty. `TWCC_NOMEDIA`. With `CAP_XFERCOUNT = -1` the source scans until empty; `MSG_ENDXFER`'s pending count reaching 0 is done (state 5). |
+| TWAIN | `CAP_FEEDERLOADED` false before enabling: empty. `TWCC_NOMEDIA`. With `CAP_XFERCOUNT = -1` the source scans until empty; `MSG_ENDXFER`'s pending count reaching 0 is done (state 5). Until then the count is 0xFFFF, "don't know" (the sample's, after every page but the last), so a TWAIN batch's length is unknown until it ends. |
 | WIA | `WIA_ERROR_PAPER_EMPTY` at the start: empty. `WIA_STATUS_END_OF_MEDIA` (0x210001), or the end of the transfer: done. `FEED_READY` is a hint, wrong either way at times. A page count reached while the feeder runs on: cancel and `WIA_CMD_STOP_FEEDER`. |
 | ICA | The feeder unit's "document loaded" (to confirm); the scan's completion delegate without an error: done. |
 
@@ -147,15 +165,16 @@ surfaced. `Stopped` stays the watchdog's (proposal 4). Pages before an error are
 not.
 
 **To settle:** what "Continue" after a jam is in each API (SANE: `sane_cancel`, then `sane_start` again;
-TWAIN: whether the source stays enabled or needs `MSG_RESET` and enabling again, S0's TWAIN spike and the hand
-check; WIA: a new `Download`); whether `Busy` and `Gone` need telling apart for the user beyond their words.
+TWAIN: whether the source stays enabled or needs `MSG_RESET` and enabling again, the hand check, since the
+sample source can't jam and the spike couldn't settle it; WIA: a new `Download`); whether `Busy` and `Gone` need
+telling apart for the user beyond their words.
 
 ## 7. Cancel
 
 | API | How |
 |---|---|
 | SANE | `sane_cancel` from any thread; the read in progress returns `CANCELLED`; no other call on the handle, `sane_close` included, until it has. |
-| TWAIN | By state: in 5, wait for `MSG_XFERREADY` and end it there (forcing a step down in 5 draws errors from some scanners); in 6 and 7, `MSG_ENDXFER` and `MSG_RESET`. On the TWAIN thread, so a cancel is posted to its message loop. |
+| TWAIN | By state: in 5, wait for `MSG_XFERREADY` and end it there (forcing a step down in 5 draws errors from some scanners); in 6 and 7, finish the transfer in flight, `MSG_ENDXFER`, then `MSG_RESET` (state 5, nothing pending). `MSG_STOPFEEDER` exists for "feed no more", but the sample refuses it (`TWCC_BADPROTOCOL`). On the TWAIN thread, so a cancel is posted to its window and taken by its loop. |
 | WIA | `S_FALSE` from `TransferCallback`, on the STA thread, or `IWiaTransfer::Cancel`. |
 | ICA | Cancel the scan on the device, on its run loop's thread (to confirm). |
 
@@ -166,14 +185,26 @@ stuck), TWAIN by `MSG_RESET` after the current transfer ends, WIA by refusing th
 Stopping mid-page is the watchdog's: it kills the worker (proposal 4).
 
 **To settle:** whether each API can finish the page in flight and feed no more, or only stop at once (S0's SANE
-slices for SANE; the TWAIN spike for TWAIN; WIA and ICA by hand).
+slices for SANE; WIA and ICA by hand). **TWAIN, by the spike:** the page in flight finishes and nothing more is
+transferred (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops is the driver's: the sample fed the next
+sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks (slice 12) say what real
+feeders do, and whether `MSG_STOPFEEDER` helps where a driver has it.
+
+**Proposed, for slice 3 (Greg's to rule; he asked whether `in-progress` fits, 2026-11-08):** the cancel handle
+and the progress events through `in-progress`, his crate, which `scan-cleanup` already takes. A `Tracker` is the
+`Send + Sync` handle any thread can cancel; each backend calls `check()` between pages, never within one, which
+is "finish the page in flight"; progress is `set_total(Some(page bytes), Unit::Bytes)` and `inc` per buffer;
+and the intake pipeline could give scanning and cleanup weighted children of one tracker. Two seams: its
+progress is polled, not pushed, so `scan-worker` polls the worker's tracker and forwards snapshots over its
+pipe; and a flag can't wake the TWAIN thread blocked in `GetMessageW`, so the TWAIN backend posts a message to
+its window as well.
 
 ## 8. Threads and events
 
 | API | How |
 |---|---|
 | SANE | Pull, on the caller's thread: one thread per handle, calls never overlapping; `sane_cancel` the one call allowed from elsewhere. |
-| TWAIN | Push, through a window's message loop on one STA thread that makes every DSM call; `MSG_XFERREADY`, `MSG_CLOSEDSREQ` (the user closed the driver's window) and `MSG_DEVICEEVENT` arrive there. TWAIN 2's `DAT_CALLBACK2` delivers the source's messages by callback; whether that's enough on Windows without the loop is to confirm, and the plan keeps the window and its loop either way. |
+| TWAIN | Push, through a window's message loop on one STA thread that makes every DSM call; `MSG_XFERREADY`, `MSG_CLOSEDSREQ` (the user closed the driver's window) and `MSG_DEVICEEVENT` arrive there. Without a callback, every window message is forwarded through `MSG_PROCESSEVENT` while the source is enabled, and a waiting source message comes back with whichever is forwarded first (on a new window, the desktop window manager's `WM_DWMNCRENDERINGCHANGED`; later, the DSM's own `WM_NULL`), the carrier not to be dispatched. With TWAIN 2's `DAT_CALLBACK2`, registered on the source in state 4, the DSM calls the callback on the thread that called into it, inside that call (for the sample, inside `MSG_ENABLEDS`), and hands its return to the source, which fails the enable on anything but `TWRC_SUCCESS`: the callback only records and posts. Both worked with the sample, which signals synchronously; whether a callback is enough without the loop for sources that signal later, from their own windows or threads, is slice 12's, and the window and loop stay either way. The DSM changes the process's current directory to each source's folder while loading it, so the worker uses no relative paths. |
 | WIA | Push, on an STA thread: `Download` is one blocking call that calls back on the same thread. |
 | ICA | Push, through delegates on a run loop: the main thread's by default; in a worker, the worker's main thread runs it (whether that's enough is open, the survey). |
 
@@ -181,7 +212,11 @@ slices for SANE; the TWAIN spike for TWAIN; WIA and ICA by hand).
 `sheet`, `page`, `progress` and `status` events on the channel; `cancel` is a separate handle, `Send + Sync`.
 The SANE backend runs on that thread directly; the TWAIN, WIA and ICA backends start the thread their API
 needs (an STA thread with a message loop or a run loop), forward its events to the channel, and post
-cancels and requests to it. `scan-worker` sees one shape for all of them.
+cancels and requests to it. `scan-worker` sees one shape for all of them. **TWAIN, by the spike:** events go out
+on a channel (`std::sync::mpsc`); requests come in as the application's own messages (`WM_APP` and up) posted to
+the TWAIN thread's window, taken in the loop and never forwarded to the DSM; the window procedure is
+`DefWindowProcW` itself, so no backend code runs in a callback frame (a panic there would abort the process),
+and the callback holds only atomics. A cancel posted from another thread was taken 5 ms later.
 
 ## 9. The driver's own window
 
@@ -225,11 +260,14 @@ Each section's "To settle", gathered, with what settles it:
 |---|---|
 | SANE names that change on replugging, per backend; a fallback by vendor and model | S0 slice 1, SANE's backends' sources and the office's scanners |
 | Whether SANE can stop after the page in flight | S0 slice 1, the `test` backend |
-| Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | S0 slice 7, the spike |
+| Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | **Settled, S0 slice 7:** tiles and the DIB's block; the backend assembles, decodes and applies the palette (section 3) |
 | How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S0 slice 9 |
-| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | S0 slice 7, the spike |
+| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; the application's own messages posted to the window, never forwarded (section 8) |
+| Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
+| Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
+| The cancel handle and progress through `in-progress` (proposed) | S0 slice 3, Greg's to rule |
 | Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S0 slice 12, the hand checks; the `ica` slice |
-| "Continue" after a jam in TWAIN | S0 slices 7 and 12 |
+| "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam) |
 | Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S0 slice 4's throughput gate; slice 9 |
 | The raw layout's 1-bit polarity and 16-bit byte order | S0 slice 3 |
 | The driver window's owner across processes | S0 slice 9 |

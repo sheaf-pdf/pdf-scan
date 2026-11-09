@@ -1,6 +1,6 @@
 # S0 slice 7: the TWAIN spike, end to end
 
-Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; steps 1 to 3 done. Milestone:
+Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; its four steps done, the code review next. Milestone:
 `milestones/s0-devices.md`, slice 7. Run on the Windows machine, while slice 1 runs on Linux.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -559,3 +559,25 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   context?"): not in the spike, whose question is how a cancel reaches the TWAIN thread (a flag can't wake
   `GetMessageW`; a posted message can); in the device model, likely: step 4 writes it into the seam note as a
   proposal for slice 3, Greg's to rule.
+
+### Step 4: what it found, written down (2026-11-08)
+
+- **What it does:** `crates/scan-device-seam.md` revised: a status paragraph saying slice 7 revised it before
+  slice 2, on the sample source only; TWAIN's rows in sections 1 and 3 to 8; section 3's tiles and palette
+  settled; section 6's "Continue" left to slice 12; section 7's cancel settled for transfers, the feeder
+  left to slice 12, and the `in-progress` proposal (Greg's question during step 3) for slice 3, his to rule;
+  "Known unknowns" with what's settled and three rows added. `crates/twain-dsm.md` corrected: the DSM the
+  application's to install; the signature checked by signer name; what the DSM does (sources loaded at
+  `MSG_OPENDSM`, `wiatwain.ds` skipped, the current directory changed); `TWAINH.cs`, `twain.h`'s layouts
+  and function types; the callback's return; containers read by `ConType` from their bytes; one
+  `MSG_XFERREADY` and the 0xFFFF count; tiles and the DIB's block handed over; cancel; the tested-by route.
+  The milestone's slices 7 and 8 (`TWAINH.cs`; slice 7 done here, CI's scans to close it); a marked
+  correction in the survey (`research/prior-art/README.md`, `TWAINH.cs`); TEST-3 updated, not closed (its
+  scans on the runner close it with the slice); `decisions.md` (slice 7 ahead of 2 to 6; the Windows
+  machine's process); `status.md`.
+- **Checked here:** every new claim traced to a report or a line of the sources
+  (`scratch/work/s0-7/step-4/trace.md`; the DSM's `_chdir` and its `wiatwain.ds` skip read in its own
+  `apps.cpp`, and `0x031F` checked as `WM_DWMNCRENDERINGCHANGED`, by this step rather than taken from the
+  review); one claim caught and narrowed before it went in (that CI scans on `windows-latest`: so far CI has
+  shown the install and the listing); the docs read for anything private; the core.
+- **Departures from the plan:** *TEST-3 updated, not closed*: CI's scans on the runner aren't in yet.

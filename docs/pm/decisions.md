@@ -117,3 +117,13 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   - ask 7, the standing rules: pdf-lint's, with the first narrowed: code, crate docs, crate READMEs and commit
     messages never name sheaf (the org's name in a URL aside); `docs/pm/` may, keeping nothing private.
     `just gates` checks the files.
+- **S0 slice 7, the TWAIN spike, runs on the Windows machine ahead of slices 2 to 6** (Greg, 2026-11-08: "we
+  can write a slice plan here"), while slice 1 runs on Linux. It depends on nothing they build; it revises the
+  seam note's TWAIN rows before slice 2 revises its SANE ones. Slice 8 still follows it; slice 9 still waits on
+  slices 3 and 4 (`slices/s0-7-twain-spike.md`, "Taken as it starts").
+- **Slices on the Windows machine run without the `scan-slice` workflow** (Greg, the same day: "it's a
+  different machine, different paths, different build tools; I'm not sure how much value the old workflow
+  would have here. we just want a plan with 2-6 steps depending on how complicated, then an adversarial
+  review, then the implementation steps, then a set of reviewers in parallel and a fix stage"). A commit per
+  step, pushed with each (Greg: "commit and push on each step and continue"), on a branch with a draft pull
+  request, so CI runs as the slice goes.

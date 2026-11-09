@@ -57,10 +57,15 @@ S1 back: S1 can start once the Linux slices are done.
      extended image info the source offers. It answers the seam note's TWAIN unknowns
      (`crates/scan-device-seam.md`) before `twain-dsm`'s API is fixed, and CI scans through TWAIN from
      then on.
-   - If it doesn't: a desk check of the seam note against `TWAIN.cs` and NAPS2's notes (study only), and the
+   - If it doesn't: a desk check of the seam note against `TWAINH.cs` and NAPS2's notes (study only), and the
      hand checks carry the rest.
    - Either way the seam note is revised, said, before slice 8.
-8. **twain-dsm:** bindings ported from `TWAIN.cs` (MIT) and checked against `twain.h` 2.5, the state
+   - **Done here, 2026-11-08, ahead of slices 2 to 6** (Greg's order; `slices/s0-7-twain-spike.md`): it
+     installed silently, here and on `windows-latest`, and scanned with a hidden window in both bitnesses
+     here: native and memory, two delivery modes, a pixel-for-pixel comparison, a cancel from another thread.
+     The seam note is revised (its TWAIN rows); CI's scans on `windows-latest` close the slice.
+8. **twain-dsm:** bindings ported from `TWAINH.cs` (MIT; `TWAIN.cs`, beside it, wraps it) and checked
+   against `twain.h` 2.5, the state
    machine, the STA thread and hidden top-level window, capabilities, transfers, condition codes; built for
    both targets. It exposes what the seam needs (`crates/twain-dsm.md`, "For the seam").
 9. **scan-device's `twain` backend** and a 32-bit worker in CI (`i686-pc-windows-msvc`, the worker alone),

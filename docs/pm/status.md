@@ -41,8 +41,14 @@ git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; 
 - **Running: S0 slice 1, `sane-dl` and the workspace it starts**, on branch `s0-1-sane-dl`, through the
   `scan-slice` workflow (`.claude/workflows/scan-slice.js`, local): its plan in `slices/`, a commit per step
   on the branch, nothing pushed.
-- **Next:** the slice's run, its code review and fixes; then Greg's review, and on his word the push and the
-  pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note revised.
+- **Running too: S0 slice 7, the TWAIN spike**, on the Windows machine, on branch `s0-7-twain-spike` (a draft
+  pull request; `slices/s0-7-twain-spike.md`): its four steps done 2026-11-08: the sample source installed
+  silently (here and on `windows-latest`), TWAIN walked from state 1 to 7 and back in both bitnesses, native
+  and memory transfers equal pixel for pixel, a cancel from another thread; the seam note's TWAIN rows and
+  `crates/twain-dsm.md` revised from it. Its code review and fixes next, then CI's scans close it.
+- **Next:** slice 1's run, its code review and fixes; then Greg's review, and on his word the push and the
+  pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note's SANE rows revised;
+  slice 8 (`twain-dsm`) can follow slice 7 on Windows.
 - **Waiting on Greg:** the slice's review and its push; `asks.md`, ask 5 (ask 2 taken as S0 slice 1 started,
   `decisions.md`); PL-1 to PL-3, ready to hand off on his OK; PL-4, which first needs his call on pdf-lint's
   "the interpreter stays out" line.
