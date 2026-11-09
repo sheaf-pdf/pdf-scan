@@ -113,16 +113,22 @@ S1 back: S1 can start once the Linux slices are done.
    - If it doesn't: a desk check of the seam note against `TWAINH.cs` and NAPS2's notes (study only), and the
      hand checks carry the rest.
    - Either way the seam note is revised, said, before slice 8.
-   - **Done here, 2026-11-08, ahead of slices 2 to 6** (ruled 2026-11-08; `slices/s0-7-twain-spike.md`): it
+   - **Done here, 2026-11-08, ahead of slices 2 to 6** (ruled 2026-11-08; `archive/slices/s0-7-twain-spike.md`): it
      installed silently, here and on `windows-latest`, and scanned with a hidden window in both bitnesses
      here: native and memory, two delivery modes, a pixel-for-pixel comparison, a cancel from another thread.
      The seam note is revised (its TWAIN rows). CI's `twain-spike` job ran the scenarios on
-     `windows-latest` in both bitnesses, green on every push (TEST-3, done). The code review, its fixes, CI
-     green on them and approval close the slice.
+     `windows-latest` in both bitnesses, green on every push (TEST-3, done). **Closed 2026-11-08:** the code review and its fixes,
+     CI green, merged as pull request #1.
 8. **twain-dsm:** bindings ported from `TWAINH.cs` (MIT; `TWAIN.cs`, beside it, wraps it) and checked
    against `twain.h` 2.5, the state
    machine, the STA thread and hidden top-level window, capabilities, transfers, condition codes; built for
    both targets. It exposes what the seam needs (`crates/twain-dsm.md`, "For the seam").
+   - **Built 2026-11-08** (`slices/s0-8-twain-dsm.md`), safe by construction (`decisions.md`): its six steps
+     on branch `s0-8-twain-dsm`, each pushed; generated bindings and a header contract in both bitnesses; the
+     DSM loaded only after its signer is checked; TWAIN's states as owned types on the caller's thread, a
+     record apart from them that the teardown trusts; capabilities, both transfers, both deliveries, cancels
+     and requests, tested through the sample source in both bitnesses. `twain-spike` is deleted, its record
+     kept. Code-reviewed and fixed 2026-11-09; CI green on pull request #4 and approval close it.
 9. **scan-device's `twain` backend** and a 32-bit worker in CI (`i686-pc-windows-msvc`, the worker alone),
    the client's merge of both lists. The model's changes the backend asks for are made here, in
    `scan-device`, the `fake` and `sane` backends and the worker's protocol together. Checked: 10 images

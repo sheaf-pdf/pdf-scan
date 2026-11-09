@@ -1,6 +1,7 @@
 # S0 slice 7: the TWAIN spike, end to end
 
-Status: running, on branch `s0-7-twain-spike` (pull request #1), from 2026-11-08; its four steps, code review and fix stage done; approval closes it. Milestone:
+Status: done, 2026-11-08: merged as pull request #1, CI green on it (the branch `s0-7-twain-spike`), and
+moved here. Milestone:
 `milestones/s0-devices.md`, slice 7. Run on the Windows machine, while slice 1 runs on Linux.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written

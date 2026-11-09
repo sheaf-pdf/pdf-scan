@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-use crate::ffi::{TWPT_BW, TWPT_GRAY, TWPT_RGB};
+use twain_dsm::ffi::{TWPT_BW, TWPT_GRAY, TWPT_RGB};
 
 /// The most pixels an image may have (16384 by 16384). It's the cap that
 /// binds: at it, an RGB image is 768 MiB.

@@ -1,0 +1,43 @@
+[package]
+name = "twain-dsm"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "TWAIN through the system's Data Source Manager on Windows, its states as types and its API safe: bindings checked against twain.h, capabilities decoded, native and memory transfers"
+repository = "https://github.com/sheaf-pdf/pdf-scan"
+# Not until the twain backend has used the API (S0 slice 9): its README,
+# changelog and package contents come then.
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+rusty-fork.workspace = true
+
+# MSVC, found for the header contract's C program (a test, Windows only).
+[target.'cfg(windows)'.dev-dependencies]
+find-msvc-tools = "0.1"
+
+[lints]
+workspace = true

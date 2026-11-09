@@ -1,0 +1,429 @@
+//! States 1 to 3 through the API: the TWAIN thread, the DSM loaded and
+//! trusted, the connection, the sources listed; requests from other threads.
+
+#![cfg(windows)]
+
+mod support;
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use support::Outcome;
+use twain_dsm::{Load, LoadError, RunError, Wake};
+
+fn system(file: &str) -> PathBuf {
+    // The system folder of this process's bitness: System32, or SysWOW64 in
+    // a 32-bit process.
+    let mut dir = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot is set"));
+    dir.push(if cfg!(target_pointer_width = "32") {
+        "SysWOW64"
+    } else {
+        "System32"
+    });
+    dir.join(file)
+}
+
+#[test]
+fn lists_the_sample_source() {
+    forked!(lists_the_sample_source, &[], || {
+        let report = twain_dsm::run::<(), _>(|twain| {
+            let opened = match support::open(twain) {
+                Ok(opened) => opened,
+                Err(outcome) => return outcome,
+            };
+            assert_ne!(
+                { opened.app().Id },
+                0,
+                "the DSM gives the application an id"
+            );
+            let sample = match support::sample(&opened) {
+                Ok(sample) => sample,
+                Err(outcome) => return outcome,
+            };
+            assert!(sample.is_twain2(), "the sample is a TWAIN 2 source");
+            assert_eq!(sample.protocol().0, 2);
+            println!("listed: {sample:?}, protocol {:?}", sample.protocol());
+            let default = opened.default_source().expect("the DSM names its default");
+            println!("default: {default:?}");
+            let loaded = opened
+                .close()
+                .map_err(|r| r.into_error())
+                .expect("the connection closes");
+            println!("the DSM: {}", loaded.path().display());
+            Outcome::Done
+        })
+        .expect("TWAIN runs");
+        assert!(report.stranded.is_none(), "the teardown is clean");
+        report.value
+    });
+}
+
+#[test]
+fn only_the_twain_working_groups_dsm_loads() {
+    forked!(only_the_twain_working_groups_dsm_loads, &[], || {
+        let dsm = system("TWAINDSM.dll");
+        let Ok(original) = std::fs::read(&dsm) else {
+            return Outcome::Skip(format!("no DSM at {}", dsm.display()));
+        };
+        let dir = std::env::temp_dir().join(format!("twain-dsm-signatures-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary folder");
+        // The DSM with its certificate table taken out: no signature.
+        let stripped = dir.join("twaindsm-stripped.dll");
+        std::fs::write(&stripped, without_certificates(&original)).expect("written");
+        // The DSM with one byte of its code changed: a signature that no
+        // longer matches.
+        let tampered = dir.join("twaindsm-tampered.dll");
+        let mut changed = original.clone();
+        changed[0x400] ^= 0xff;
+        std::fs::write(&tampered, changed).expect("written");
+
+        let outcome = twain_dsm::run::<(), _>(|twain| {
+            match twain.load(Load::Path(stripped.clone())) {
+                Err(LoadError::Unsigned) => {}
+                other => panic!("the DSM unsigned: {other:?}"),
+            }
+            match twain.load(Load::Path(tampered.clone())) {
+                Err(LoadError::BadSignature { code }) => println!("the DSM changed: {code:#010x}"),
+                other => panic!("the DSM changed: {other:?}"),
+            }
+            assert!(
+                !module_loaded("twaindsm-stripped.dll") && !module_loaded("twaindsm-tampered.dll")
+            );
+            // Windows' own files are signed through catalogs, which a check of
+            // the file may or may not find (kernel32.dll verified as
+            // Microsoft's, cmd.exe as unsigned, on the machine the slice was
+            // built on): refused either way (cmd.exe: a PE file of this
+            // bitness no test loads).
+            match twain.load(Load::Path(system("cmd.exe"))) {
+                Err(LoadError::Unsigned) => println!("cmd.exe: unsigned"),
+                Err(LoadError::WrongSigner { subject }) => {
+                    assert_eq!(subject, "Microsoft Corporation")
+                }
+                other => panic!("cmd.exe: {other:?}"),
+            }
+            // A module of the name loaded already, from this file, is another
+            // client's: in use.
+            match twain.load(Load::Path(system("kernel32.dll"))) {
+                Err(LoadError::InUse { .. }) => {}
+                other => panic!("kernel32.dll: {other:?}"),
+            }
+            // Signed in the file, and valid, but by Microsoft: refused before
+            // it's loaded.
+            let concrt = system("concrt140.dll");
+            if concrt.exists() {
+                match twain.load(Load::Path(concrt)) {
+                    Err(LoadError::WrongSigner { subject }) => {
+                        assert_eq!(subject, "Microsoft Corporation")
+                    }
+                    other => panic!("concrt140.dll: {other:?}"),
+                }
+                assert!(
+                    !module_loaded("concrt140.dll"),
+                    "concrt140.dll was refused before it was loaded"
+                );
+            } else {
+                println!("no {}: the wrong-signer case untried", concrt.display());
+            }
+            // The DSM of the other bitness: SysWOW64's from a 64-bit process,
+            // the 64-bit one (Sysnative) from a 32-bit process.
+            let root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot is set"));
+            let other = if cfg!(target_pointer_width = "64") {
+                root.join("SysWOW64").join("TWAINDSM.dll")
+            } else {
+                root.join("Sysnative").join("TWAINDSM.dll")
+            };
+            if other.exists() {
+                match twain.load(Load::Path(other)) {
+                    Err(LoadError::Machine {
+                        found: Some(found), ..
+                    }) => {
+                        let want = if cfg!(target_pointer_width = "64") {
+                            0x014c
+                        } else {
+                            0x8664
+                        };
+                        assert_eq!(found, want);
+                    }
+                    other => panic!("the other bitness's DSM: {other:?}"),
+                }
+            } else {
+                println!("no {}: the machine case untried", other.display());
+            }
+            match twain.load(Load::Path(system("no such dsm.dll"))) {
+                Err(LoadError::NotFound { .. }) => {}
+                other => panic!("a missing file: {other:?}"),
+            }
+            let loaded = twain.load(Load::System).expect("the system's DSM loads");
+            println!("loaded {}", loaded.path().display());
+            drop(loaded);
+            // Once loaded, another file is refused; the same is found.
+            match twain.load(Load::Path(stripped.clone())) {
+                Err(LoadError::Elsewhere { .. }) => {}
+                other => panic!("another file after the DSM: {other:?}"),
+            }
+            twain
+                .load(Load::Path(dsm.clone()))
+                .expect("the same DSM again, by its path");
+            Outcome::Done
+        })
+        .expect("TWAIN runs")
+        .value;
+        let _ = std::fs::remove_dir_all(&dir);
+        outcome
+    });
+}
+
+/// A PE file with its security directory (the certificate table) emptied:
+/// unsigned, the rest as it was.
+fn without_certificates(pe: &[u8]) -> Vec<u8> {
+    let mut pe = pe.to_vec();
+    let at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize;
+    let nt = at(&pe, 0x3c);
+    assert_eq!(&pe[nt..nt + 4], b"PE\0\0");
+    let optional = nt + 4 + 20;
+    let directories = match u16::from_le_bytes([pe[optional], pe[optional + 1]]) {
+        0x10b => optional + 96,  // PE32
+        0x20b => optional + 112, // PE32+
+        magic => panic!("optional header magic {magic:#x}"),
+    };
+    // IMAGE_DIRECTORY_ENTRY_SECURITY, the fifth: its file offset and size.
+    let security = directories + 4 * 8;
+    assert_ne!(at(&pe, security + 4), 0, "the DSM is signed in the file");
+    pe[security..security + 8].fill(0);
+    pe
+}
+
+fn module_loaded(name: &str) -> bool {
+    let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `wide` is NUL-terminated UTF-16; the call only looks.
+    !unsafe { windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(wide.as_ptr()) }.is_null()
+}
+
+#[test]
+fn one_run_at_a_time_in_a_process() {
+    forked!(one_run_at_a_time_in_a_process, &[], || {
+        twain_dsm::run::<(), _>(|_| {
+            assert!(matches!(
+                twain_dsm::run::<(), _>(|_| ()),
+                Err(RunError::AlreadyRunning)
+            ));
+            let other = std::thread::spawn(|| twain_dsm::run::<(), _>(|_| ()).map(|r| r.value));
+            assert!(matches!(
+                other.join().expect("the thread ends"),
+                Err(RunError::AlreadyRunning)
+            ));
+        })
+        .expect("TWAIN runs");
+        // Over, it can run again, on another thread too.
+        twain_dsm::run::<(), _>(|_| ()).expect("a second run");
+        std::thread::spawn(|| twain_dsm::run::<(), _>(|_| ()).map(|r| r.value))
+            .join()
+            .expect("the thread ends")
+            .expect("a run on another thread");
+        Outcome::Done
+    });
+}
+
+#[test]
+fn one_loaded_dsm_at_a_time() {
+    forked!(one_loaded_dsm_at_a_time, &[], || {
+        twain_dsm::run::<(), _>(|twain| {
+            let first = match twain.load(Load::System) {
+                Ok(loaded) => loaded,
+                Err(LoadError::NotFound { .. }) => return Outcome::Skip("no DSM installed".into()),
+                Err(e) => panic!("the system's DSM: {e}"),
+            };
+            assert!(matches!(
+                twain.load(Load::System),
+                Err(LoadError::AlreadyLoaded)
+            ));
+            let opened = first
+                .open(support::app())
+                .map_err(|r| r.into_error())
+                .expect("opens");
+            assert!(matches!(
+                twain.load(Load::System),
+                Err(LoadError::AlreadyLoaded)
+            ));
+            drop(opened);
+            twain
+                .load(Load::System)
+                .expect("loads again once the first is dropped");
+            Outcome::Done
+        })
+        .expect("TWAIN runs")
+        .value
+    });
+}
+
+#[test]
+fn requests_from_other_threads_wake_the_loop() {
+    forked!(requests_from_other_threads_wake_the_loop, &[], || {
+        twain_dsm::run::<u32, _>(|twain| {
+            assert!(matches!(
+                twain.wait(Duration::from_millis(50)),
+                Wake::Timeout
+            ));
+            assert_eq!(twain.take_request(), None);
+            let remote = twain.remote();
+            let poster = std::thread::spawn(move || {
+                for n in 1..=3 {
+                    std::thread::sleep(Duration::from_millis(20));
+                    remote.post(n).expect("the run goes on");
+                }
+            });
+            // In state 1, with no DSM loaded. Each wait ends at the post, long
+            // before its 30 seconds: the post woke the loop.
+            for n in 1..=3 {
+                let started = Instant::now();
+                match twain.wait(Duration::from_secs(30)) {
+                    Wake::Request(got) => assert_eq!(got, n),
+                    other => panic!("waited for request {n}: {other:?}"),
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "request {n} took {:?}",
+                    started.elapsed()
+                );
+            }
+            poster.join().expect("the poster ends");
+            // A request put back comes first.
+            twain.requeue(8);
+            assert_eq!(twain.take_request(), Some(8));
+            // WM_QUIT is handed over, not swallowed.
+            // SAFETY: posts WM_QUIT to this thread's queue; no memory.
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(5) };
+            assert!(matches!(twain.wait(Duration::from_secs(30)), Wake::Quit(5)));
+            // In state 3.
+            let opened = match support::open(twain) {
+                Ok(opened) => opened,
+                Err(outcome) => return outcome,
+            };
+            let remote = twain.remote();
+            std::thread::spawn(move || remote.post(9).expect("the run goes on"));
+            let started = Instant::now();
+            match twain.wait(Duration::from_secs(30)) {
+                Wake::Request(9) => {}
+                other => panic!("waited in state 3: {other:?}"),
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "took {:?}",
+                started.elapsed()
+            );
+            drop(opened);
+            Outcome::Done
+        })
+        .expect("TWAIN runs")
+        .value
+    });
+}
+
+#[test]
+fn a_request_posted_after_the_run_is_handed_back() {
+    forked!(a_request_posted_after_the_run_is_handed_back, &[], || {
+        let remote = twain_dsm::run::<String, _>(|twain| twain.remote())
+            .expect("TWAIN runs")
+            .value;
+        match remote.post("late".to_owned()) {
+            Err(twain_dsm::Gone(request)) => assert_eq!(request, "late"),
+            Ok(()) => panic!("a post after the run was taken"),
+        }
+        Outcome::Done
+    });
+}
+
+#[test]
+fn a_connection_forgotten_is_closed_at_the_end() {
+    forked!(a_connection_forgotten_is_closed_at_the_end, &[], || {
+        for round in 0..2 {
+            let report = twain_dsm::run::<(), _>(|twain| {
+                let opened = match support::open(twain) {
+                    Ok(opened) => opened,
+                    Err(outcome) => return Some(outcome),
+                };
+                // The state goes without its Drop: the record still has the
+                // connection, and the end of the run closes it.
+                std::mem::forget(opened);
+                None
+            })
+            .expect("TWAIN runs, again after a forgotten connection");
+            if let Some(outcome) = report.value {
+                return outcome;
+            }
+            assert!(
+                report.stranded.is_none(),
+                "round {round}: the teardown closes the connection"
+            );
+        }
+        Outcome::Done
+    });
+}
+
+/// The DSM loaded into the process by something other than this crate (here,
+/// the test itself, as another TWAIN client would): using it too would race,
+/// so it's `InUse`.
+#[test]
+fn a_dsm_another_client_loaded_is_in_use() {
+    forked!(a_dsm_another_client_loaded_is_in_use, &[], || {
+        let dsm = system("TWAINDSM.dll");
+        if !dsm.exists() {
+            return Outcome::Skip(format!("no DSM at {}", dsm.display()));
+        }
+        load_directly(&dsm);
+        twain_dsm::run::<(), _>(|twain| match twain.load(Load::System) {
+            Err(LoadError::InUse { .. }) => {}
+            other => panic!("a DSM another client loaded: {other:?}"),
+        })
+        .expect("TWAIN runs");
+        Outcome::Done
+    });
+}
+
+/// A `TWAINDSM.dll` from another file loaded already: what the loader would
+/// hand back, so `Elsewhere`.
+#[test]
+fn a_twaindsm_dll_from_another_file_is_elsewhere() {
+    forked!(a_twaindsm_dll_from_another_file_is_elsewhere, &[], || {
+        let dsm = system("TWAINDSM.dll");
+        let Ok(bytes) = std::fs::read(&dsm) else {
+            return Outcome::Skip(format!("no DSM at {}", dsm.display()));
+        };
+        let dir = std::env::temp_dir().join(format!("twain-dsm-elsewhere-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temporary folder");
+        let copy = dir.join("TWAINDSM.dll");
+        std::fs::write(&copy, bytes).expect("written");
+        load_directly(&copy);
+        twain_dsm::run::<(), _>(|twain| match twain.load(Load::System) {
+            Err(LoadError::Elsewhere { loaded, .. }) => {
+                assert!(
+                    loaded
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains("twain-dsm-elsewhere"),
+                    "{loaded:?}"
+                );
+            }
+            other => panic!("another TWAINDSM.dll loaded: {other:?}"),
+        })
+        .expect("TWAIN runs");
+        Outcome::Done
+    });
+}
+
+/// `LoadLibraryExW` of `path`, as another TWAIN client would.
+fn load_directly(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is NUL-terminated UTF-16; the DLL is the TWAIN Working
+    // Group's DSM (or a byte-for-byte copy of it), whose DllMain is run.
+    let module = unsafe {
+        windows_sys::Win32::System::LibraryLoader::LoadLibraryExW(
+            wide.as_ptr(),
+            core::ptr::null_mut(),
+            windows_sys::Win32::System::LibraryLoader::LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+                | windows_sys::Win32::System::LibraryLoader::LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    assert!(!module.is_null(), "{} loaded", path.display());
+}

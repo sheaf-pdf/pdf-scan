@@ -2,10 +2,15 @@
 # what CI checks, but for two variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
 # needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it.
+# a local run that matches it. CI's Windows TWAIN job also runs the
+# twain-dsm recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
+# `twain-bindings --check`, `twain-dsm-doc-codes`), which need Windows,
+# MSVC, the sample source, twain.h or nightly, and sets
+# TWAIN_DSM_REQUIRE_SAMPLE=1 and TWAIN_DSM_REQUIRE_HEADER=1.
 
-# The oldest Rust sane-dl supports, from its Cargo.toml.
+# The oldest Rust each library supports, from its Cargo.toml.
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
+twain_dsm_msrv := `grep -m1 '^rust-version' crates/twain-dsm/Cargo.toml | cut -d'"' -f2`
 
 default:
     @just --list --unsorted
@@ -33,11 +38,16 @@ doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 
 # Each library tested on its oldest supported Rust.
-msrv: sane-dl-msrv
+msrv: sane-dl-msrv twain-dsm-msrv
 
 # sane-dl's tests on its oldest supported Rust.
 sane-dl-msrv:
     cargo +{{ sane_dl_msrv }} test --locked -p sane-dl
+
+# Off Windows, only its pure parts build and test.
+# twain-dsm's tests on its oldest supported Rust.
+twain-dsm-msrv:
+    cargo +{{ twain_dsm_msrv }} test --locked -p twain-dsm
 
 # Package sane-dl as a publish would, in a target directory of its own made
 # fresh each time (a stale one passes or fails falsely): sane-dl-package
@@ -65,18 +75,37 @@ sane-dl-package:
     done
     echo "sane-dl-package: $(wc -l < "$dir/files.txt") files, each a source, the build script, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
 
-# TWAIN driven through the TWAIN Working Group's sample data source, in the
-# bitness `target` builds for (x86_64-pc-windows-msvc or
-# i686-pc-windows-msvc), three pages a batch. Windows only, with the source
-# installed (`scripts/twain-sample.ps1 Install`), so not in `ci`: CI's
-# twain-spike job runs it. From Git Bash: just runs recipes with `sh`.
-twain-spike target scenario="all":
-    CAP_XFERCOUNT=3 cargo run --locked -p twain-spike --target {{ target }} -- {{ scenario }}
+# twain-dsm's tests for `target` (x86_64-pc-windows-msvc or
+# i686-pc-windows-msvc), the 32-bit one too, whose `usize` a driver's sizes
+# can overflow. Windows only. Its header contract needs twain.h at
+# TWAIN_DSM_TWAIN_H, and the tests that scan need the TWAIN Working Group's
+# sample source (`scripts/twain-sample.ps1 Install`); without them they say
+# they skipped, unless TWAIN_DSM_REQUIRE_HEADER=1 and
+# TWAIN_DSM_REQUIRE_SAMPLE=1. CI's TWAIN job installs both and sets both.
+# From Git Bash: just runs recipes with `sh`.
+# twain-dsm's tests for one Windows target, with the sample source and twain.h.
+twain-dsm-test target:
+    cargo test --locked -p twain-dsm --target {{ target }}
 
-# twain-spike's unit tests for `target`: the 32-bit one too, whose `usize` a
-# driver's sizes can overflow.
-twain-spike-test target:
-    cargo test --locked -p twain-spike --target {{ target }}
+# twain-dsm's lints for `target`, its tests included: the 32-bit one too,
+# whose code the 64-bit build doesn't compile.
+# twain-dsm's lints for one Windows target, its tests included.
+twain-dsm-clippy target:
+    cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
+
+# twain-dsm's doctests on nightly, whose rustdoc checks that each
+# `compile_fail` example fails with the error code it names (stable's checks
+# only that it fails). Needs `rustup toolchain install nightly`.
+# twain-dsm's compile_fail doctests on nightly, their error codes checked.
+twain-dsm-doc-codes:
+    cargo +nightly test --locked -p twain-dsm --doc
+
+# twain-dsm's constants generated again from TWAINH.cs and checked against
+# twain.h, both fetched at their pinned commits; `just twain-bindings --check`
+# changes nothing, and fails if the file differs from what it would write.
+# twain-dsm's constants generated from TWAINH.cs and checked against twain.h.
+twain-bindings *args:
+    python -I scripts/twain-bindings.py {{ args }}
 
 # Over every target's dependency graph, the layers' boundaries, and that
 # fake-libsane takes no dependency; that nothing links libsane; that
@@ -98,7 +127,7 @@ gates:
     gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint)$'
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
-    for crate in sane-dl; do
+    for crate in sane-dl twain-dsm; do
         # The list first, so a `cargo tree` that fails (a crate named here
         # that isn't a member) fails the gate, rather than leaving the loop
         # nothing to read; and the crate itself must be in its own list.

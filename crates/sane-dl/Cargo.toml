@@ -22,10 +22,10 @@ links = "sane-dl"
 
 [dependencies]
 libloading = "0.9"
-thiserror = "2"
+thiserror.workspace = true
 
 [dev-dependencies]
-rusty-fork = { version = "0.3", default-features = false, features = ["timeout"] }
+rusty-fork.workspace = true
 tempfile = "3"
 
 [lints]

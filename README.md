@@ -6,8 +6,8 @@ scanned pages to PDF and reading them back. Every crate is MIT OR Apache-2.0. Un
 driver's C API is called, in as few modules as it can; the PDF crates build on the
 [pdf-lint](https://github.com/sheaf-pdf/pdf-lint) family.
 
-Early days: the workspace exists, and its first crate, `sane-dl`, is built and ready to publish as an alpha.
-None is published yet.
+Early days: the workspace exists, and its first crate, `sane-dl`, is built and ready to publish as an alpha;
+`twain-dsm` is being built. None is published yet.
 
 ## Scanner access
 
@@ -15,11 +15,10 @@ None is published yet.
 |---|---|
 | `sane-dl` | SANE, the scanner API of Linux and the other Unix-like systems, with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled into images, a cancel token any thread can use. 0.1.0-alpha.1, not yet published ([README](crates/sane-dl/README.md)) |
 | `fake-libsane` | A stand-in for libsane that `sane-dl`'s tests load: scripted devices, hostile values, SANE's calling rules checked (never published) |
-| `twain-spike` | A throwaway program that drives TWAIN on Windows through the TWAIN Working Group's sample data source, in both bitnesses, and checks what it sees; replaced by `twain-dsm`'s own tests (never published) |
+| `twain-dsm` | TWAIN on Windows through the system's Data Source Manager, its API safe: the DSM loaded only after its signer is checked, its states as types the compiler checks, its bindings checked against `twain.h`, capabilities in all four containers, native and memory transfers, requests from other threads. Being built |
 
 Next: `scan-device`, a device model over each system's driver API (SANE, then TWAIN and WIA) with a fake for
-tests; `scan-worker`, which runs drivers in a process of their own; and `twain-dsm`, TWAIN through the
-system's Data Source Manager loaded at run time.
+tests; and `scan-worker`, which runs drivers in a process of their own.
 
 ## Pages and PDF
 
