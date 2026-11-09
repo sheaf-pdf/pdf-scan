@@ -705,6 +705,37 @@ Taken in the steps:
 34. **Step 2's tests take some of what step 3 tests at length** (cancelled before the batch, a receiver gone before
     it, the number past `u32::MAX`, warming up, the paper read while a batch waits on a rendezvous channel),
     since step 2's code does them and each needed a make-fail; step 3's scripts of proposal 22 come on top.
+35. **A sheet holds a list of faults, each taken from it as it fires** (step 3): `Sheet::fault` may be called
+    more than once, on any side and point; a side's faults at one point fire in the order scripted, one a batch,
+    so a sheet that jams twice can be scripted; a fault on a side a batch doesn't read (a back in simplex) doesn't
+    fire. The alternative, one fault a side, the last given replacing the one before, couldn't script a jam that
+    comes back.
+36. **Midway is after the first half of a raw page's rows, rounded down,** counted on the progress, and for an
+    encoded page, whose bytes are counted at once, after its total is set and before its bytes (step 3). The page
+    is drawn whole before its rows are counted, so a midway fault comes after the drawing; a page one row high
+    faults before its row.
+37. **A hang parks the batch's thread for good, its sheet left taken** (step 3), not put back: a hung driver's
+    call holds the paper in the scanner, and what ends it (slice 4's watchdog) ends the process and its state.
+    Parked again if woken all the same; the paper's lock isn't held while it waits.
+38. **The glass keeps its sheet without the faults that fired** (step 3): a flatbed's batch writes the sheet it
+    read back to the glass, unless another was put there meanwhile (a count of sheets put on the glass tells
+    it), so a fault on the glass fires once, as one in the feeder does.
+39. **A device gone is gone to every caller** (step 3): its state is shared by its clones, so every backend
+    holding it lists it no more and finds it by its id no more, while the fallback may still open another device
+    of its maker and model under another USB name, as a replugged scanner would be found; `caps`, `scan` (before
+    `Applied`, nothing sent) and `settings_window` on a device already open answer `Gone`. A device scripted to
+    `refuses_open(Gone)` stays a refusal at open (step 2), not a device gone.
+40. **Two tests made deterministic** (step 3): the cancel after a duplex front also cancels once the front is read
+    whole (its rows all counted on the progress) but before it's taken, which a check between front and back
+    always meets, where a cancel after the front is taken races that check and was seen to miss it; and the crash
+    and exit tests' children write each event's line by one `write_all`, the parent counting whole lines alone,
+    since `process::exit` on the batch's thread flushes the standard output and makes it unbuffered, so a line
+    written in pieces by the reading thread could end part-written (seen once in 16 runs).
+41. **Small forms in the fault tests** (step 3): the exit's code 42, neither a pass, a test's panic (101) nor
+    `rusty-fork`'s (70); the abort read as `sane-dl`'s abort test reads it, `SIGABRT` (6) on Unix and the code
+    `0xC0000409` on Windows, `cfg` for each, any other system failing the test; the child's events marked
+    `fake-event: ` among the test harness's own lines; waits bounded at 10 s and polled every 5 ms, a state
+    watched for 300 ms.
 
 ## For review (security)
 
@@ -979,3 +1010,83 @@ as the note's block on all 32 items; the push device's tests run 300 times, none
   feeder's emptiness read before the number (decision 29); a sheet whose page fails put back (decision 30); a
   module example beside the crate's. No other: names as the plan's design has them, nothing renamed.
 - **Decisions:** 27 to 34 ("Taken in the steps").
+
+**Step 3, the fake's faults and controls** (2026-11-09; one commit, "Add scan-device's fake faults: errors, hangs,
+crashes and exits", on `65c42c1`). The checks before it: step 2's check passed on `65c42c1`
+(`scratch/work/s0-3/flow/checks.md`): `just ci` green with SANE required, its clippy and doc with `--all-features`,
+`scan-device-msrv` on 1.89 running the fake's tests; 339 tests, 71 added, all scan-device's, none lost; `cargo doc
+-p scan-device --no-deps` without the feature clean under `-D warnings`; the fake's opening rules held against the
+note's section 1 and its mapping table, 14 rows; both fallback mutations failing tests (one and five); the page
+rate measured again, about 490 a second in `Rgb8` simplex and 49 in duplex, twenty times slice 4's gate at its
+slowest; the gates' graph of `scan-device` still 8 packages.
+
+- **The manifest and the lock:** `rusty-fork.workspace = true` among the dev-dependencies, with a comment; the lock
+  puts `rusty-fork` in `scan-device`'s own entry, nothing else. The MSRV probe run again over the graph it joins
+  (`scratch/work/s0-3/step-3/msrv-probe/`): 25 packages, the highest `rust-version` 1.85 (`getrandom` 0.4.3,
+  through `tempfile`, and `in-progress`), so `scan-device` stays at 1.89; the probe's graph and the workspace's are
+  the same packages and versions. `cargo tree -p scan-device -e normal,build --target all --all-features`: the
+  same 8 packages as step 1's.
+- **`Fault`, `When` and `Sheet::fault`** (`src/fake/mod.rs`), as the design has them: `When { Start, Midway }`,
+  `Fault { Error(ScanError), Hang, Crash, Exit(i32) }` `#[non_exhaustive]`, both `Clone`, `Debug`, `PartialEq` and
+  `Eq` (`When` `Copy`), and `Sheet::fault(side, when, fault)`, which panics on `Fault::Error(ScanError::FeederEmpty)`.
+  A sheet holds its faults not yet fired, in order (decision 35). The batch (`src/fake/batch.rs`) fires a side's
+  `Start` fault after the sheet's `Event::Sheet` (and a back's after its front's page), and its `Midway` fault in
+  the progress loop, after the first half of its rows (decision 36); each fault is taken from the sheet as it
+  fires. `Error` ends the batch with its error, the pages before it kept, the side dropped, the sheet put back at
+  the feeder's head without the fault (the step 2 path, decision 30), or left on the glass (decision 38); `Gone`
+  also marks the device gone in the state its clones share, so it's listed no more, `open` doesn't find it by its
+  id from any backend (the fallback may still find another device in its place), and `caps`, `scan` and
+  `settings_window` on a device already open answer `Gone` (decision 39). `Hang` parks the batch's thread for good,
+  its sheet taken (decision 37); `Crash` is `std::process::abort`, `Exit(code)` `std::process::exit(code)`. Cancel
+  between sheets, the channel's hold, a failed `send` and the count past `u32::MAX` were step 2's code; this step
+  tests them at length.
+- **The docs:** the fake module's "Faults" section (each fault, firing once, Continue, a device gone, and how a
+  test of a crash or an exit takes its events), each new item's doc (`Fault::Crash` and `Fault::Exit` for a test's
+  or a worker's process, never an app's), the crate docs' and the README's `fake` clause, each saying the faults
+  can block a thread for good and end the process.
+- **Tests:** `tests/fake_faults.rs`, 19, every script of proposal 22 that step 2 hadn't: a jam at sheet 4's start
+  then Continue from sheet 4 to the feeder's end (sheet 4 said before its jam, put back before 5 and 6, scanned as
+  `pattern` draws it, counted at each taking); a jam midway through a back (the front kept, the back's first 275
+  rows counted, then Continue giving the front again); a double feed midway; an open cover before the first page,
+  after the warm-up, then the same batch whole; a `Driver` error shown and one not, at a start and midway; faults on
+  one side fired once each in the order scripted, a start's before a midway's; a fault on a back in simplex not
+  firing; midway through an encoded page before its bytes, and through a page one row high; a fault on the glass
+  firing once, and a sheet put on the glass during a batch kept there; `FeederEmpty` not scriptable; `Gone` midway
+  through sheet 2, then `caps`, `settings_window` and a batch `Gone` (nothing sent, nothing taken), the device
+  unlisted and not opened from either backend holding it, and a twin under another USB name found in its place; a
+  cancel mid-page from another thread through a test's own `Progress` at a page's middle row (sheet 2's page in
+  simplex, its front's and its back's in duplex: the sheet finished whole, `Done::Cancelled`, `fed()` 2); a cancel
+  after a duplex front on a rendezvous channel, once the front is taken and once it's read whole but waiting to be
+  taken (its back delivered, nothing after; decision 40); a batch held by a full channel (bound 1, nobody reading:
+  `fed()` waited on until 1 for up to 10 s, still 1 and the batch unfinished 300 ms later, then every page once);
+  a receiver gone after sheet 1's front (simplex: sheet 2 taken, its `Sheet` failing, its page never drawn, nothing
+  after; duplex: the back drawn, its `send` failing, nothing after); a hang midway through sheet 2's front on a
+  thread of its own (the events before it taken on a rendezvous channel, half the page's rows counted, nothing more
+  300 ms after a cancel, the thread unfinished, `fed()` and `in_feeder()` answering; the thread left parked); a crash
+  and an exit, each in a child process through `rusty_fork::fork`, a duplex batch whose sheet 2 faults at its
+  front's start, its events written whole and flushed as each is taken on a rendezvous channel: the parent reads
+  sheet 1's events and perhaps sheet 2's `Sheet`, nothing else, and the child's end (`SIGABRT` on Unix, the code
+  `0xC0000409` on Windows, behind `cfg`; the code 42 for `Exit`), as `sane-dl`'s abort test reads its child's
+  (decision 41). Proposal 22's warm-up and a tracker cancelled before the batch are step 2's tests (decision 34),
+  the warm-up met here too. scan-device's tests: 93 before, 112 now; 358 in the workspace expected, none lost.
+- **Quick checks, the implementation's:** `cargo fmt --all -- --check`, `cargo clippy --locked --workspace
+  --all-targets -D warnings` with and without `--all-features`, and `cargo test --locked -p scan-device` green;
+  `cargo doc -p scan-device --no-deps` with and without `--all-features`, `-D warnings`, clean; `cargo clippy
+  --locked -p scan-device --all-targets --all-features -- -D warnings` for `x86_64-pc-windows-gnu` and
+  `x86_64-apple-darwin`, clean (ahead of the check's own run, since the `cfg` is new); `cargo +1.89 check --locked
+  -p scan-device --all-targets`. The fault tests run in a short loop under the memory scope, 8 at a time: 16 runs
+  found the exit test's flake (decision 40), then 48 runs of the two child tests and 40 of the whole binary
+  passed; the 50-run loop of the timing tests is the check's. Make-fails on a worktree of its own
+  (`scratch/work/s0-3/step-3/make-fail.md`, the script `mutate.py` beside it): 27 mutations, each failing a test:
+  the plan's four (the check between front and back: both cancel tests, after the rendezvous test's second case;
+  the next sheet taken before the last send returns, as a read-ahead: 14 tests, the held channel among them; a
+  failed `send` ignored, a page's and a sheet's: the receiver-gone test; a jammed sheet dropped: 9 tests), and a
+  fault left on its sheet, faults fired last first or on either side, midway at the first row or after an encoded
+  page's bytes, a start's fault fired midway, `FeederEmpty` scriptable, the glass's sheet not written back or
+  written over one put there meanwhile, its loads not counted, `Gone` not marking the device, a gone device listed,
+  opened, or answering `caps`, `scan` or `settings_window`, a hang that returns or holds the paper, a crash that
+  returns or exits with a code, an exit with another code or by an abort; the worktree removed.
+- **Departures:** the rendezvous cancel test's second case (decision 40) and its whole-line output, which the plan
+  didn't name; a device gone answering `Gone` from every backend that holds it, where the plan said every later
+  call; 27 make-fails where the plan named four. No other: names as the design has them.
+- **Decisions:** 35 to 41 ("Taken in the steps").

@@ -106,6 +106,31 @@
 //! does, nor while the progress is called, so [`FakeDevice::fed`] answers while a batch waits. A
 //! `send` that fails, the receiver gone, ends the batch at once as [`Done::Cancelled`].
 //!
+//! # Faults
+//!
+//! A sheet's side can be scripted to fault as it's read ([`Sheet::fault`]): as the side starts
+//! ([`When::Start`], after its sheet's [`Event::Sheet`], so an app can say which sheet it was) or
+//! midway through it ([`When::Midway`], half its rows counted on the progress). Each fires once:
+//!
+//! - [`Fault::Error`] ends the batch with a driver's error, [`ScanError::Jammed`],
+//!   [`ScanError::DoubleFeed`], [`ScanError::CoverOpen`], a [`ScanError::Driver`] error to show
+//!   or not, or any other: the pages sent before it kept, the side being read dropped, and the
+//!   sheet put back at the head of the feeder (on the glass, left there). A batch run again from
+//!   that sheet's number (an app's Continue) scans it and the rest, its front again where the
+//!   fault was on its back. [`ScanError::Gone`] also leaves the device gone: it's listed no
+//!   more, opening it answers `Gone` (a device of the same maker and model under another USB
+//!   name may still be found in its place), and so does every call on the device already open.
+//! - [`Fault::Hang`] blocks the batch's thread for good, as a driver's call that never returns:
+//!   it sends nothing more and never checks the progress again, while [`FakeDevice::fed`] still
+//!   answers.
+//! - [`Fault::Crash`] aborts the process, and [`Fault::Exit`] exits it with a code: for a test
+//!   run in a process of its own, or a worker process whose client sees how it ended, never an
+//!   app's own process.
+//!
+//! A test of a crash or an exit takes the events on a rendezvous channel (`sync_channel(0)`) and
+//! writes each out, flushed, before it takes the next: a `send` returns only once its event is
+//! taken, so every event before the faulted sheet's is written before that sheet's side is read.
+//!
 //! [`Clamped`]: crate::Clamped
 //! [`Device::scan`]: crate::Device::scan
 //! [`Done::Cancelled`]: crate::Done::Cancelled
@@ -216,7 +241,11 @@ impl FakeBackend {
             return Err(ScanError::TimedOut);
         }
         thread::sleep(self.listing_takes);
-        Ok(self.devices.iter().filter(|device| device.listed).collect())
+        Ok(self
+            .devices
+            .iter()
+            .filter(|device| device.listed && !device.is_gone())
+            .collect())
     }
 }
 
@@ -233,10 +262,11 @@ impl Backend for FakeBackend {
             return Err(ScanError::BadId);
         }
         let listed = self.listing(deadline)?;
+        // A device gone is no longer there, under its name or any other.
         let by_id = self
             .devices
             .iter()
-            .find(|device| device.info.id == stored.id);
+            .find(|device| device.info.id == stored.id && !device.is_gone());
         let (device, info, renamed_from) = match by_id {
             Some(device) if device.listed && same_device(&device.info, stored) => {
                 (device, device.info.clone(), None)
@@ -314,12 +344,17 @@ pub struct FakeDevice {
     paper: Arc<Mutex<PaperState>>,
 }
 
-/// A device's paper, shared by its clones.
+/// A device's paper, shared by its clones, and whether the device is gone.
 #[derive(Debug)]
 struct PaperState {
     feeder: VecDeque<Sheet>,
     glass: Sheet,
+    /// How many times a sheet was put on the glass, so a batch that read it knows whether it's
+    /// still the one there.
+    glass_loads: u64,
     fed: u32,
+    /// Since a [`Fault::Error`] of [`ScanError::Gone`] fired.
+    gone: bool,
 }
 
 impl FakeDevice {
@@ -357,7 +392,9 @@ impl FakeDevice {
             paper: Arc::new(Mutex::new(PaperState {
                 feeder: VecDeque::new(),
                 glass: Sheet::new(),
+                glass_loads: 0,
                 fed: 0,
+                gone: false,
             })),
         }
     }
@@ -424,7 +461,9 @@ impl FakeDevice {
 
     /// Puts `sheet` on the glass, which the flatbed scans: a plain [`Sheet::new`] until then.
     pub fn glass(&self, sheet: Sheet) {
-        self.paper().glass = sheet;
+        let mut paper = self.paper();
+        paper.glass = sheet;
+        paper.glass_loads = paper.glass_loads.wrapping_add(1);
     }
 
     /// The sheets taken from the feeder so far, by every batch.
@@ -435,6 +474,11 @@ impl FakeDevice {
     /// The sheets in the feeder now.
     pub fn in_feeder(&self) -> usize {
         self.paper().feeder.len()
+    }
+
+    /// Whether the device is gone, since a [`Fault::Error`] of [`ScanError::Gone`] fired.
+    fn is_gone(&self) -> bool {
+        self.paper().gone
     }
 
     /// The device's paper, locked: never held across a `send`, a call on a progress, or a wait.
@@ -509,12 +553,56 @@ fn check_caps(caps: &Caps) {
 /// A sheet of paper, for a feeder or the glass.
 ///
 /// Both its sides are drawn by [`pattern`] at the settings a batch applies, unless a page is given
-/// for a side ([`Sheet::side`]).
+/// for a side ([`Sheet::side`]); a side may be scripted to fault as it's read ([`Sheet::fault`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sheet {
     size: SizeMm,
     front: Option<Pixels>,
     back: Option<Pixels>,
+    /// Its faults not yet fired, in the order scripted.
+    faults: Vec<Scripted>,
+}
+
+/// A fault scripted on a sheet's side.
+#[derive(Clone, Debug, PartialEq)]
+struct Scripted {
+    side: Side,
+    when: When,
+    fault: Fault,
+}
+
+/// When a fault scripted on a side fires, as that side is read ([`Sheet::fault`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum When {
+    /// As the side starts: after its sheet's `Event::Sheet`, and, for a back, after its front's
+    /// page; before any of the side's progress.
+    Start,
+    /// Midway through the side: after the first half of its rows (rounded down) are counted on
+    /// the progress, or, for an encoded page, which is counted at once, after its total is set
+    /// and before its bytes are counted.
+    Midway,
+}
+
+/// What a scripted fault does as it fires ([`Sheet::fault`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Fault {
+    /// The batch ends with this error, as a driver's would: the pages sent before it kept, the
+    /// side being read dropped, and the sheet put back at the head of the feeder, as a user
+    /// clears a jam and puts the sheet back (or left on the glass). [`ScanError::Gone`] also
+    /// leaves the device gone: unlisted from then on, and every later call on it answers
+    /// `Gone`. Never [`ScanError::FeederEmpty`], which the feeder's own emptiness says.
+    Error(ScanError),
+    /// The batch's thread blocks for good, sending nothing and checking nothing, as a driver's
+    /// call that never returns; its sheet stays taken. Only something outside the batch, such as
+    /// a watchdog that ends the process, ends it.
+    Hang,
+    /// The process ends at once, as a driver's crash would end it: [`std::process::abort`].
+    /// For a test's own process or a worker process, never an app's: nothing is cleaned up.
+    Crash,
+    /// The process exits with this code: [`std::process::exit`]. For a test's own process or
+    /// a worker process, never an app's.
+    Exit(i32),
 }
 
 impl Default for Sheet {
@@ -530,6 +618,7 @@ impl Sheet {
             size: SizeMm::LETTER,
             front: None,
             back: None,
+            faults: Vec::new(),
         }
     }
 
@@ -556,6 +645,36 @@ impl Sheet {
         self
     }
 
+    /// The sheet with `fault` scripted on `side`, to fire `when` that side is read.
+    ///
+    /// Each fault fires once, and is then gone from the sheet, so a batch run again meets the
+    /// sheet as it is now: a sheet that jammed is scanned when the feeder is run again from it
+    /// (an app's Continue), its front again where the jam was on its back. Faults scripted on
+    /// one side at one point fire in the order scripted, one a batch: a sheet that jams twice.
+    /// A fault on a side a batch doesn't read, such as a back in simplex, doesn't fire.
+    ///
+    /// # Panics
+    ///
+    /// On [`Fault::Error`] of [`ScanError::FeederEmpty`]: an empty feeder is scripted by
+    /// loading no more sheets, and a script's mistake otherwise.
+    pub fn fault(mut self, side: Side, when: When, fault: Fault) -> Sheet {
+        assert!(
+            !matches!(fault, Fault::Error(ScanError::FeederEmpty)),
+            "an empty feeder isn't a fault a sheet can script: load no more sheets"
+        );
+        self.faults.push(Scripted { side, when, fault });
+        self
+    }
+
+    /// The first fault scripted on `side` to fire `when`, taken from the sheet, if one is.
+    fn take_fault(&mut self, side: Side, when: When) -> Option<Fault> {
+        let at = self
+            .faults
+            .iter()
+            .position(|scripted| scripted.side == side && scripted.when == when)?;
+        Some(self.faults.remove(at).fault)
+    }
+
     /// The page given for `side`, if one is.
     fn given(&self, side: Side) -> Option<&Pixels> {
         match side {
@@ -570,8 +689,19 @@ struct OpenDevice {
     script: FakeDevice,
 }
 
+impl OpenDevice {
+    /// `Gone` once the device is.
+    fn present(&self) -> Result<(), ScanError> {
+        if self.script.is_gone() {
+            return Err(ScanError::Gone);
+        }
+        Ok(())
+    }
+}
+
 impl Device for OpenDevice {
     fn caps(&mut self) -> Result<Caps, ScanError> {
+        self.present()?;
         let mut caps = self.script.caps.clone();
         caps.settings_window = self.script.window.is_some();
         Ok(caps)
@@ -584,10 +714,12 @@ impl Device for OpenDevice {
         events: &SyncSender<Event>,
         progress: &dyn Progress,
     ) -> Result<Done, ScanError> {
+        self.present()?;
         batch::scan(&self.script, settings, first_sheet, events, progress)
     }
 
     fn settings_window(&mut self, _owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError> {
+        self.present()?;
         self.script.window.ok_or(ScanError::Unsupported)
     }
 }

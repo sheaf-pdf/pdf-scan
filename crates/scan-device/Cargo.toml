@@ -28,6 +28,8 @@ fake = []
 # a plain `cargo test` runs them, while a build without the feature has no
 # fake in it.
 scan-device = { path = ".", features = ["fake"] }
+# A child process for each test of a fault that ends the process it runs in.
+rusty-fork.workspace = true
 
 [lints]
 workspace = true

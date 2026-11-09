@@ -79,8 +79,10 @@
 //!
 //! - `fake`: `scan_device::fake`, a scripted backend for tests, on every system and with no
 //!   driver: devices listed and opened as a script says (a renamed one found by its maker and
-//!   model), and batches of sheets whose pages it draws at the settings it applies. For tests
-//!   only, never for a shipped build.
+//!   model), batches of sheets whose pages it draws at the settings it applies, and faults
+//!   scripted on a sheet's side (a driver's error such as a jam, a hang, a crash, an exit). For
+//!   tests only, never for a shipped build: its faults can block a thread for good and end the
+//!   process.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!

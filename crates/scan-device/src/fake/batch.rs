@@ -1,10 +1,11 @@
-//! A scripted device's batch: the settings clamped, sheets taken and their pages sent.
+//! A scripted device's batch: the settings clamped, sheets taken and their pages sent, and the
+//! faults a sheet's script holds fired.
 
-use std::sync::mpsc::SyncSender;
+use std::{process, sync::mpsc::SyncSender, thread};
 
 use in_progress::{Progress, Unit};
 
-use super::{FakeDevice, Sheet, clamp, pattern};
+use super::{FakeDevice, Fault, Sheet, When, clamp, pattern};
 use crate::{
     Done, Encoded, EncodedKind, Encoding, Event, Format, Paper, Pixels, RawImage, RawPage,
     ScanError, Settings, Side, SizeMm, Source, Status,
@@ -64,11 +65,23 @@ impl Batch<'_> {
         if self.progress.check().is_err() {
             return Ok(Done::Cancelled);
         }
-        let glass = self.device.paper().glass.clone();
+        let (mut glass, loaded) = {
+            let paper = self.device.paper();
+            (paper.glass.clone(), paper.glass_loads)
+        };
         if self.events.send(Event::Sheet(sheet)).is_err() {
             return Ok(Done::Cancelled);
         }
-        match self.sides(&glass, sheet)? {
+        let sent = self.sides(&mut glass, sheet);
+        // The sheet left on the glass as it is now, without the faults that fired, unless
+        // another was put there meanwhile.
+        {
+            let mut paper = self.device.paper();
+            if paper.glass_loads == loaded {
+                paper.glass = glass;
+            }
+        }
+        match sent? {
             Sent::All => Ok(Done::OnePage),
             Sent::ReceiverGone => Ok(Done::Cancelled),
         }
@@ -82,7 +95,7 @@ impl Batch<'_> {
             if self.progress.check().is_err() {
                 return Ok(Done::Cancelled);
             }
-            let (number, sheet) = {
+            let (number, mut sheet) = {
                 let mut paper = self.device.paper();
                 if paper.feeder.is_empty() {
                     return if taken == 0 {
@@ -109,11 +122,12 @@ impl Batch<'_> {
             if self.events.send(Event::Sheet(number)).is_err() {
                 return Ok(Done::Cancelled);
             }
-            match self.sides(&sheet, number) {
+            match self.sides(&mut sheet, number) {
                 Ok(Sent::All) => {}
                 Ok(Sent::ReceiverGone) => return Ok(Done::Cancelled),
                 Err(error) => {
-                    // Not scanned: the sheet goes back at the head of the feeder.
+                    // Not scanned: the sheet goes back at the head of the feeder, without the
+                    // fault that fired, if one did.
                     self.device.paper().feeder.push_front(sheet);
                     return Err(error);
                 }
@@ -121,14 +135,18 @@ impl Batch<'_> {
         }
     }
 
-    /// `sheet`'s pages, its front's and, in duplex, its back's, each sent once it's made.
-    fn sides(&self, sheet: &Sheet, number: u32) -> Result<Sent, ScanError> {
+    /// `sheet`'s pages, its front's and, in duplex, its back's, each sent once it's made; a
+    /// fault scripted on a side read fired as it comes, and taken from the sheet.
+    fn sides(&self, sheet: &mut Sheet, number: u32) -> Result<Sent, ScanError> {
         let sides: &[Side] = if self.settings.duplex {
             &[Side::Front, Side::Back]
         } else {
             &[Side::Front]
         };
         for &side in sides {
+            if let Some(fault) = sheet.take_fault(side, When::Start) {
+                self.fire(fault)?;
+            }
             let page = self.page(sheet, number, side)?;
             if self.events.send(Event::Page(page)).is_err() {
                 return Ok(Sent::ReceiverGone);
@@ -137,13 +155,15 @@ impl Batch<'_> {
         Ok(Sent::All)
     }
 
-    /// `side`'s page of `sheet`: the one given, or one drawn; its bytes counted on the progress.
-    fn page(&self, sheet: &Sheet, number: u32, side: Side) -> Result<RawPage, ScanError> {
+    /// `side`'s page of `sheet`: the one given, or one drawn; its bytes counted on the progress,
+    /// and a fault scripted midway through it fired there.
+    fn page(&self, sheet: &mut Sheet, number: u32, side: Side) -> Result<RawPage, ScanError> {
         let pixels = match sheet.given(side) {
             Some(given) => given.clone(),
             None => self.draw(sheet, number, side)?,
         };
-        report(self.progress, &pixels);
+        let midway = sheet.take_fault(side, When::Midway);
+        self.report(&pixels, midway)?;
         // At least 1 dpi: the caps hold no resolution of 0.
         let dpi = self.settings.dpi as f32;
         Ok(RawPage::new(
@@ -175,6 +195,58 @@ impl Batch<'_> {
         pattern(format, width, height, number, side)
             .map(Pixels::Raw)
             .map_err(|error| driver(format!("the fake can't draw its page: {error}")))
+    }
+
+    /// A page's bytes on the progress: its total, then a row at a time (an encoded page's at
+    /// once), with `midway` fired after the first half of its rows (an encoded page's before its
+    /// bytes).
+    fn report(&self, pixels: &Pixels, mut midway: Option<Fault>) -> Result<(), ScanError> {
+        let progress = self.progress;
+        match pixels {
+            Pixels::Raw(image) => {
+                progress.set_total(Some(image.data().len() as u64), Unit::Bytes);
+                progress.set(0);
+                let row = image.stride() as u64;
+                let half = image.height() / 2;
+                for at in 0..image.height() {
+                    if at == half
+                        && let Some(fault) = midway.take()
+                    {
+                        self.fire(fault)?;
+                    }
+                    progress.inc(row);
+                }
+            }
+            Pixels::Encoded(encoded) => {
+                let bytes = encoded.bytes.len() as u64;
+                progress.set_total(Some(bytes), Unit::Bytes);
+                progress.set(0);
+                if let Some(fault) = midway {
+                    self.fire(fault)?;
+                }
+                progress.inc(bytes);
+            }
+        }
+        Ok(())
+    }
+
+    /// A scripted fault, fired: an error to end the batch with, or the thread or the process
+    /// ended.
+    fn fire(&self, fault: Fault) -> Result<(), ScanError> {
+        match fault {
+            Fault::Error(error) => {
+                if error == ScanError::Gone {
+                    self.device.paper().gone = true;
+                }
+                Err(error)
+            }
+            Fault::Hang => loop {
+                // Never unparked; parked again if woken all the same.
+                thread::park();
+            },
+            Fault::Crash => process::abort(),
+            Fault::Exit(code) => process::exit(code),
+        }
     }
 
     /// A drawn page's width and height in pixels: the paper's size, or under `Paper::Auto` the
@@ -252,26 +324,6 @@ fn stand_in(encoding: Encoding, width: u32, height: u32, sheet: u32, side: Side)
     Encoded {
         kind,
         bytes: format!("fake {name} page: sheet {sheet}, {side}").into_bytes(),
-    }
-}
-
-/// A page's bytes on the progress: its total, then a row at a time (an encoded page's at once).
-fn report(progress: &dyn Progress, pixels: &Pixels) {
-    match pixels {
-        Pixels::Raw(image) => {
-            progress.set_total(Some(image.data().len() as u64), Unit::Bytes);
-            progress.set(0);
-            let row = image.stride() as u64;
-            for _ in 0..image.height() {
-                progress.inc(row);
-            }
-        }
-        Pixels::Encoded(encoded) => {
-            let bytes = encoded.bytes.len() as u64;
-            progress.set_total(Some(bytes), Unit::Bytes);
-            progress.set(0);
-            progress.inc(bytes);
-        }
     }
 }
 

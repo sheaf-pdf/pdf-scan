@@ -27,7 +27,10 @@ None is on by default.
   list and open as a script says, a stored one opened as a backend for a driver API would open it (a renamed
   one found by its maker and model, a name now another model's taken as gone), and its batches take sheets
   from a feeder or the glass, clamp their settings and say what they changed, and draw their pages at those
-  settings, the same bytes on every system. For tests only, never for a shipped build.
+  settings, the same bytes on every system. A sheet's side can be scripted to fault as it's read: a driver's
+  error (a jam, a double feed, an open cover, the device gone, ...), the sheet then waiting at the head of the
+  feeder to be scanned again, or a hang, a crash or an exit. For tests only, never for a shipped build: its
+  faults can block a thread for good and end the process.
 
 ## License
 
