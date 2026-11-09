@@ -51,10 +51,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## What it does
 
-- **Loading.** `Sane::load` opens the system's library by its versioned name through the system loader's own
-  search: `libsane.so.1` on Linux and the other Unix-like systems, `libsane.1.dylib` on macOS. Windows has
-  none, since SANE isn't its scanner API. `Sane::load_from` opens the library at a path the caller gives.
-  Then `sane_init`, with no authorization callback, so a backend that asks for a password gets none.
+- **Loading.** `Sane::load` opens the system's library: `libsane.so.1` on Linux and the other Unix-like
+  systems, through the system loader's own search, and on macOS `libsane.1.dylib` at the paths Homebrew and
+  MacPorts install it (`Sane::DEFAULT_LIBRARIES`). Windows has none, since SANE isn't its scanner API.
+  `Sane::load_from` opens the library at a path the caller gives. Then `sane_init`, with no authorization
+  callback, so a backend that asks for a password gets none.
 - **Devices under a deadline.** `Sane::devices` lists them on a thread of its own, and stops waiting at the
   deadline: listing can take seconds, as every backend loaded looks for its devices, and some hang.
 - **A known device, fast.** `Sane::open` opens a device by its name, with no listing first. `ConfigDir`
@@ -91,8 +92,14 @@ There's one `Sane` per process, since SANE is started once per process; once it 
 it are gone, SANE is ended (`sane_exit`) and another may load. A load that fails leaves nothing behind. The
 library is never unloaded, since backends may leave threads or exit handlers in it.
 
-Loading a library runs its code in this process, so the path given to `load_from` must name a library
-trusted as much as the program itself, never one an untrusted party can write.
+Loading a library runs its code in this process, and its functions are called as `sane.h` declares them, so
+`load_from` is `unsafe`: the path given must name a library trusted as much as the program itself, never one
+an untrusted party can write, whose SANE functions have `sane.h`'s types. `load` opens only the system's own
+SANE, trusted as a library linked at build time would be; on macOS by its installed paths, never by a bare
+name, which dyld would look for in the working directory too.
+
+A program holds one copy of this crate: its manifest's `links` key makes cargo refuse two versions of it in
+one build, since each would start SANE as if it were alone.
 
 ## Threads, and cancelling
 
@@ -153,9 +160,10 @@ party.
 
 ## Platforms
 
-The crate builds on every system `libloading` does, and needs nothing of SANE's to build: no header, no
-library, no build script. On Linux it loads the distribution's libsane (`libsane1` on Debian and Ubuntu). On
-Windows `Sane::load` is `NoDefault`; `select_fd` exists on Unix only. Its tests, in the repository, run
+The crate builds on every system `libloading` does, and needs nothing of SANE's to build: no header and no
+library (its build script builds nothing, there for the `links` key). On Linux it loads the distribution's
+libsane (`libsane1` on Debian and Ubuntu). On Windows `Sane::load` is `NoDefault`; `select_fd` exists on Unix
+only. Its tests, in the repository, run
 against SANE's own `test` and `pnm` backends and a stand-in library of their own, and check the bindings
 against the installed `sane.h`; on macOS, Homebrew's sane-backends hasn't been tried.
 

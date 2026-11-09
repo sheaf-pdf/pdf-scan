@@ -9,10 +9,16 @@ repository = "https://github.com/sheaf-pdf/pdf-scan"
 documentation = "https://docs.rs/sane-dl"
 keywords = ["sane", "scanner", "scanning", "libsane", "ffi"]
 categories = ["api-bindings", "external-ffi-bindings", "hardware-support", "os::unix-apis"]
-# Only what users need: the sources, the README and the changelog. The
-# tests stay in the repository, since they build and load a stand-in
-# library from the workspace (`just sane-dl-package` checks the list).
-include = ["/src", "/README.md", "/CHANGELOG.md"]
+# Only what users need: the sources, the build script, the README and the
+# changelog. The tests stay in the repository, since they build and load a
+# stand-in library from the workspace (`just sane-dl-package` checks the
+# list).
+include = ["/src", "/build.rs", "/README.md", "/CHANGELOG.md"]
+# Links nothing (libsane is loaded at run time): the key keeps a program to
+# one copy of the crate, since SANE is started once per process and each
+# copy would count its own. Cargo takes it only with a build script, which
+# builds nothing.
+links = "sane-dl"
 
 [dependencies]
 libloading = "0.9"

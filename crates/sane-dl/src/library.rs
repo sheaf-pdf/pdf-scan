@@ -82,9 +82,10 @@ impl Api {
         let mut last_error = None;
         for name in names {
             // SAFETY: opening a library runs its initialisers in this
-            // process. The caller chose the library as SANE's (`load_from`'s
-            // contract, or the system's own by its soname), and trusting it
-            // is the premise of loading it at all. The library is never
+            // process. Either it's the system's own SANE, by its soname or
+            // its installed path (`load`), trusted as a library linked at
+            // build time would be, or its caller has promised it may run
+            // here (`load_from`'s `# Safety`). The library is never
             // unloaded, so no finaliser of it runs while anything it set up
             // may still be in use.
             match unsafe { libloading::Library::new(name) } {
@@ -106,10 +107,12 @@ impl Api {
         macro_rules! symbol {
             ($name:literal, $type:ty) => {{
                 let symbol = concat!($name, "\0").as_bytes();
-                // SAFETY: a library that exports SANE's names is taken to be
-                // SANE's (the premise of loading it), so the type is the
-                // binding's for this function as `sane.h` declares it (the
-                // header contract checks every binding against the header).
+                // SAFETY: a function the library exports by one of SANE's
+                // names has the type `sane.h` gives it: the system's SANE
+                // does (`load`), and `load_from`'s caller has promised it,
+                // and the binding is that type (the header contract checks
+                // every binding against the header). Nothing is called
+                // until all 14 are found.
                 // It's read as an `Option`, whose null niche makes a null
                 // address `None` rather than a null function pointer. The
                 // pointer is copied out of the `Symbol`, past its borrow of
@@ -184,9 +187,11 @@ impl Drop for Slot {
 struct RawHandle(ffi::SANE_Handle);
 
 // SAFETY: a SANE handle is an opaque token, never dereferenced here. The
-// standard says nothing of threads: it forbids only calls that overlap, and
-// every call made with a handle holds the call token, whichever thread makes
-// it.
+// standard says nothing of threads: it forbids only calls that overlap.
+// Every call made with a handle but `sane_cancel` holds the call token,
+// whichever thread makes it; `sane_cancel`, which the standard lets overlap
+// any call, is made only while the handle's alive flag is set
+// (`CancelState::call`), so never on a closed handle.
 unsafe impl Send for RawHandle {}
 
 /// What a [`CancelToken`] shares with its handle: the handle and
@@ -853,6 +858,18 @@ unsafe fn reload(
     }
 }
 
+/// The system's SANE, by system ([`Sane::DEFAULT_LIBRARIES`]).
+#[cfg(target_os = "macos")]
+const DEFAULT_LIBRARIES: &[&str] = &[
+    "/opt/homebrew/lib/libsane.1.dylib",
+    "/usr/local/lib/libsane.1.dylib",
+    "/opt/local/lib/libsane.1.dylib",
+];
+#[cfg(all(unix, not(target_os = "macos")))]
+const DEFAULT_LIBRARIES: &[&str] = &["libsane.so.1"];
+#[cfg(not(unix))]
+const DEFAULT_LIBRARIES: &[&str] = &[];
+
 /// SANE, loaded and started: the way to list devices and open them.
 ///
 /// Loading opens the library and runs `sane_init`; SANE is ended
@@ -865,9 +882,10 @@ unsafe fn reload(
 ///
 /// **One per process.** SANE is started once per process, so a second load
 /// while one `Sane` lives is [`LoadError::AlreadyLoaded`]; once the first has
-/// ended, another may load. (Two copies of this crate in one program would
-/// each keep their own count: don't.) `Sane` is `Send` and `Sync`, and clones
-/// share the one instance.
+/// ended, another may load. A program holds one copy of this crate: cargo
+/// refuses two versions of it in one build (its manifest's `links` key), as
+/// each would count its own. `Sane` is `Send` and `Sync`, and clones share
+/// the one instance.
 ///
 /// **One call at a time.** SANE lets no call overlap another but
 /// `sane_cancel`, so every call through this instance takes its one lock,
@@ -881,37 +899,49 @@ pub struct Sane {
 }
 
 impl Sane {
-    /// The name [`load`](Self::load) opens: SANE's library by its versioned
-    /// name, found by the system loader's own search, or `None` where SANE
-    /// isn't the system's scanner API (Windows).
-    pub const DEFAULT_LIBRARY: Option<&'static str> = if cfg!(target_os = "macos") {
-        Some("libsane.1.dylib")
-    } else if cfg!(unix) {
-        Some("libsane.so.1")
-    } else {
-        None
-    };
-
-    /// Loads the system's SANE ([`DEFAULT_LIBRARY`](Self::DEFAULT_LIBRARY))
-    /// and starts it.
+    /// What [`load`](Self::load) tries, in order: the system's SANE.
     ///
-    /// Where it isn't installed this is [`LoadError::NotFound`], and on
-    /// Windows [`LoadError::NoDefault`]. `sane_init` is called with no
-    /// authorization callback, so a backend that asks for a password gets
-    /// none.
+    /// On Linux and the other Unix-like systems, its versioned soname,
+    /// `libsane.so.1`, found by the system loader's own search, as a library
+    /// linked at build time would be. On macOS, where SANE isn't the
+    /// system's and a bare name would be looked for in the working
+    /// directory too, the paths its package managers install it at:
+    /// Homebrew's on Apple silicon and on Intel, then MacPorts'. None on
+    /// Windows, where SANE isn't the scanner API.
+    pub const DEFAULT_LIBRARIES: &'static [&'static str] = DEFAULT_LIBRARIES;
+
+    /// Loads the system's SANE ([`DEFAULT_LIBRARIES`](Self::DEFAULT_LIBRARIES),
+    /// the first that opens) and starts it.
+    ///
+    /// Where it isn't installed this is [`LoadError::NotFound`], naming what
+    /// was tried, and on Windows [`LoadError::NoDefault`]. `sane_init` is
+    /// called with no authorization callback, so a backend that asks for a
+    /// password gets none.
     pub fn load() -> Result<Sane, LoadError> {
-        let Some(name) = Self::DEFAULT_LIBRARY else {
+        if Self::DEFAULT_LIBRARIES.is_empty() {
             return Err(LoadError::NoDefault);
-        };
-        Sane::start(&[PathBuf::from(name)])
+        }
+        let names: Vec<PathBuf> = Self::DEFAULT_LIBRARIES.iter().map(PathBuf::from).collect();
+        Sane::start(&names)
     }
 
     /// Loads the library at `path` as SANE, and starts it.
     ///
-    /// Loading a library runs its code in this process, so `path` must name
-    /// a library trusted as much as the program itself: one the program
-    /// ships or the user chose, never one an untrusted party can write.
-    pub fn load_from(path: impl AsRef<Path>) -> Result<Sane, LoadError> {
+    /// A library without one of SANE's 14 functions is
+    /// [`LoadError::MissingSymbol`], before any of them is called.
+    ///
+    /// # Safety
+    ///
+    /// Loading a library runs its code in this process, and this crate
+    /// calls its functions as `sane.h` declares them, trusting their types:
+    ///
+    /// - the library at `path` must be one this process may run, trusted as
+    ///   much as the program itself: one the program ships or the user
+    ///   chose, never one an untrusted party can write;
+    /// - each function it exports by one of SANE's names (`sane_init`,
+    ///   `sane_open` and the rest) must have the type `sane.h` gives it,
+    ///   and keep SANE's contract for it, as a SANE library does.
+    pub unsafe fn load_from(path: impl AsRef<Path>) -> Result<Sane, LoadError> {
         Sane::start(&[path.as_ref().to_path_buf()])
     }
 
@@ -1610,13 +1640,22 @@ mod tests {
 
     #[test]
     fn default_names_are_versioned_and_by_system() {
-        let expected = if cfg!(target_os = "macos") {
-            Some("libsane.1.dylib")
+        let expected: &[&str] = if cfg!(target_os = "macos") {
+            &[
+                "/opt/homebrew/lib/libsane.1.dylib",
+                "/usr/local/lib/libsane.1.dylib",
+                "/opt/local/lib/libsane.1.dylib",
+            ]
         } else if cfg!(unix) {
-            Some("libsane.so.1")
+            &["libsane.so.1"]
         } else {
-            None
+            &[]
         };
-        assert_eq!(Sane::DEFAULT_LIBRARY, expected);
+        assert_eq!(Sane::DEFAULT_LIBRARIES, expected);
+        // On macOS no bare name, which dyld would look for in the working
+        // directory.
+        if cfg!(target_os = "macos") {
+            assert!(expected.iter().all(|name| name.starts_with('/')));
+        }
     }
 }

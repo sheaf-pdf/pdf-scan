@@ -7,7 +7,7 @@ mod common;
 use std::path::Path;
 
 use common::{Child, Fake};
-use sane_dl::{LoadError, Sane, Version};
+use sane_dl::{LoadError, Version};
 
 #[test]
 fn a_missing_library_is_not_found_with_what_was_tried() {
@@ -16,13 +16,13 @@ fn a_missing_library_is_not_found_with_what_was_tried() {
         a_missing_library_is_not_found_with_what_was_tried,
         Child::new(),
         || {
-            match Sane::load_from(&missing) {
+            match common::load_from(&missing) {
                 Err(LoadError::NotFound { tried, .. }) => assert_eq!(tried, vec![missing.clone()]),
                 other => panic!("expected NotFound, got {other:?}"),
             }
             // Nothing was left behind: a later load gets as far as the loader.
             assert!(matches!(
-                Sane::load_from(&missing),
+                common::load_from(&missing),
                 Err(LoadError::NotFound { .. })
             ));
         }
@@ -33,7 +33,7 @@ fn a_missing_library_is_not_found_with_what_was_tried() {
 #[test]
 fn there_is_no_default_library_on_windows() {
     in_child!(there_is_no_default_library_on_windows, Child::new(), || {
-        assert!(matches!(Sane::load(), Err(LoadError::NoDefault)));
+        assert!(matches!(sane_dl::Sane::load(), Err(LoadError::NoDefault)));
     });
 }
 
@@ -65,13 +65,13 @@ fn a_library_without_sanes_functions_is_refused() {
         a_library_without_sanes_functions_is_refused,
         Child::new(),
         || {
-            match Sane::load_from(library) {
+            match common::load_from(library) {
                 Err(LoadError::MissingSymbol { name, .. }) => assert_eq!(name, "sane_init"),
                 other => panic!("expected MissingSymbol, got {other:?}"),
             }
             assert!(
                 matches!(
-                    Sane::load_from(library),
+                    common::load_from(library),
                     Err(LoadError::MissingSymbol { .. })
                 ),
                 "the slot was freed"
@@ -92,7 +92,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
         || {
             let sane = common::load_fake();
             assert!(matches!(
-                Sane::load_from(common::fake_path()),
+                common::load_from(common::fake_path()),
                 Err(LoadError::AlreadyLoaded)
             ));
             let clone = sane.clone();
@@ -101,7 +101,7 @@ fn one_sane_per_process_until_it_and_its_handles_are_gone() {
             drop(clone);
             // The handle keeps SANE started.
             assert!(matches!(
-                Sane::load_from(common::fake_path()),
+                common::load_from(common::fake_path()),
                 Err(LoadError::AlreadyLoaded)
             ));
             drop(handle);
@@ -141,7 +141,7 @@ fn a_refused_version_is_exited_and_a_later_load_succeeds() {
         a_refused_version_is_exited_and_a_later_load_succeeds,
         fake.child(),
         || {
-            match Sane::load_from(common::fake_path()) {
+            match common::load_from(common::fake_path()) {
                 Err(LoadError::UnsupportedVersion(version)) => {
                     assert_eq!(
                         version,
@@ -183,7 +183,7 @@ fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
         a_failed_init_isnt_exited_and_a_later_load_succeeds,
         fake.child(),
         || {
-            match Sane::load_from(common::fake_path()) {
+            match common::load_from(common::fake_path()) {
                 Err(LoadError::Init(status)) => assert_eq!(status, sane_dl::Status::IO_ERROR),
                 other => panic!("expected Init, got {other:?}"),
             }
@@ -202,7 +202,7 @@ fn a_failed_init_isnt_exited_and_a_later_load_succeeds() {
 fn an_unknown_init_status_is_kept() {
     let fake = Fake::new("an_unknown_init_status_is_kept", "init 42\n");
     in_child!(an_unknown_init_status_is_kept, fake.child(), || {
-        match Sane::load_from(common::fake_path()) {
+        match common::load_from(common::fake_path()) {
             Err(LoadError::Init(status)) => assert_eq!(status, sane_dl::Status(42)),
             other => panic!("expected Init, got {other:?}"),
         }

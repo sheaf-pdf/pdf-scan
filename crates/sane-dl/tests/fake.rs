@@ -102,7 +102,7 @@ fn the_last_drop_after_a_listing_in_time_ends_sane_at_once() {
                 drop(sane);
                 // No listing's thread is left holding the library: the drop
                 // ended SANE, so the process's slot is free at once.
-                match Sane::load_from(common::fake_path()) {
+                match common::load_from(common::fake_path()) {
                     Ok(again) => drop(again),
                     Err(error) => panic!("round {round}: a load right after the drop: {error:?}"),
                 }
@@ -334,7 +334,7 @@ fn the_sane_dropped_during_a_late_listing_is_ended_by_the_listing() {
             // SANE; until then a load is refused.
             let until = Instant::now() + Duration::from_secs(20);
             let again = loop {
-                match Sane::load_from(common::fake_path()) {
+                match common::load_from(common::fake_path()) {
                     Err(LoadError::AlreadyLoaded) if Instant::now() < until => {
                         thread::sleep(Duration::from_millis(20))
                     }

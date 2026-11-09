@@ -41,11 +41,12 @@
 //! ```
 //!
 //! - **Loading:** [`Sane::load`] opens the system's library by its
-//!   versioned name (`libsane.so.1`, or `libsane.1.dylib` on macOS; there's
-//!   none on Windows), and [`Sane::load_from`] one the caller names. Then
-//!   `sane_init`, and a version other than SANE 1 is refused. One [`Sane`]
-//!   per process, since SANE is started once per process; the library is
-//!   never unloaded.
+//!   versioned name (`libsane.so.1`; on macOS `libsane.1.dylib` where
+//!   Homebrew or MacPorts installs it; there's none on Windows), and
+//!   [`Sane::load_from`], unsafe since it trusts what it loads, one the
+//!   caller names. Then `sane_init`, and a version other than SANE 1 is
+//!   refused. One [`Sane`] per process, since SANE is started once per
+//!   process; the library is never unloaded.
 //! - **Calls never overlap:** every call through a [`Sane`] or its handles
 //!   takes one lock, as SANE requires of every function but `sane_cancel`.
 //! - **Devices under a deadline:** [`Sane::devices`] lists them on a thread

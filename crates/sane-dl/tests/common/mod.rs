@@ -388,10 +388,24 @@ pub fn fake_path() -> PathBuf {
         .into()
 }
 
+/// Loads the library at `path` as SANE: [`Sane::load_from`], for the
+/// libraries the tests load.
+///
+/// Each is one a test may run and call as SANE: the fake its parent built,
+/// whose exports are checked at compile time to have the bindings' types;
+/// the system's libsane, or the one `SANE_DL_LIBSANE` names; the system's C
+/// library, which a test loads to see it refused for lacking SANE's
+/// functions, none of which it exports; or a path where nothing is.
+pub fn load_from(path: impl AsRef<Path>) -> Result<Sane, LoadError> {
+    // SAFETY: as above: each library is one this process may run, and
+    // exports SANE's functions with `sane.h`'s types, or none of them.
+    unsafe { Sane::load_from(path) }
+}
+
 /// In the child: loads the fake its parent built, failing the test if it
 /// can't.
 pub fn load_fake() -> Sane {
-    Sane::load_from(fake_path())
+    load_from(fake_path())
         .unwrap_or_else(|error| panic!("couldn't load the fake: {}", chain(&error)))
 }
 
@@ -521,7 +535,7 @@ pub fn real_child_with(test: &str, backends: &[&str], files: &[(&str, &str)]) ->
 /// skips where it isn't there, and fails on any other error.
 pub fn load_real() -> Sane {
     let loaded = match std::env::var_os("SANE_DL_LIBSANE") {
-        Some(path) => Sane::load_from(path),
+        Some(path) => load_from(path),
         None => Sane::load(),
     };
     match loaded {

@@ -7,12 +7,14 @@ here what changed and how code follows. A crate that depends on an alpha names i
 cargo's default, `0.1.0-alpha.1`, takes any later alpha of 0.1.0 too. The heading takes its date when the
 version is published.
 
-- **SANE loaded at run time.** `Sane::load` opens the system's library by its versioned name
-  (`libsane.so.1`, `libsane.1.dylib` on macOS; none on Windows, `LoadError::NoDefault`), and
-  `Sane::load_from` one by its path; then `sane_init`, with no authorization callback, and a SANE other than
-  version 1 refused after its `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`,
-  `MissingSymbol`, `Init`, `UnsupportedVersion`, `AlreadyLoaded`. One `Sane` per process, and another once
-  it has ended; a failed load leaves nothing behind; the library is never unloaded. Nothing links libsane.
+- **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
+  `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on
+  Windows, `LoadError::NoDefault`), and `Sane::load_from`, an `unsafe fn` since it trusts the library it's
+  given, one by its path; then `sane_init`, with no authorization callback, and a SANE other than version 1
+  refused after its `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`,
+  `Init`, `UnsupportedVersion`, `AlreadyLoaded`. One `Sane` per process, and another once it has ended; a
+  failed load leaves nothing behind; the library is never unloaded. Nothing links libsane; the manifest's
+  `links = "sane-dl"`, with a build script that builds nothing, keeps a program to one copy of the crate.
 - **The bindings,** `sane_dl::ffi`: SANE 1.4.0's `sane.h` as Rust declarations, types and constants only,
   its public-domain notice kept and what was changed said. Every C enum is an integer type with constants,
   the values the header reserves among them, never a Rust enum. A test checks them against the installed
@@ -52,6 +54,6 @@ version is published.
   start or read, and a read in flight, return `Error::Cancelled`, even from a backend that ignores it.
 - **Caps.** `Limits` on devices, strings, options, list entries, option values, frames, lines and the read
   chunk, each checked before the work it caps; set with `Sane::set_limits`.
-- **The package** holds the sources, this changelog and the README, whose licence links are the
-  repository's URLs, a test holding them so. The tests stay in the repository: they build a stand-in
-  libsane from the workspace and load it, beside SANE's own `test` and `pnm` backends.
+- **The package** holds the sources, the build script, this changelog and the README, whose licence links
+  are the repository's URLs, a test holding them so. The tests stay in the repository: they build a
+  stand-in libsane from the workspace and load it, beside SANE's own `test` and `pnm` backends.
