@@ -18,8 +18,6 @@ From the prior-art survey's "What is still unverified" (`research/prior-art/READ
 
 - **TEST-2** · sane-dl · S0 · open — **SANE in CI: the `test` and `pnm` backends, and the bindings against the header.** Check that Ubuntu runners' `libsane1` includes `pnm` (Debian's build enables it); whether the `test` backend's hand-scanner mode combines with its feeder to give `lines = -1` from a feeder (else the fake does it); a test that the hand-written bindings and status table match the installed `sane.h` (sanetui's idea, Apache-2.0). *(survey, SANE and network scanning)*
 
-- **TEST-3** · twain-dsm · S0 · open — **TWAIN's sample source on a hosted runner.** Whether `Twain_DS_sample01` (BSD-3) installs silently on `windows-latest` (`msiexec /qn`), or runs from yushulx/virtual-scanner's portable zip, or works with the DSM and the source copied into `twain_32` and `twain_64` (if the runner lets us write `C:\Windows\twain_*`); whether it scans with a hidden window in both bitnesses; `CAP_XFERCOUNT` from its environment variable sets the page count. *(survey, TWAIN, WIA and ICA)*
-
 ## Later
 
 - **TEST-5** · scan-cleanup · later · open — **Cleanup measured before it's sped up or changed.** A profile of where Scanner's 0.8 s and Photo's 3.2 s a page go, before any speed slice (`crates/scan-cleanup.md`'s reading of the code is a guess); Leptonica's skew speed on today's CPUs if FEAT-7 ports it (its published figures are from a 1 GHz P3); binarization scored by Doxa's BinBench (DIBCO's FM, pseudo-FM, PSNR, DRD) and skew by DISEC'13's metrics, run outside the build; the terms for vendoring DIBCO, DISEC'13 and DocUNet data (else fetched, not vendored). *(survey, page cleanup)*
