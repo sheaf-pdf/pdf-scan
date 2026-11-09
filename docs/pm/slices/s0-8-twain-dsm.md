@@ -370,4 +370,38 @@ in state 7; a `Dib` is `Send`.
 
 ## So far
 
-Nothing yet.
+**Step 1, the crate and its bindings** (2026-11-08; reports in `scratch/work/s0-8/step-1/`):
+- **The bindings:** `/scripts/twain-bindings.py` generates `ffi/consts.rs` from `TWAINH.cs`, both files fetched at
+  their pinned commits and their SHA-256 checked (or given by path): 1192 constants, each checked against
+  `twain.h`, none differing. Its renames recover 27 of the 58 names the review counted (`X3OF9` as
+  `TWBT_3OF9` and the other leading digits, `TWPFS` as `TWPF_`, `DG`'s flags as `DF_`, `TWON_PROTOCOL` as
+  `TWON_PROTOCOLMAJOR`/`MINOR`); `TWMF_` is typed `u32` (`TW_MEMORY`'s `Flags`) and the protocol `u16`, where
+  `TWAINH.cs` types them otherwise; `TWLG_` stays `i16`, as `TWLG_USERLOCALE` is -1. The other 31, and 5
+  aliases in `twain.h`'s deprecated section (`TWSS_A4LETTER` and four more), are in `ffi/by_hand.rs`, which the
+  script checks too: 1228 in all, `twain.h`'s 1205 numeric defines and 23 aliases. Only `DAT_CUSTOM` is in
+  `TWAINH.cs` and not `twain.h`. `--check` compares the file with what it would write; the module is
+  `#[rustfmt::skip]`, so the text stays the script's. The report: `bindings-report.txt`.
+- **The header contract** is a unit test, not an integration test, so that it reads the structs kept inside the
+  crate (`TW_ENTRYPOINT`, `TW_CALLBACK2`): it compiles a C program (`<windows.h>` first) with the `cl.exe`
+  `find-msvc-tools` finds for the test's target, and compares 28 structs, 98 offsets and the 1228 constants.
+  It found the 5 aliases the script hadn't looked for (the script now does). Passing in both bitnesses; failing
+  as it should (`make-fail.txt`) on `ICAP_XFERMECH` changed and on `TW_DEVICEEVENT`'s `FlashUsed2` and
+  `AutomaticCapture` swapped, which keeps every size the compile-time assertions check: 3 differences,
+  reverted, the script's `--check` passing after.
+- **Renamed from the plan:** the constants' table is `ffi::constants()`, crate-private, its values `i64` (for
+  the negative ones); the containers are `Container` (`One`, `Enumeration`, `Array`, `Range`) of `Item`s, not
+  `CapValue` and `Value`; a list's one item type is checked when it's made (`Items::new`, `Range::new`).
+  `TWTY_HANDLE` items decode to their value and are refused when sent: only a source gives a handle.
+- **Decoders:** every length checked before it's read, in `u64`; random input (60,000 blocks, 20,000 answers, a
+  fixed seed) decodes or is refused, never a panic, and 20,000 random containers encode and decode to
+  themselves. Extended image info: the request written and the answer's entries read; reading an entry's
+  data, inline or behind a handle, is step 4's.
+- **Manifests and CI:** `[workspace.dependencies]` with `thiserror` (`sane-dl` takes it from there);
+  `rusty-fork` joins with step 2, the first to use it. CI's TWAIN job fetches `twain.h` (its hash checked),
+  runs the script's `--check`, and the crate's tests in both bitnesses with the header required; a
+  `twain-dsm-msrv` job on Windows; the gates read `twain-dsm`'s graph (`thiserror` and its macro crates).
+- **MSRV:** the code needs 1.88 (`slice::as_chunks`: 1.87 fails with E0658, `msrv-1.87.0.log`); the floor stays
+  1.89.
+- **The check:** `just fmt clippy test doc`; clippy for i686 and Linux, docs for Linux; 20 tests in each
+  bitness with the header; `cargo +1.89 test`; no `unsafe` in a public signature (the five function-pointer
+  types are `pub(crate)`); the name gate; `~/.cargo` unchanged.

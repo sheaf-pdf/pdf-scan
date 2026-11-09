@@ -1,0 +1,21 @@
+[package]
+name = "twain-dsm"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "TWAIN through the system's Data Source Manager on Windows, its states as types and its API safe: bindings checked against twain.h, capabilities decoded, native and memory transfers"
+repository = "https://github.com/sheaf-pdf/pdf-scan"
+# Not until the twain backend has used the API (S0 slice 9): its README,
+# changelog and package contents come then.
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+# MSVC, found for the header contract's C program (a test, Windows only).
+[target.'cfg(windows)'.dev-dependencies]
+find-msvc-tools = "0.1"
+
+[lints]
+workspace = true

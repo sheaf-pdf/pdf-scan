@@ -6,11 +6,14 @@ members = [
     "crates/sane-dl",
     "crates/fake-libsane",
     "crates/twain-spike",
+    "crates/twain-dsm",
 ]
 
-# No [workspace.dependencies] yet: it holds what more than one member takes,
-# required once there and taken with `workspace = true`, and no two members
-# share a dependency so far.
+# What more than one member takes, each taking it with `workspace = true`:
+# one version for the workspace. A dependency joins once a second member
+# takes it.
+[workspace.dependencies]
+thiserror = "2"
 
 # The rules for unsafe code, which the members that call or export a C API
 # need. Each member takes them with `lints.workspace = true`.

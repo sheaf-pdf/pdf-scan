@@ -82,7 +82,8 @@ jobs:
   # TWAIN through the TWAIN Working Group's sample data source, a virtual
   # scanner that reads its pages from a file: the DSM and the source installed
   # by the script (the runner is elevated, so msiexec asks nothing), then the
-  # spike in both bitnesses. Its own timeout, since a hung driver call would
+  # spike in both bitnesses; and twain-dsm's tests in both, its bindings
+  # checked against twain.h. Its own timeout, since a hung driver call would
   # otherwise hold the runner for hours.
   twain-spike:
     name: TWAIN through the sample source
@@ -107,6 +108,26 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\twain-sample.ps1 Status
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # twain.h for twain-dsm's header contract: fetched at its pinned commit
+      # into the runner's temp, its hash checked, never committed (it grants
+      # no licence). Then a contract that can't run fails.
+      - name: Fetch twain.h
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'twain-h'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $h = Join-Path $dir 'twain.h'
+          Invoke-WebRequest -UseBasicParsing -OutFile $h -Uri 'https://raw.githubusercontent.com/twain/twain-dsm/a50f7326a191c786ee2d8cb8086aea24309c071f/TWAIN_DSM/src/twain.h'
+          $hash = (Get-FileHash -Algorithm SHA256 $h).Hash.ToLowerInvariant()
+          if ($hash -ne 'dcae88f5212b8e625724f84dbc738386043dfeb4275db13edf659cd94704db6b') { throw "twain.h has SHA-256 $hash, not the pinned one" }
+          "TWAIN_DSM_TWAIN_H=$h" >> $env:GITHUB_ENV
+          'TWAIN_DSM_REQUIRE_HEADER=1' >> $env:GITHUB_ENV
+      - name: twain-dsm's constants are what the script generates
+        run: just twain-bindings --check
+      - name: twain-dsm, 64-bit
+        run: just twain-dsm-test x86_64-pc-windows-msvc
+      - name: twain-dsm, 32-bit
+        run: just twain-dsm-test i686-pc-windows-msvc
       - name: Unit tests, 32-bit
         run: just twain-spike-test i686-pc-windows-msvc
       - name: TWAIN, 64-bit
@@ -129,6 +150,22 @@ jobs:
       - uses: extractions/setup-just@v4
       - name: Test
         run: just sane-dl-msrv
+
+  # On Windows, where all of it builds; its tests that need the DSM or
+  # twain.h say they skipped.
+  twain-dsm-msrv:
+    name: twain-dsm on its minimum Rust
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Keep in step with rust-version in crates/twain-dsm/Cargo.toml, which
+      # `just twain-dsm-msrv` reads.
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: extractions/setup-just@v4
+      - name: Test
+        run: just twain-dsm-msrv
 
   # sane-dl packaged as a publish would, in a fresh target directory, and
   # what the package holds checked: its sources, README, CHANGELOG, manifest
