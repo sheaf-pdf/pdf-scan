@@ -21,7 +21,7 @@ scan-device = { path = "../scan-device", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 # Each worker's private directory, made atomically under a random name.
-tempfile = "3"
+tempfile.workspace = true
 thiserror.workspace = true
 
 [features]

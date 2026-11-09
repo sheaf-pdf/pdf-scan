@@ -9,8 +9,9 @@ pub mod scenarios;
 
 use std::{
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
-    process::ExitStatus,
+    process::{Command, ExitStatus},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -179,12 +180,24 @@ pub fn entries(dir: &Path) -> usize {
 }
 
 /// Whether the process `id` has been reaped: on Linux, once it has, its entry under `/proc` is
-/// gone (a process exited and not yet reaped keeps its own); elsewhere, not seen, so taken as
-/// reaped.
+/// gone (a process exited and not yet reaped keeps its own); on macOS, `ps` finds no process of
+/// its id (one exited and not yet reaped is listed, its state `Z`). Elsewhere it can't be seen
+/// here, which is said past the harness's capture, and it's taken as reaped.
 pub fn reaped(id: u32) -> bool {
     if cfg!(target_os = "linux") {
         !Path::new(&format!("/proc/{id}")).exists()
+    } else if cfg!(target_os = "macos") {
+        let listed = Command::new("ps")
+            .args(["-o", "stat=", "-p", &id.to_string()])
+            .output()
+            .expect("ps ran");
+        String::from_utf8_lossy(&listed.stdout).trim().is_empty()
     } else {
+        let _ = writeln!(
+            io::stderr(),
+            "reaped: not checked on this system: the worker {id} is taken as reaped, its \
+             directory's removal alone checked"
+        );
         true
     }
 }
