@@ -1,7 +1,7 @@
 # What sheaf has for the crates
 
 The code each crate starts from and the plan files that are its spec, read at sheaf `3232a35`
-(2026-10-28). Paths under `~/repos/sheaf/`. sheaf's code is MIT OR Apache-2.0: taken as it is, and changed
+(2026-10-28). Paths are from sheaf's root. sheaf's code is MIT OR Apache-2.0: taken as it is, and changed
 here. Line counts include doc comments.
 
 ## Code

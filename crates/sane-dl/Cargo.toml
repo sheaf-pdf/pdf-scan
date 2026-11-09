@@ -1,14 +1,24 @@
 [package]
 name = "sane-dl"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "SANE scanner access with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
-# Not until the crate is ready: its README, changelog and package contents
-# come first.
-publish = false
+documentation = "https://docs.rs/sane-dl"
+keywords = ["sane", "scanner", "scanning", "libsane", "ffi"]
+categories = ["api-bindings", "external-ffi-bindings", "hardware-support", "os::unix-apis"]
+# Only what users need: the sources, the build script, the README and the
+# changelog. The tests stay in the repository, since they build and load a
+# stand-in library from the workspace (`just sane-dl-package` checks the
+# list).
+include = ["/src", "/build.rs", "/README.md", "/CHANGELOG.md"]
+# Links nothing (libsane is loaded at run time): the key keeps a program to
+# one copy of the crate, since SANE is started once per process and each
+# copy would count its own. Cargo takes it only with a build script, which
+# builds nothing.
+links = "sane-dl"
 
 [dependencies]
 libloading = "0.9"

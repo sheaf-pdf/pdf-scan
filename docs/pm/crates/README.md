@@ -20,6 +20,7 @@ in the app's process unless the app asks: `scan-worker` is how sheaf uses them (
   backends: fake, sane, twain, wia, ica. Its design note, how each driver API meets the model:
   [`scan-device-seam.md`](scan-device-seam.md).
 - [`sane-dl`](sane-dl.md): SANE loaded at run time, with its own bindings, typed options and frame assembly.
+  Built in S0 slice 1: 0.1.0-alpha.1, ready to publish, not published.
 - [`twain-dsm`](twain-dsm.md): TWAIN through the system's DSM, its seven states as types, in both bitnesses.
 - [`scan-worker`](scan-worker.md): drivers in a process of their own: the JSON-lines protocol, the worker, the
   client and its watchdog.
@@ -46,5 +47,7 @@ crate that decodes them is here (ask 5).
 
 ## Tests
 
-- [`scan-fixtures`](scan-fixtures.md): seeded pages, degradations, codes drawn, the fake libsane (never
+- [`scan-fixtures`](scan-fixtures.md): seeded pages, degradations, codes drawn, device scripts (never
   published).
+- [`fake-libsane`](fake-libsane.md): a stand-in for libsane, a `cdylib` that `sane-dl`'s tests build and load
+  by its path, scripted, checking SANE's calling rules (never published; built in S0 slice 1).

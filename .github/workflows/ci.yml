@@ -14,7 +14,8 @@ env:
   CARGO_TERM_COLOR: always
 
 # Each step runs a recipe from the justfile, so `just ci` locally checks the
-# same things.
+# same things; the Ubuntu job also sets the two SANE_DL_REQUIRE_* variables
+# (below), which a local run on Linux sets to match it.
 jobs:
   check:
     name: Rust checks (${{ matrix.os }})
@@ -128,3 +129,18 @@ jobs:
       - uses: extractions/setup-just@v4
       - name: Test
         run: just sane-dl-msrv
+
+  # sane-dl packaged as a publish would, in a fresh target directory, and
+  # what the package holds checked: its sources, README, CHANGELOG, manifest
+  # and lock, nothing else. A dry run: nothing is published.
+  sane-dl-package:
+    name: sane-dl packaged as a publish would
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: extractions/setup-just@v4
+      - name: Package, and check what the package holds
+        run: just sane-dl-package

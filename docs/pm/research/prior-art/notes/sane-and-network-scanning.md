@@ -5,7 +5,7 @@ As of 2026-11-08. Scope: what exists for the planned `sane-dl`, `scan-device` an
 (`scratch/reference/sheaf/research/build-or-adopt/05-sane-linux.md`,
 `https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/09-escl.md`,
 `scratch/reference/sheaf/m05-scan/research/scanners.md`, proposals p06 and p22).
-Crate sources were downloaded to the session scratchpad and read, never built or run. Crate numbers come
+Crate sources were downloaded to a temporary directory and read, never built or run. Crate numbers come
 from the crates.io API on 2026-11-08; repository numbers from the GitHub API the same day. Where a fact
 comes from a search-engine summary that I did not open myself, it says so.
 

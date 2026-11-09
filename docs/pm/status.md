@@ -2,25 +2,29 @@
 
 As of 2026-11-08.
 
-**Building S0 slice 1.** On its branch, the workspace and `sane-dl`'s first, empty cut (step 1 of 5). It's a
-git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (public; `master`), holding
-the workspace, its crates and CI as well as `docs/pm/`.
+**S0 slice 1 is done on its branch, `s0-1-sane-dl`, pushed, in pull request #2,** waiting on review. The
+workspace, then `sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`,
+devices under a deadline, typed options, frames assembled into pages, batches, a cancel token any thread can
+use), ready to publish and not published, with `fake-libsane` for its tests; its code review's 22 findings all
+fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged (pull request #1). It's a git
+repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
     `8b5de62`. Crate names checked free on crates.io the same day.
-  - Greg's ruling: sheaf isn't changed from here, and anything in it may be copied out (`sheaf/README.md`).
-    The 60 sheaf plan files this plan cites are copied as at `3232a35` into `scratch/reference/sheaf/`, and
-    sheaf's 9 open entries a crate here fixes into `backlog/`.
-  - `docs/pm/` laid out as Greg chose (2026-11-08): `crates/` and `milestones/` a file each, `slices/` and
-    `archive/` as pdf-lint's, `sheaf/` (downstream) beside `pdf-lint/` (upstream), `research/` a folder per
-    survey. `scratch/` keeps only local copies.
+  - The maintainer's ruling: sheaf isn't changed from here, and anything in it may be copied out
+    (`sheaf/README.md`). The 60 sheaf plan files this plan cites are copied as at `3232a35` into
+    `scratch/reference/sheaf/`, and sheaf's 9 open entries a crate here fixes into `backlog/`.
+  - `docs/pm/` laid out as the maintainer chose (2026-11-08): `crates/` and `milestones/` a file each,
+    `slices/` and `archive/` as pdf-lint's, `sheaf/` (downstream) beside `pdf-lint/` (upstream), `research/` a
+    folder per survey. `scratch/` keeps only local copies.
   - The prior-art survey (`research/prior-art/`): every crate is still a build, on dependencies used
     directly. Folded into the crates, `sheaf/from-sheaf.md`'s prior art, three slices, and the backlog (32
-    items in six kinds; the upstream contributions each waiting on Greg).
-  - pdf-lint as an upstream (`pdf-lint/README.md`; Greg's ruling in `decisions.md`): pdf-scan is the family's
-    consumer, published alphas pinned exactly, unpublished crates by path, major shortcomings proposed back.
+    items in six kinds; the upstream contributions each waiting on review).
+  - pdf-lint as an upstream (`pdf-lint/README.md`; the maintainer's ruling in `decisions.md`): pdf-scan is the
+    family's consumer, published alphas pinned exactly, unpublished crates by path, major shortcomings
+    proposed back.
   - The family's fit as the PDF crates' base, read at pdf-lint `d777a8f` (local,
     `scratch/pdf-lint/pdf-family-fit/`): a strong base for `pdf-scan`'s writing, a thin one for `pdf-images`;
     four major shortcomings.
@@ -30,26 +34,25 @@ the workspace, its crates and CI as well as `docs/pm/`.
   - Four proposals to pdf-lint, drafts kept local in `scratch/pdf-lint/proposals/`: PL-1 decode to the image
     filter, PL-2 a streaming writer, PL-3 one hayro-ccitt (and the MSRV route), PL-4 a bounded graphics-state
     walk. Each says what pdf-scan does meanwhile, so none blocks a slice.
-  - The device layer's order (Greg): bindings first, `sane-dl` before `scan-device` in S3, a seam note between
-    them (`crates/scan-device-seam.md`, first version written 2026-11-08), the model provisional until S4's
-    `twain` backend; S4's spike made end to end; sheaf's adoption of the device crates after S4 at the
-    earliest (`sheaf/swaps.md`).
-  - S0 added, the scan devices first (Greg): S3 and S4 folded into `milestones/s0-devices.md`, twelve slices,
-    Linux then Windows; S1 and S2 follow. The workspace S1 slice 1 had built (stashed; copied into
-    `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it; 6
-    and 7 taken as S0 slice 1 starts.
-- **Running: S0 slice 1, `sane-dl` and the workspace it starts**, on branch `s0-1-sane-dl`, through the
-  `scan-slice` workflow (`.claude/workflows/scan-slice.js`, local): its plan in `slices/`, a commit per step
-  on the branch, nothing pushed.
-- **Running too: S0 slice 7, the TWAIN spike**, on the Windows machine, on branch `s0-7-twain-spike` (pull
-  request #1; `slices/s0-7-twain-spike.md`): its four steps done 2026-11-08: the sample source installed
-  silently (here and on `windows-latest`), TWAIN walked from state 1 to 7 and back in both bitnesses, native
-  and memory transfers equal pixel for pixel, a cancel from another thread; the seam note's TWAIN rows and
-  `crates/twain-dsm.md` revised from it. CI green on every push, its scans on `windows-latest` included
-  (TEST-3 done). Its code review (four reviewers) and fix stage done; approval closes it.
-- **Next:** slice 1's run, its code review and fixes; then its review, and once approved the push and the
-  pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note's SANE rows revised;
-  slice 8 (`twain-dsm`) can follow slice 7 on Windows.
-- **Waiting on Greg:** the slice's review and its push; `asks.md`, ask 5 (ask 2 taken as S0 slice 1 started,
-  `decisions.md`); PL-1 to PL-3, ready to hand off on his OK; PL-4, which first needs his call on pdf-lint's
-  "the interpreter stays out" line.
+  - The device layer's order (the maintainer): bindings first, `sane-dl` before `scan-device` in S3, a seam
+    note between them (`crates/scan-device-seam.md`, first version written 2026-11-08), the model provisional
+    until S4's `twain` backend; S4's spike made end to end; sheaf's adoption of the device crates after S4 at
+    the earliest (`sheaf/swaps.md`).
+  - S0 added, the scan devices first (the maintainer): S3 and S4 folded into `milestones/s0-devices.md`,
+    twelve slices, Linux then Windows; S1 and S2 follow. The workspace S1 slice 1 had built (stashed; copied
+    into `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it;
+    6 and 7 taken as S0 slice 1 starts.
+- **Done: S0 slice 7, the TWAIN spike** (`slices/s0-7-twain-spike.md`), on the Windows machine, merged
+  with pull request #1: the sample source installed silently (there and on `windows-latest`), TWAIN walked
+  from state 1 to 7 and back in both bitnesses, native and memory transfers equal pixel for pixel, a cancel
+  from another thread; the seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
+- **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
+  `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
+  (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
+- **Waiting on review:** the slice (its plan's "Decisions taken alone, for review", 72, and "For review
+  (security)", 10), and CI's run on Ubuntu, Windows and macOS, which closes TEST-2 and TEST-8. Also:
+  `asks.md`, ask 5; UP-7 to UP-11, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
+  PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
+- **Next:** S0 slice 2, the seam note's SANE rows revised from what slice 1 learned of SANE (its plan's "So
+  far", steps 2 and 4, and "Code review"), on top of slice 7's TWAIN rows; then slices 3 and 4 on Linux.
+  Slice 8 (`twain-dsm`) can follow slice 7 on Windows.

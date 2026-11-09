@@ -4,7 +4,7 @@
 ImageCaptureCore (ICA) deliver it, what the model makes of it, and what's still to settle. Paths are from
 `docs/pm/`.
 
-**Status: first version, 2026-11-08, written before any driver layer exists** (Greg asked for it ahead of the
+**Status: first version, 2026-11-08, written before any driver layer exists** (asked for ahead of the
 device slices). It's drawn from M5 proposals 4 to 10 (`scratch/reference/sheaf/m05-scan/proposals/`), sheaf's
 `research/scanners.md`, the survey's notes (`research/prior-art/notes/sane-and-network-scanning.md`,
 `twain-wia-ica.md`), `sane.h` (sane-backends' master) and `twain.h` 2.5 (twain-dsm), the last two read for the

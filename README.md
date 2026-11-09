@@ -6,13 +6,14 @@ scanned pages to PDF and reading them back. Every crate is MIT OR Apache-2.0. Un
 driver's C API is called, in as few modules as it can; the PDF crates build on the
 [pdf-lint](https://github.com/sheaf-pdf/pdf-lint) family.
 
-Early days: the workspace exists and its first crate is being built. None is published yet.
+Early days: the workspace exists, and its first crate, `sane-dl`, is built and ready to publish as an alpha.
+None is published yet.
 
 ## Scanner access
 
 | Crate | What it does |
 |---|---|
-| `sane-dl` | SANE, the scanner API of Linux and the other Unix-like systems, with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled into images, a cancel token any thread can use. Being built |
+| `sane-dl` | SANE, the scanner API of Linux and the other Unix-like systems, with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled into images, a cancel token any thread can use. 0.1.0-alpha.1, not yet published ([README](crates/sane-dl/README.md)) |
 | `fake-libsane` | A stand-in for libsane that `sane-dl`'s tests load: scripted devices, hostile values, SANE's calling rules checked (never published) |
 | `twain-spike` | A throwaway program that drives TWAIN on Windows through the TWAIN Working Group's sample data source, in both bitnesses, and checks what it sees; replaced by `twain-dsm`'s own tests (never published) |
 

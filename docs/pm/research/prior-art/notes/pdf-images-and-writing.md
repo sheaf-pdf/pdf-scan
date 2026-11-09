@@ -1,6 +1,6 @@
 # PDF images and writing scanned PDFs: prior art for `pdf-images` and `pdf-scan`
 
-As of 2026-11-08. Crate versions, dates, downloads and licenses are from the crates.io API, read on 2026-11-08 with a generic User-Agent. "Read in source" means I read the published crate's source (downloaded to the scratchpad, or already under `~/.cargo/registry/src/`), not built or run. Line numbers refer to that version. Codec internals (zune-jpeg, hayro-ccitt, hayro-jbig2, hayro-jpeg2000, fax, JBIG2 encoders) belong to another researcher, so they come up here only where the PDF-level glue depends on them.
+As of 2026-11-08. Crate versions, dates, downloads and licenses are from the crates.io API, read on 2026-11-08 with a generic User-Agent. "Read in source" means I read the published crate's source (downloaded to a temporary directory, or already in cargo's local registry cache), not built or run. Line numbers refer to that version. Codec internals (zune-jpeg, hayro-ccitt, hayro-jbig2, hayro-jpeg2000, fax, JBIG2 encoders) belong to another researcher, so they come up here only where the PDF-level glue depends on them.
 
 License rule used in the verdicts: GPL, LGPL, AGPL and MPL-2.0 projects are **study only** (read and cite, never copy, port or link). Only MIT, Apache-2.0, BSD, ISC, Zlib, CC0 or public-domain code may be ported.
 
@@ -109,12 +109,12 @@ No library in any language hands back an image's samples in its own color space,
 **qpdf 12.4.2** (Apache-2.0, C++; 2026-09-26) — [release notes](https://github.com/qpdf/qpdf/blob/main/manual/release-notes.rst)
 - `--decode-level=all` decodes the generalized filters (LZW, Flate, ASCII85, ASCIIHex), then RunLength ("specialized"), and of the lossy filters "currently this is just /DCTDecode". It leaves CCITT, JBIG2 and JPX untouched ([cli.rst:894-945](https://github.com/qpdf/qpdf/blob/main/manual/cli.rst)).
 
-**The prior audit's corpus counts** (entry 33): `scans/` has 709 files, 464 with DCT, 150 CCITT, 127 JBIG2 and 52 JPX ([entry 33](file://scratch/reference/sheaf/research/build-or-adopt/33-pdf-image-samples-image-s-own.md)). 15 of the 127 JBIG2 scans have a `/JBIG2Globals` ([entry 37](file://scratch/reference/sheaf/research/build-or-adopt/37-jbig2-decode.md)).
+**The prior audit's corpus counts** (entry 33): `scans/` has 709 files, 464 with DCT, 150 CCITT, 127 JBIG2 and 52 JPX ([entry 33](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/33-pdf-image-samples-image-s-own.md)). 15 of the 127 JBIG2 scans have a `/JBIG2Globals` ([entry 37](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/37-jbig2-decode.md)).
 
 **The family today:**
-- `pdf-color` already types Indexed (with a `Lookup`), Separation, DeviceN (with `Attributes`) and ICC spaces ([pdf-color/src/space.rs:136-323](file://~/repos/sheaf-arlington/crates/pdf-color/src/space.rs)).
-- `pdf-filters` has the predictors ([predictor.rs](file://~/repos/sheaf-arlington/crates/pdf-filters/src/predictor.rs)).
-- `pdf-content-streams`' `image-ends` feature pins `hayro-ccitt = "0.3"` ([Cargo.toml:35-48](file://~/repos/sheaf-arlington/crates/pdf-content-streams/Cargo.toml)), while hayro-syntax 0.9.0 is on hayro-ccitt 0.5.0 ([Cargo.toml](https://docs.rs/crate/hayro-syntax/0.9.0/source/Cargo.toml.orig)).
+- `pdf-color` already types Indexed (with a `Lookup`), Separation, DeviceN (with `Attributes`) and ICC spaces (pdf-lint's `crates/pdf-color/src/space.rs`, lines 136-323).
+- `pdf-filters` has the predictors (pdf-lint's `crates/pdf-filters/src/predictor.rs`).
+- `pdf-content-streams`' `image-ends` feature pins `hayro-ccitt = "0.3"` (pdf-lint's `crates/pdf-content-streams/Cargo.toml`, lines 35-48), while hayro-syntax 0.9.0 is on hayro-ccitt 0.5.0 ([Cargo.toml](https://docs.rs/crate/hayro-syntax/0.9.0/source/Cargo.toml.orig)).
 
 ### Inferences
 - How the candidates cover the needs:
@@ -162,7 +162,7 @@ None replaces building the layer on the family's writers.
 - CID fonts assign one CID per glyph ID through a glyph remapper and keep one text string per CID ([text/cid.rs:150-180](https://docs.rs/crate/krilla/0.8.2/source/src/text/cid.rs)). Text that conflicts goes through `/ActualText` spans ([content.rs:772-805](https://docs.rs/crate/krilla/0.8.2/source/src/content.rs)).
 - `Document::finish(self) -> KrillaResult<Vec<u8>>` ([document.rs:143](https://docs.rs/crate/krilla/0.8.2/source/src/document.rs)).
 - The file ID and XMP instance ID are a stable hash of the bytes written (`stable_hash_base64(pdf.as_bytes())`, [chunk_container.rs:159-192](https://docs.rs/crate/krilla/0.8.2/source/src/chunk_container.rs)), so the output is deterministic.
-- It has PDF/A-1 to 4 and PDF/UA-1 clause tables ([src/configure/PDF_A*.md](https://docs.rs/crate/krilla/0.8.2/source/src/configure/)). Encryption and signatures are out of scope (prior audit [entry 03](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
+- It has PDF/A-1 to 4 and PDF/UA-1 clause tables ([src/configure/PDF_A*.md](https://docs.rs/crate/krilla/0.8.2/source/src/configure/)). Encryption and signatures are out of scope (prior audit [entry 03](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
 
 **printpdf 0.12.8** (2026-09-05; MIT; MSRV 1.88; 3.95M downloads; repo 1,191 stars) — [crates.io](https://crates.io/crates/printpdf)
 - Resource IDs come from `random_character_string_32()`, fed by a process-global `AtomicUsize` seeded at 2100 ([utils.rs:11-41](https://docs.rs/crate/printpdf/0.12.8/source/src/utils.rs); used at [lib.rs:230-285](https://docs.rs/crate/printpdf/0.12.8/source/src/lib.rs)). Names therefore depend on what else the process made first.
@@ -189,7 +189,7 @@ None replaces building the layer on the family's writers.
 
 **Tesseract writes a page at a time** (see Q3): each page's objects are appended as they are made. Only an offsets vector and the page list stay in memory, and the `/Pages` object (number 2) is written at the end ([pdfrenderer.cpp:194-203, 827-870, 922-945](https://github.com/tesseract-ocr/tesseract/blob/main/src/api/pdfrenderer.cpp)).
 
-**sheaf's current writer** ([images.rs](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/images.rs)):
+**sheaf's current writer** ([images.rs](https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/images.rs)):
 - It uses lopdf objects and `serialize::full::write_built`, with DCTDecode passthrough and `/Rotate` from EXIF quarter turns, G4 under `K -1`, and 8-bit gray or RGB under Flate.
 - The page is the unrotated one, with `/Rotate` turning it upright (`:76-91`).
 
@@ -229,7 +229,7 @@ Two spec-level traps also bear on our design: a bfrange like `<0000> <FFFF> <000
   - ToUnicode with `/CMapName /Adobe-Identify-UCS` (sic), codespace `<0000> <FFFF>` and one `bfrange <0000> <FFFF> <0000>` (`:520-640`).
 - **The font program:**
   - `pdf.ttf` from tessdata, with a compiled-in copy as fallback (`:650-662`).
-  - I parsed sheaf's vendored copy: 572 bytes, 2 glyphs, advances `[0, 1024]` at 2048 units per em, so glyph 1 advances exactly half an em ([assets/pdf.ttf](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/assets/pdf.ttf), read with a 20-line table parser).
+  - I parsed sheaf's vendored copy: 572 bytes, 2 glyphs, advances `[0, 1024]` at 2048 units per em, so glyph 1 advances exactly half an em ([assets/pdf.ttf](https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/assets/pdf.ttf), read with a 20-line table parser).
 - **Text** (`:336-500`):
   - `BT 3 Tr` per text block.
   - Words are projected onto the line's straight baseline, because "Viewers like evince can get really confused during copy-paste when the baseline wanders around".
@@ -302,7 +302,7 @@ Two spec-level traps also bear on our design: a bfrange like `<0000> <FFFF> <000
 
 **PDF/A and .notdef:** veraPDF's check 6.2.11.8-1 fails any PDF/A-2 file whose text-showing operators reference the `.notdef` glyph, "regardless of text rendering mode" ([veraPDF users list](https://lists.verapdf.org/hyperkitty/list/users@lists.openpreservation.org/thread/3MMZ3M4BR2SMSIY4WW24SOUTH2IKBUWD/); [Ghostscript bug 708479](https://bugs.ghostscript.com/show_bug.cgi?id=708479)).
 
-**sheaf's layer** ([glyphless.rs](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/content/font/glyphless.rs); [m05-ocr.md:88-135](file://scratch/reference/sheaf/complete/m05-ocr.md)):
+**sheaf's layer** ([glyphless.rs](https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/content/font/glyphless.rs); [m05-ocr.md:88-135](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/complete/m05-ocr.md)):
 - It reproduces Tesseract's objects, with every CID going to glyph 1 and the CMap name spelled `Adobe-Identity-UCS`.
 - It computes `tz = 200·w/(fs·n)` with n in UTF-16 units.
 - It writes inter-word gaps as a separately scaled `<0020> Tj`.
@@ -340,7 +340,7 @@ The only maintained MRC-to-PDF tool, Internet Archive's archive-pdf-tools, is AG
   - Its 0.6.0 notes say "The DjVu-derived component code and tests are replaced".
   - Dependencies include pyo3, rayon and wide, and there are 4 `unsafe` occurrences in `src/` ([crates.io](https://crates.io/crates/jbig2enc-rust); README in the 0.6.0 crate).
   - This is codec territory.
-- OCRmyPDF removed lossy JBIG2 entirely in v17.0.0 ([release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md)), and the prior audit already rules out JBIG2 encoding for symbol-substitution risk ([entry 37](file://scratch/reference/sheaf/research/build-or-adopt/37-jbig2-decode.md)).
+- OCRmyPDF removed lossy JBIG2 entirely in v17.0.0 ([release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md)), and the prior audit already rules out JBIG2 encoding for symbol-substitution risk ([entry 37](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/37-jbig2-decode.md)).
 
 ### Inferences
 - An MRC page needs from `pdf-scan` only:
@@ -388,7 +388,7 @@ Resolution is the image's pixels over its placed size, `/UserUnit` included, wit
   - `needs_ocr` returns true for scanned and hybrid pages ([ocr/mod.rs:121-154](https://docs.rs/crate/pdf_oxide/0.3.78/source/src/ocr/mod.rs)).
 - **Poppler's `pdfimages -list`** gives per image the x-ppi and y-ppi "when rendered on the pdf page", plus type, color, comp, bpc, enc and object ID ([man page](https://manpages.debian.org/testing/poppler-utils/pdfimages.1.en.html)).
 - **PDFium:** `FPDFImageObj_GetImageMetadata` reports horizontal and vertical DPI, bits per pixel and color space per image object. pdfium-render exposes these, and text objects' `render_mode()` ([image.rs:760-830](https://docs.rs/crate/pdfium-render/0.9.4/source/src/pdf/document/page/object/image.rs); [text.rs:241](https://docs.rs/crate/pdfium-render/0.9.4/source/src/pdf/document/page/object/text.rs)).
-- **The plan:** "its content one image over the page, maybe with a text layer, as copiers, ScanSnap, OCRmyPDF and Tesseract write them" ([crates.md, pdf-scan](file://docs/pm/crates.md)).
+- **The plan:** "its content one image over the page, maybe with a text layer, as copiers, ScanSnap, OCRmyPDF and Tesseract write them" ([crates/pdf-scan.md](../../../crates/pdf-scan.md)).
 
 ### Inferences
 - `pdf-scan`'s reader can be exact where these tools are heuristic, because it targets a narrow shape: one image draw covering the MediaBox or CropBox (or several strips summing to it), an optional invisible text block, and nothing else visible. That narrowness is a feature. Pages that fail it should fall back to "not a scan" with a reason, the way pdf_oxide reports a `ReasonCode`.
@@ -413,13 +413,13 @@ PDFium's per-image metadata (DPI, bpp, color space) and per-text-object render m
 ### Cited Findings
 - **qpdf `--check`** checks "the file's structure as well as encryption, linearization, and encoding of stream data", and "does not perform any validation of the actual PDF page content" ([cli.rst:3380-3392](https://github.com/qpdf/qpdf/blob/main/manual/cli.rst)). `--decode-level=all` decodes DCT but not CCITT, JBIG2 or JPX (Q1).
 - **veraPDF** core 1.30.3 (Maven metadata last updated 2026-10-08) — [maven-metadata.xml](https://repo1.maven.org/maven2/org/verapdf/core/maven-metadata.xml). OCRmyPDF had to fix veraPDF detection for 1.30.0 and later, because "recent builds print JVM warnings before their version string" (v17.8.0). It replaced veraPDF with pikepdf's validator for its speculative PDF/A in v17.13.0 ([release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md)).
-- **krilla's CI** checks against veraPDF and the Arlington model (prior audit [entry 03](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
+- **krilla's CI** checks against veraPDF and the Arlington model (prior audit [entry 03](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
 - **pdfium-render** offers raw image data, filter names, DPI, bpp, color space and text render mode (Q1, Q5).
 - **pypdfium2 5.15.1** (2026-11-07) is OCRmyPDF's default rasterizer since v17.0.0 ("The default `--rasterizer auto` prefers pypdfium when available") — [PyPI](https://pypi.org/project/pypdfium2/), [release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md).
 - **OCRmyPDF's output validation** checks JPEG 2000 and CCITT images too since v17.13.0 ("JPEG 2000 and CCITT images are now checked too") ([release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md)).
 - **PDFBox `getRawRaster()`** returns native samples (Q1).
 - **hayro** tests against 1,600+ PDFs scraped partly from pdf.js's and PDFBox's suites ([README](https://github.com/LaurenzV/hayro/blob/main/README.md)).
-- **The family** already runs PDFium (`oracle/`) and qpdf (pdf-fixtures), and fuzzes every crate in CI ([sheaf-arlington README](file://~/repos/sheaf-arlington/README.md)).
+- **The family** already runs PDFium (`oracle/`) and qpdf (pdf-fixtures), and fuzzes every crate in CI (pdf-lint's `README.md`).
 
 ### Inferences
 - **Text round-trip cases to add**, beyond the plan's PDFium extraction:
@@ -465,7 +465,7 @@ The audit's shape holds: build on the family, port hayro's quirks, keep PDFium a
 - **Entry 91, the README quotes:** the README now claims "1,600+ PDFs" (audit: 1,400+) and no longer reads "experimental, work-in-progress". It now lists robustness ("many ways to trigger timeouts and OOM errors"), performance and API surface as open ([README](https://github.com/LaurenzV/hayro/blob/main/README.md)). The repo has 858 stars (audit: 814).
 - **Entry 33, pdf_oxide's downloads:** now 1.53M (audit: 1.35M). Not noted before: its image extractor counts DeviceN as 4 components regardless of N ([images.rs:670](https://docs.rs/crate/pdf_oxide/0.3.78/source/src/extractors/images.rs)).
 - **Entry 37's "under development" note** for hayro-jbig2 still holds in 0.4.0 ([README](https://docs.rs/crate/hayro-jbig2/0.4.0/source/README.md)).
-- **Version split:** `pdf-content-streams` pins `hayro-ccitt = "0.3"` ([Cargo.toml:41](file://~/repos/sheaf-arlington/crates/pdf-content-streams/Cargo.toml)), while the current release is 0.5.0. crates.md's "keep one version of each across the two workspaces" therefore already needs a bump ([crates.md](file://docs/pm/crates.md)).
+- **Version split:** `pdf-content-streams` pins `hayro-ccitt = "0.3"` (pdf-lint's `crates/pdf-content-streams/Cargo.toml`, line 41), while the current release is 0.5.0. crates.md's "keep one version of each across the two workspaces" therefore already needs a bump (then crates.md; now [crates/pdf-images.md](../../../crates/pdf-images.md), as PL-3).
 - **Entry 03's pdf-writer and krilla facts** still hold: pdf-writer 0.15.0 of 2026-05-27 and krilla 0.8.2 of 2026-06-04 are still the latest.
 
 ### Inferences
@@ -488,7 +488,7 @@ The verdicts rest on the findings in Q1 to Q7. The decisive facts:
 
 **`pdf-images`:**
 1. **Dictionary read and capped before decoding** (`Width`, `Height`, `BitsPerComponent`, `ColorSpace`, `Decode`, `ImageMask`, `Mask`, `SMask`, `SMaskInData`, `Interpolate`, inline abbreviations). **Verdict: build our own** on pdf-objects and pdf-color. hayro has no area cap and pdf.js targets canvas (Q1). Port, as ideas: hayro's DCT dimension guard and patch, its short-data padding, and its name-resolved inline color spaces ([hayro-interpret decode/mod.rs](https://docs.rs/crate/hayro-interpret/0.9.0/source/src/x_object/decode/mod.rs); [dct.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/dct.rs)).
-2. **Stream filters.** **Verdict: use directly** (pdf-filters, the family) ([README](file://~/repos/sheaf-arlington/README.md)).
+2. **Stream filters.** **Verdict: use directly** (pdf-filters, the family) (pdf-lint's `README.md`).
 3. **DCT at PDF level** (`/ColorTransform`, APP14, YCCK, wrong SOF dimensions, the 65,535 cap). **Verdict: port** hayro-syntax `filter/dct.rs` (Apache-2.0 OR MIT, 181 lines) onto zune-jpeg. Its comment says the AI-generated marker scanner needs review, so write tests for it ([dct.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/dct.rs)).
 4. **CCITT parameters.** **Verdict: port** `filter/ccitt.rs`'s parameter mapping and partial-row recovery, but keep 1-bit packed output always ([ccitt.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/ccitt.rs)).
 5. **JBIG2 with `/JBIG2Globals`.** **Verdict: port** `filter/jbig2.rs`'s glue (globals decoded as data, then `Page::new_embedded`, then the black=1 inversion), with 1-bit output ([jbig2.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/jbig2.rs)).
@@ -517,7 +517,7 @@ The verdicts rest on the findings in Q1 to Q7. The decisive facts:
     - decide non-BMP handling (private CIDs with `bfchar`);
     - pick an RTL strategy (visual order, OCRmyPDF's) and test it;
     - keep `Tz` per `BT`;
-    - never map to GID 0 ([pdfrenderer.cpp](https://github.com/tesseract-ocr/tesseract/blob/main/src/api/pdfrenderer.cpp); [glyphless.rs](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/content/font/glyphless.rs); Q3).
+    - never map to GID 0 ([pdfrenderer.cpp](https://github.com/tesseract-ocr/tesseract/blob/main/src/api/pdfrenderer.cpp); [glyphless.rs](https://github.com/sheaf-pdf/sheaf/blob/3232a35/crates/sheaf-doc/src/content/font/glyphless.rs); Q3).
 15. **The layer emitted into a pdf-content-streams writer.** **Verdict: build our own** (the family's writer).
 16. **A page at a time, memory flat.** **Verdict: build our own** on pdf-structure's `write::Parts`, following Tesseract's stream-then-`/Pages`-last layout. pdf-writer, krilla, lopdf and printpdf all buffer the whole document (Q2).
 17. **The same inputs make the same bytes.** **Verdict: build our own**:
@@ -532,7 +532,7 @@ The verdicts rest on the findings in Q1 to Q7. The decisive facts:
     - pdf-ocr (AGPL);
     - printpdf and genpdf.
 
-    krilla's PDF/A clause tables remain the reference for later PDF/A work (Q2; [entry 03](file://https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
+    krilla's PDF/A clause tables remain the reference for later PDF/A work (Q2; [entry 03](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/research/build-or-adopt/03-writing-pdf-sheaf-s-serializer-against.md)).
 
 **`pdf-scan` reading:**
 
