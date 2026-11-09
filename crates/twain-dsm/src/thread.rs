@@ -124,6 +124,7 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
         generation: Cell::new(0),
         events: RefCell::new(VecDeque::new()),
         held: RefCell::new(VecDeque::new()),
+        drop_errors: RefCell::new(Vec::new()),
     };
 
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| f(&twain)));
@@ -212,7 +213,12 @@ pub struct Twain<T> {
     pub(crate) events: RefCell<VecDeque<u16>>,
     /// Requests taken from the channel and put back, ahead of it.
     pub(crate) held: RefCell<VecDeque<T>>,
+    /// What states' `Drop`s couldn't do, for `drop_errors`.
+    drop_errors: RefCell<Vec<Error>>,
 }
+
+/// The most errors `drop_errors` keeps between calls.
+const DROP_ERRORS_KEPT: usize = 16;
 
 /// Where the open source stands, as the record has it: TWAIN's states 4 to 7.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -258,6 +264,22 @@ impl<T> Twain<T> {
         }
     }
 
+    /// What the states dropped since the last call couldn't do: each `Drop`
+    /// steps down, and has nowhere to put a refusal but here (the first 16).
+    pub fn drop_errors(&self) -> Vec<Error> {
+        core::mem::take(&mut *self.drop_errors.borrow_mut())
+    }
+
+    /// A state's `Drop`'s result, kept if it's an error.
+    pub(crate) fn dropped(&self, result: Result<(), Error>) {
+        if let Err(error) = result {
+            let mut errors = self.drop_errors.borrow_mut();
+            if errors.len() < DROP_ERRORS_KEPT {
+                errors.push(error);
+            }
+        }
+    }
+
     /// The next request posted, if one is waiting.
     pub fn take_request(&self) -> Option<T> {
         if let Some(request) = self.held.borrow_mut().pop_front() {
@@ -289,13 +311,11 @@ impl<T> Twain<T> {
     }
 
     /// Pumps the thread's messages until `done` says so, `deadline` passes,
-    /// or the thread is asked to quit. `done` is asked before each wait and
-    /// after each message.
+    /// or the thread is asked to quit. `done` is asked once the messages
+    /// queued are all taken, before each wait: so a source's message queued
+    /// already is seen before a request is handed over.
     pub(crate) fn pump(&self, deadline: Instant, mut done: impl FnMut(&Self) -> bool) -> Pumped {
         loop {
-            if done(self) {
-                return Pumped::Stop;
-            }
             while let Some(mut msg) = window::take_message() {
                 if msg.message() == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                     return Pumped::Quit(msg.wparam() as i32);
@@ -310,9 +330,9 @@ impl<T> Twain<T> {
                 } else {
                     msg.dispatch();
                 }
-                if done(self) {
-                    return Pumped::Stop;
-                }
+            }
+            if done(self) {
+                return Pumped::Stop;
             }
             let now = Instant::now();
             if now >= deadline {
@@ -374,6 +394,15 @@ impl<T> Twain<T> {
         if !self.connected.get() {
             return Ok(());
         }
+        #[cfg(test)]
+        if tests::REFUSE_CLOSEDSM.load(Ordering::Relaxed) {
+            return Err(Error::Failed {
+                triplet: crate::Triplet::new(ffi::DG_CONTROL, ffi::DAT_PARENT, ffi::MSG_CLOSEDSM),
+                rc: ReturnCode::FAILURE,
+                by_source: None,
+                by_dsm: None,
+            });
+        }
         let (triplet, rc) = dsm.parent(&self.app, false, self.window.hwnd());
         if rc == ReturnCode::SUCCESS {
             self.connected.set(false);
@@ -431,5 +460,83 @@ impl<T> Remote<T> {
         // queue), the request waits in the channel for the loop's next turn.
         window::post(handle, WM_REQUEST, 0, 0);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+pub(crate) mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+
+    use super::*;
+    use crate::states::{App, Load};
+    use crate::test_support::{self, Outcome};
+
+    /// A make-fail: `MSG_CLOSEDSM` taken as refused, without being sent.
+    pub(crate) static REFUSE_CLOSEDSM: AtomicBool = AtomicBool::new(false);
+
+    /// The DSM refusing to close the connection at the end of a run: the run
+    /// reports it, leaves the window and the apartment as they are, and keeps
+    /// the flag, so no run follows; nothing crashes.
+    #[test]
+    fn a_connection_the_dsm_wont_close_strands_the_run() {
+        test_support::fork(
+            rusty_fork::rusty_fork_test_name!(a_connection_the_dsm_wont_close_strands_the_run),
+            rusty_fork::rusty_fork_id!(),
+            || {
+                REFUSE_CLOSEDSM.store(true, Ordering::Relaxed);
+                let report = run::<(), _>(|twain| {
+                    let loaded = match twain.load(Load::System) {
+                        Ok(loaded) => loaded,
+                        Err(crate::LoadError::NotFound { .. }) => {
+                            return Err(Outcome::Skip("no DSM installed".into()));
+                        }
+                        Err(e) => panic!("the system's DSM: {e}"),
+                    };
+                    let app = App::new("pdf-scan", "twain-dsm tests", "unit").expect("fits");
+                    let opened = loaded
+                        .open(app)
+                        .map_err(crate::Refused::into_error)
+                        .expect("opens");
+                    drop(opened);
+                    let errors = twain.drop_errors();
+                    assert_eq!(errors.len(), 1, "the Opened's drop was refused: {errors:?}");
+                    Ok(twain.window.handle())
+                })
+                .expect("TWAIN runs");
+                let window = match report.value {
+                    Ok(window) => window,
+                    Err(outcome) => return outcome,
+                };
+                assert!(
+                    matches!(
+                        report.stranded,
+                        Some(Error::Failed {
+                            rc: ReturnCode::FAILURE,
+                            ..
+                        })
+                    ),
+                    "stranded: {:?}",
+                    report.stranded
+                );
+                // SAFETY: IsWindow takes any handle and says whether it's a
+                // window's.
+                assert_ne!(unsafe { IsWindow(window as _) }, 0, "the window is left");
+                // SAFETY: the reserved argument is null. S_FALSE (1): this
+                // thread is a single-threaded apartment still. The child
+                // process ends without balancing it.
+                let hr =
+                    unsafe { CoInitializeEx(core::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+                assert_eq!(hr, 1, "the apartment is left");
+                assert!(matches!(
+                    run::<(), _>(|_| ()),
+                    Err(RunError::AlreadyRunning)
+                ));
+                Outcome::Done
+            },
+        );
     }
 }

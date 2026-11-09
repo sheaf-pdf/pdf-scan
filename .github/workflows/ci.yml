@@ -89,6 +89,10 @@ jobs:
     name: TWAIN through the sample source
     runs-on: windows-latest
     timeout-minutes: 15
+    # The sample is installed below, so a twain-dsm test that can't find it
+    # fails rather than skipping.
+    env:
+      TWAIN_DSM_REQUIRE_SAMPLE: "1"
     steps:
       - uses: actions/checkout@v7
         with:

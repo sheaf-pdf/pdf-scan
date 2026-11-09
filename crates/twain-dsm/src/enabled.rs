@@ -40,12 +40,19 @@ impl<T> Twain<T> {
     /// nothing is pending), `MSG_RESET` (6 to 5), `MSG_DISABLEDS` (5 to 4),
     /// `MSG_CLOSEDS` (4 to 3). A step refused is passed over to the next
     /// (the first refusal is returned), but for `MSG_CLOSEDS`: a source that
-    /// won't close stays open in the record.
+    /// won't close stays open in the record. A step refused with
+    /// `TWCC_SEQERROR` means the source isn't where the record says (one that
+    /// said `MSG_XFERREADY` before the pump saw it is in state 6, say); the walk
+    /// then starts again once from state 7, as TWAIN.cs's rollback does, so
+    /// that each step down is tried from wherever it really is, and that
+    /// refusal is returned only if the floor still isn't reached.
     pub(crate) fn step_down_to(&self, floor: u8) -> Result<(), Error> {
         let Some(dsm) = self.dsm.get() else {
             return Ok(());
         };
         let mut first = None;
+        let mut out_of_step = None;
+        let mut restarted = false;
         while number(self) > floor {
             let level = self.level.get();
             let (triplet, rc, next) = match level {
@@ -79,8 +86,22 @@ impl<T> Twain<T> {
                     (triplet, rc, None)
                 }
             };
-            if rc != ReturnCode::SUCCESS && first.is_none() {
-                first = Some(self.source_failure(dsm, &self.source, triplet, rc));
+            if rc != ReturnCode::SUCCESS {
+                let error = self.source_failure(dsm, &self.source, triplet, rc);
+                let sequence = matches!(
+                    error,
+                    Error::Failed {
+                        by_source: Some(crate::ConditionCode::SEQERROR),
+                        ..
+                    }
+                );
+                if sequence && !restarted && level < Level::Transferring {
+                    restarted = true;
+                    out_of_step = Some(error);
+                    self.level.set(Level::Transferring);
+                    continue;
+                }
+                first.get_or_insert(error);
             }
             match next {
                 Some(next) => {
@@ -96,6 +117,9 @@ impl<T> Twain<T> {
                 }
                 None => break,
             }
+        }
+        if number(self) > floor {
+            first = first.or(out_of_step);
         }
         first.map_or(Ok(()), Err)
     }
@@ -208,7 +232,8 @@ impl<'t, T> Enabled<'t, T> {
     }
 
     /// The source's next message, or a request, pumping the thread's messages
-    /// meanwhile, until `timeout`. The source's come first.
+    /// meanwhile, until `timeout`. The source's come first: the messages
+    /// queued are all taken before a request is handed over.
     pub fn next_event(self, timeout: Duration) -> Result<Next<'t, T>, Refused<Self>> {
         let twain = self.twain();
         let mut request = None;
@@ -274,7 +299,8 @@ impl<'t, T> Enabled<'t, T> {
 impl<T> Drop for Enabled<'_, T> {
     fn drop(&mut self) {
         if let Some(source) = &self.source {
-            let _ = source.twain().step_down_to(4);
+            let twain = source.twain();
+            twain.dropped(twain.step_down_to(4));
         }
     }
 }
@@ -404,7 +430,8 @@ impl<'t, T> Ready<'t, T> {
 impl<T> Drop for Ready<'_, T> {
     fn drop(&mut self) {
         if let Some(enabled) = &self.enabled {
-            let _ = enabled.twain().step_down_to(5);
+            let twain = enabled.twain();
+            twain.dropped(twain.step_down_to(5));
         }
     }
 }
@@ -471,7 +498,8 @@ impl<'t, T> Transferred<'t, T> {
 impl<T> Drop for Transferred<'_, T> {
     fn drop(&mut self) {
         if let Some(ready) = &self.ready {
-            let _ = ready.twain().step_down_to(6);
+            let twain = ready.twain();
+            twain.dropped(twain.step_down_to(6));
         }
     }
 }
@@ -640,7 +668,8 @@ impl<'t, T> MemoryTransfer<'t, T> {
 impl<T> Drop for MemoryTransfer<'_, T> {
     fn drop(&mut self) {
         if let Some(ready) = &self.ready {
-            let _ = ready.twain().step_down_to(6);
+            let twain = ready.twain();
+            twain.dropped(twain.step_down_to(6));
         }
     }
 }

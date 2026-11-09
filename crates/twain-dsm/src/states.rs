@@ -288,7 +288,7 @@ impl<T> Drop for Opened<'_, T> {
         if let Some(loaded) = &self.loaded {
             // If the DSM refuses, the record keeps the connection open, and
             // the end of `run` tries again.
-            let _ = loaded.twain.close_connection();
+            loaded.twain.dropped(loaded.twain.close_connection());
         }
     }
 }
@@ -479,8 +479,9 @@ impl<T> Drop for Source<'_, T> {
     fn drop(&mut self) {
         if let Some(opened) = &self.opened {
             // If the source won't close, the record keeps it open, and the
-            // connection's close takes it with it.
-            let _ = opened.twain().close_source();
+            // end of `run` tries again.
+            let twain = opened.twain();
+            twain.dropped(twain.close_source());
         }
     }
 }

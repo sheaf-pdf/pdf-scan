@@ -507,3 +507,31 @@ in state 7; a `Dib` is `Send`.
   The spike's `image` module is in `tests/support/` now (its 18 unit tests run in the transfers binary); the
   spike's copy goes with it in step 6.
 - **The check:** as step 3's; 60 tests in each bitness, the 2 by hand besides.
+
+**Step 5, drops, rollback, cancels, teardown** (2026-11-08; reports in `scratch/work/s0-8/step-5/`):
+- **The rollback:** a step down refused with `TWCC_SEQERROR` means the source isn't where the record says
+  (an `Enabled` dropped right after `MSG_ENABLEDS`, before the pump has taken the source's `MSG_XFERREADY`:
+  the record says 5, the source is in 6). The walk then starts again once from state 7, as TWAIN.cs's
+  rollback does, and that refusal is reported only if the floor still isn't reached. Seen to matter: with the
+  restart switched off, that drop fails, `MSG_DISABLEDS` and then `MSG_CLOSEDS` refused with `TWCC_SEQERROR`
+  (`make-fail-rollback.txt`); with it, both deliveries pass.
+- **Drop errors:** a state's `Drop` has nowhere to put a refusal, so `Twain::drop_errors()` hands over what the
+  states dropped since couldn't do (the first 16).
+- **The pump, corrected:** `next_event` said the source's messages came first, but asked for a request before
+  the pump had taken the source's message already queued: a cancel posted before the enable came back ahead
+  of `MSG_XFERREADY`. The pump now takes every message queued before it decides; the early-cancel test caught
+  it.
+- **The make-fail** as planned, from inside the crate: a switch compiled only into its tests takes
+  `MSG_CLOSEDSM` as refused. The run reports `stranded`, the window is still a window (`IsWindow`), the thread
+  still a single-threaded apartment (`CoInitializeEx` answers `S_FALSE`), the next `run` is `AlreadyRunning`,
+  nothing crashes; the dropped `Opened`'s refusal is in `drop_errors`.
+- **Tests:** a state dropped at each of five points (right after the enable; a transfer ready; a native
+  transfer done; a memory transfer begun; one after its first buffer), in each delivery, with no drop error,
+  and the sample scanning three pages after each; the same five forgotten with `mem::forget`, each run's end
+  stepping the source down (`source_left` and `stranded` none), and a second run in the process scanning three
+  pages; a cancel posted from another thread during page 1 (that page ends, then `MSG_RESET`) and one before
+  the enable (the transfer ready comes first, then the request, then `MSG_RESET`), in each delivery; a request
+  through `next_event` with the feeder empty. The delivery switch was step 3's test, and step 4's transfers
+  run `Events` after `Callback` on one connection.
+- **CI:** the TWAIN job sets `TWAIN_DSM_REQUIRE_SAMPLE=1`, which the plan had and step 1 left out.
+- **The check:** as step 4's; 65 tests in each bitness.
