@@ -1,0 +1,31 @@
+# scan-worker
+
+Scanner drivers run in a process of their own, in Rust: a worker serving any `scan-device` backends over its
+standard input and output.
+
+A scanner's driver is code its maker wrote: one that hangs holds the thread that called it, one that crashes
+takes its process with it, and a 32-bit driver loads only into a 32-bit process. Run in a worker process, a
+driver can do any of that while the app goes on, keeping the pages the worker sent before it failed.
+
+`serve(backends)` is the whole `main` of a worker binary. It reads requests (list the devices, open the one
+stored, its capabilities, a batch, the driver's settings window, cancel, quit) as JSON lines on its standard
+input, makes every call on its main thread in order, and writes the answers and a batch's events (the settings
+applied, each sheet, each page, its progress and the driver's messages) on its standard output, each page's
+bytes after its line in the device model's raw layout. A batch's events pass through a channel that holds
+none, so a slow pipe holds the driver back; a cancel is taken at once, and finishes the sheet in flight; a
+request out of turn, unreadable or past its 1 MiB cap is refused and the worker goes on; the end of its input
+ends it, and aborts it if a driver's call never returns. The crate's docs give the protocol whole, so another
+implementation could speak it; its first line is a `hello` with the protocol's version, and a mismatch is an
+error, not a negotiation.
+
+This version has the worker's side and the protocol; the client that starts a worker for each device, watches
+it and reads its pages comes next.
+
+Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
+together. No `unsafe` code.
+
+## License
+
+Licensed under either of Apache License, Version 2.0
+([LICENSE-APACHE](https://github.com/sheaf-pdf/pdf-scan/blob/master/LICENSE-APACHE)) or MIT license
+([LICENSE-MIT](https://github.com/sheaf-pdf/pdf-scan/blob/master/LICENSE-MIT)) at your option.

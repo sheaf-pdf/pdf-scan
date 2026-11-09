@@ -971,3 +971,109 @@ before it: none (the plan review's are in "Plan review"; no step had been checke
   the crate in the derives' paths; `check()` polled rather than `is_cancelled()`, as the batch's own checks
   are, so a `Progress` whose `check` says more is read the same; no `#[serde(...)]` attribute anywhere, the
   plan's "serde's defaults" kept for slice 11 to weigh (Q-8).
+
+**Step 2, `scan-worker`, its protocol and its worker side** (2026-11-09; one commit, "Add scan-worker: the
+worker's side of drivers run in a process of their own", on `afc363c`). The checks before it: step 1's check
+of `afc363c` passed (`scratch/work/s0-4/flow/checks.md`): `just ci` green with both `SANE_DL_REQUIRE_*` set
+(695 tests, the three MSRV recipes on 1.89, `sane-dl-package` run); the test list 361 to 369, none lost; the
+gates holding, `scan-device`'s graph 11 packages; 1.89 standing (32 packages, the highest 1.85); the
+exhaustiveness pair run again on a worktree (`E0004` both); the two `AwaitCancel` tests 30 of 30. Its two
+remarks: the `[workspace.dependencies]` comment, true again from this step (`scan-worker` takes `serde` and
+`serde_json`); and `round_trip.rs`'s hand-kept count in `every`, for the code review.
+
+- **The crate:** `/crates/scan-worker/`, 0.0.0, `publish = false`, `rust-version` 1.89; dependencies
+  `scan-device` (path, `serde`), `serde` and `serde_json` (workspace); one dev-dependency, `scan-device` with
+  `fake` and `serde`. `#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`; modules `wire` and `serve`,
+  private; `serve` and `PROTOCOL` (1) public, `pub use scan_device`.
+- **`wire`:** `Request` (`list`, `open`, `caps`, `scan`, `settings_window`, `cancel`, `quit`) and `Reply`
+  (`hello`, `devices`, `opened`, `caps`, `window`, `applied`, `sheet`, `page`, `status`, `progress`,
+  `message`, `done`, `error`, `refused`), externally tagged, snake case, serde's defaults otherwise; a page's
+  header (`pixels` raw with format and size or encoded with its kind, `dpi`, `sheet`, `side`, `side_known`,
+  `bytes`) and a message's level by name (`info`, `warn`, `error`; decision 4); `line` (a message's JSON and
+  its `\n`); `read_line` (a line under a cap, `take` of the cap and one byte, a longer line skipped with
+  `BufRead::skip_until` and never held; the cap counts the line without its `\n`).
+- **`serve`:** as "The worker: `serve`" has it. The reader admits each request against the shared state
+  (busy, a device open, the batch's tracker) in one place, `State::admit`: `cancel` and `quit` at any time,
+  anything else refused while a call runs, `list` and `open` only with no device, the device's calls only with
+  one; the batch's `Tracker` made there as `scan` is read (decision 9). The main thread makes the calls, clears
+  the state before it writes the answer (so the client's next request, sent once it has it, is never refused
+  as early), and for a batch runs `device.scan` with a `sync_channel(0)` whose drain thread writes each event
+  (a page's line and bytes under one lock) and polls the tracker after each, every 100 ms, and once more as the
+  channel closes; `done` or `error` only after the drain is joined. The end: `quit`, or the end of input (a
+  cancel and a quit), drops the device and the backends, then closes the output, so a client sees the output
+  end only once the driver is closed; a failed write drops the writer, ends the batch at its next `send` and
+  the worker with 1. The orphan backstop: after the input ends, the reader waits up to 10 s on a channel held
+  by the core, and calls `std::process::abort` only if the core hasn't returned (decision 12); the core's
+  `orphaned` is `None` in the tests, so they never abort.
+- **The docs:** the crate docs give why, the worker's side, and the protocol whole (framing, the version,
+  every request and answer in a table, a batch's messages and the progress rule with its lost messages, a page's
+  line and bytes, what a worker takes and when, the end, and an exchange whose lines a run of the core
+  printed); `serve`'s docs say standard output is the protocol's, the thread rule, the backends' order, the
+  exits and the abort, with a `no_run` worker `main`. The README says the same, short, and that the client
+  comes next. No CHANGELOG: one comes when it's made ready to publish (its manifest).
+- **The workspace:** member after `scan-device`; the lock gains `scan-worker` alone; the justfile's
+  `scan_worker_msrv`, `scan-worker-msrv` (`cargo +1.89 test --locked -p scan-worker`), `msrv` with it, and
+  the devices loop over `scan-worker` too; CI's `scan-worker-msrv` job after `scan-device-msrv`; the root
+  README's row and its "Next" line.
+- **The tests,** 28 unit tests: in `wire`, every request and every reply on a literal line both ways (the
+  form pinned), what isn't a request refused, a line's newline its only one, and the cap (at it read, one past
+  it skipped, the input's end mid-line, a long line never held); in `serve`, the core over `std::io::pipe`
+  pairs with the fake, each wait bounded at 10 s: `hello` first as a literal line; a listing (and its
+  deadline's `TimedOut`, the worker going on); an open as stored, renamed (`renamed_from`), refused, gone and
+  `BadId`, no device open after them; `caps` and the settings window (and `Unsupported` without one); batches
+  simplex (`Bw1`, its padding) and duplex (`Rgb8`, sides reported), the events in order, every page's bytes
+  `pattern`'s, every progress line within the page's size and the last its whole, `done` last and the next
+  answer next; `applied` and `status` before the first sheet, a clamp said; an encoded page (CCITT G4) as the
+  driver gave it, on a literal line; a jam's `error` after the pages before it, and Continue in the same
+  worker; a cancel through `AwaitCancel` at sheet 2's front midway (nothing written while it waits, the sheet
+  finished front and back, `done` `Cancelled`, one sheet left, which the next batch takes); `scan` and
+  `cancel` in one write; refusals out of state, while a batch runs, unreadable (not JSON, not a request,
+  trailing data, not UTF-8) and past the cap (one line at exactly 1 MiB taken, one byte more refused, 4 MiB
+  refused once), the worker going on each time; `quit` (the device and backend dropped before the output
+  ends) and `quit` mid-batch; the end of input mid-batch and idle; output that fails mid-batch (`Exit::
+  OutputFailed`, the feeder not run out) and before `hello`; a test backend's message and byte counts carried
+  (and a count in another unit not); the progress poll alone against a tracker (bytes only, only when moved,
+  the latest message alone); several backends listed in turn, opened through the first that doesn't answer
+  `BadId`, the first error ending a listing, and the deadline shared.
+- **Make-fails** (`scratch/work/s0-4/step-2/make-fail.md`, its script beside it), on a worktree there at a
+  local commit of the step, removed after, the branch unchanged; 14 cases, each failing as it should, the base
+  passing after: the plan's three (`done` written without the drain joined, failing 5 of 5 runs, nine to eleven
+  tests each; a `cancel` not passed to the tracker; a refused request ending the worker) and a line unreadable
+  or past the cap ending it; the tracker stored by the main thread (decision 9; 5 of 5); the busy check gone;
+  the input's end, and `quit`, not cancelling the batch; each backend given the whole deadline; an open
+  stopping at the first `BadId`; progress in any unit; messages never carried; a page's bytes before its line;
+  the cap without its byte more.
+- **The MSRV probe** (`scratch/work/s0-4/msrv-probe/scan-worker/`, its README): 16 packages, normal, build and
+  dev, every target, in the probe's newest-versions graph and the workspace's alike; the highest
+  `rust-version` 1.89, `scan-device`'s own (then `thiserror`'s 1.77, `in-progress`' 1.85), so 1.89. `cargo
+  tree -p scan-worker -e normal,build --target all --all-features`: `scan-worker`, `scan-device`,
+  `in-progress`, `serde`, `serde_core`, `serde_derive`, `serde_json` (`itoa`, `memchr`, `zmij`),
+  `thiserror` and `thiserror-impl` (through `scan-device`), the proc-macro crates; no codec, PDF, OCR or GUI
+  crate. What 1.89 is needed for here: let chains (1.88); `std::io::pipe` (1.87, the tests); `skip_until`
+  (1.83).
+- **Quick checks:** `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets
+  --all-features -- -D warnings` and `--lib`; `cargo +1.89 check` and `clippy -D warnings` of `-p scan-worker
+  --all-targets`; `cargo doc` with `-D warnings`, the workspace's default features and all, and `-p
+  scan-worker` alone; `cargo test --locked -p scan-worker` (28 units, 1 doctest), and the unit suite 30 times
+  in a loop under the memory scope, none failing (`scratch/work/s0-4/step-2/loop.txt`). The core (`just ci`,
+  the test list, the gates and their make-fails, `just scan-worker-msrv`, the scans) is the step's check's.
+- **Departures from the plan:** `thiserror` isn't in the manifest yet: nothing here has an error type, so it
+  comes with the client's in step 3 (it's in the graph through `scan-device` all the same). The test of `scan`
+  and `cancel` in one write takes either end: no sheet, or the first sheet finished (`done` `Cancelled` both
+  ways), where the plan said no sheet. Decision 9 holds either way (the cancel always finds the batch's
+  tracker); whether the batch's first check comes before the reader has read the buffered `cancel` is a race
+  between the worker's two threads, lost 4 times in 2000 under eight batches at once (`loop.txt`). So every
+  sheet's front waits for the cancel (`AwaitCancel` at its start), a missed cancel holding the batch until the
+  test's bound, and the test runs 20 batches in one worker, which the tracker made on the main thread fails 5
+  runs of 5. The README's row and "Next", and CI's job comment, say the crate as it stands at this step (the
+  client next; no platform code yet), for step 3 to bring up to date. More tests than the plan listed (above).
+- **Decisions, for review with the plan's:** one admission function for every refusal, on the reader, so a
+  request is never queued behind a call (decision 39); the state cleared before the answer is written; the
+  reader goes on reading after `quit`, so the end of input still arms the backstop when a client sends `quit`
+  and dies; the backstop aborts only if the core hasn't
+  returned (a channel the core holds), never on a timer alone; a failed write drops the writer, so nothing
+  follows a message cut short; the output closed only after the device and backends are dropped; a request
+  after `quit` while idle is taken and never answered (the worker is ending); a line cut short by the end of
+  input is the end, never a request; `ExitCode::from(1)` for a failed output, `SUCCESS` otherwise; the
+  refusals' reasons are for a log, not matched by a client; the test harness, `Piped`, reads the worker's lines
+  on a thread of its own so every wait is bounded.

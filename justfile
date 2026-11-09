@@ -12,6 +12,7 @@
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
 twain_dsm_msrv := `grep -m1 '^rust-version' crates/twain-dsm/Cargo.toml | cut -d'"' -f2`
 scan_device_msrv := `grep -m1 '^rust-version' crates/scan-device/Cargo.toml | cut -d'"' -f2`
+scan_worker_msrv := `grep -m1 '^rust-version' crates/scan-worker/Cargo.toml | cut -d'"' -f2`
 
 default:
     @just --list --unsorted
@@ -49,7 +50,7 @@ doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 # Each library tested on its oldest supported Rust.
-msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv
+msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv scan-worker-msrv
 
 # sane-dl's tests on its oldest supported Rust.
 sane-dl-msrv:
@@ -63,6 +64,12 @@ twain-dsm-msrv:
 # scan-device's tests on its oldest supported Rust.
 scan-device-msrv:
     cargo +{{ scan_device_msrv }} test --locked -p scan-device
+
+# Run with -p, the crate alone: its tests ask for scan-device's `fake`
+# themselves, which a workspace run would turn on for them anyway.
+# scan-worker's tests on its oldest supported Rust.
+scan-worker-msrv:
+    cargo +{{ scan_worker_msrv }} test --locked -p scan-worker
 
 # Package sane-dl as a publish would, in a target directory of its own made
 # fresh each time (a stale one passes or fails falsely): sane-dl-package
@@ -144,7 +151,7 @@ gates:
     gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint)$'
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
-    for crate in sane-dl twain-dsm scan-device; do
+    for crate in sane-dl twain-dsm scan-device scan-worker; do
         # The list first, so a `cargo tree` that fails (a crate named here
         # that isn't a member) fails the gate, rather than leaving the loop
         # nothing to read; and the crate itself must be in its own list.

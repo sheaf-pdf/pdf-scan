@@ -1,0 +1,26 @@
+[package]
+name = "scan-worker"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Scanner drivers run in a process of their own: a worker serving any scan-device backends over JSON lines on its standard input and output, each page's bytes beside its line"
+repository = "https://github.com/sheaf-pdf/pdf-scan"
+# Provisional with the device model whose types its protocol carries: both
+# are made ready to publish together (keywords, categories, the package's
+# contents and a changelog come then).
+publish = false
+
+[dependencies]
+# Its types are in this crate's API, and cross the pipe through its serde
+# form.
+scan-device = { path = "../scan-device", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The unit tests drive a worker over pipes with the scripted backend.
+scan-device = { path = "../scan-device", features = ["fake", "serde"] }
+
+[lints]
+workspace = true

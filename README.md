@@ -18,8 +18,10 @@ published yet.
 | `fake-libsane` | A stand-in for libsane that `sane-dl`'s tests load: scripted devices, hostile values, SANE's calling rules checked (never published) |
 | `twain-dsm` | TWAIN on Windows through the system's Data Source Manager, its API safe: the DSM loaded only after its signer is checked, its states as types the compiler checks, its bindings checked against `twain.h`, capabilities in all four containers, native and memory transfers, requests from other threads. Built; 0.0.0, kept unpublished until the `twain` backend (S0 slice 9) has used its API |
 | `scan-device` | A device model for scanners, one shape whatever driver API reaches them: devices listed and opened (a renamed one said), what each source can do, settings clamped and said, batches of pages on a bounded channel, cancelled between sheets through `in-progress`, pages in one raw layout checked as they're made; and `fake`, a scripted backend for tests, behind a feature. Provisional and unpublished (0.0.0) ([README](crates/scan-device/README.md)) |
+| `scan-worker` | Scanner drivers run in a process of their own: `serve`, a worker binary's whole `main` over any `scan-device` backends, speaking JSON lines on its standard input and output (a `hello` with the protocol's version first; each page's bytes after its line in the raw layout; a batch's events drained as the pipe is written, its progress and the driver's messages forwarded, a cancel taken at once; requests out of turn, unreadable or past their cap refused). Its client comes next. Provisional and unpublished (0.0.0) ([README](crates/scan-worker/README.md)) |
 
-Next: `scan-worker`, which runs drivers in a process of their own.
+Next: `scan-worker`'s client, which starts a worker for each device, watches it and reads its pages; then
+`scan-device`'s `sane` backend.
 
 ## Pages and PDF
 
