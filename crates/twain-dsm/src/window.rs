@@ -217,6 +217,11 @@ impl Message {
         self.0.lParam
     }
 
+    /// The `MSG`, for `MSG_PROCESSEVENT`'s `TW_EVENT`.
+    pub(crate) fn as_mut_ptr(&mut self) -> *mut c_void {
+        (&raw mut self.0).cast()
+    }
+
     /// Translated and sent to its window's procedure.
     pub(crate) fn dispatch(&self) {
         // SAFETY: the message came from PeekMessageW on this thread (`Message`

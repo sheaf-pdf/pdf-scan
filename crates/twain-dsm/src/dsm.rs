@@ -42,11 +42,13 @@ use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
 use crate::codes::{ConditionCode, ReturnCode, Triplet};
 use crate::error::LoadError;
+use crate::ext_info;
 use crate::ffi::{
     self, DsmEntryProc, DsmMemAllocate, DsmMemFree, DsmMemLock, DsmMemUnlock, TW_CALLBACK2,
     TW_CAPABILITY, TW_ENTRYPOINT, TW_IDENTITY, TW_STATUS, TwainCallbackProc,
 };
 use crate::pe;
+use crate::window::Message;
 
 /// The organization a DSM's signer must name.
 const SIGNER: &str = "TWAIN Working Group";
@@ -401,6 +403,83 @@ impl Drop for Block {
     }
 }
 
+/// A native transfer's image: the DIB the source made, in a global block the
+/// application now owns, locked for the `Dib`'s life (so its bytes stay put
+/// whether the block is fixed or moveable) and freed when it's dropped.
+///
+/// What it holds is TWAIN's: a packed DIB, its header, palette and rows,
+/// unchecked; its length is the block's, which may run past the image.
+pub struct Dib {
+    handle: *mut c_void,
+    at: *const u8,
+    len: usize,
+}
+
+// SAFETY: a `Dib` owns its global block outright (the source handed it over),
+// and global memory has no thread affinity: GlobalUnlock and GlobalFree may be
+// called from any thread. Its bytes are only read, through `&self`.
+unsafe impl Send for Dib {}
+// SAFETY: `&Dib` gives only reads of the locked block, which nothing writes.
+unsafe impl Sync for Dib {}
+
+impl Dib {
+    /// A DIB of no block: a transfer said done and gave none.
+    pub(crate) fn empty() -> Dib {
+        Dib {
+            handle: null_mut(),
+            at: null(),
+            len: 0,
+        }
+    }
+
+    /// The block `handle`, the application's, locked.
+    fn take(handle: *mut c_void) -> Dib {
+        // SAFETY: `handle` is the global block a native transfer handed over;
+        // GlobalSize measures it (0 if it can't).
+        let len = unsafe { GlobalSize(handle) };
+        // SAFETY: as above; locked once here, unlocked once in Drop if it
+        // locked.
+        let at = unsafe { GlobalLock(handle) }.cast::<u8>().cast_const();
+        Dib {
+            handle,
+            at,
+            len: if at.is_null() { 0 } else { len },
+        }
+    }
+
+    /// The block's bytes: empty if it couldn't be locked.
+    pub fn bytes(&self) -> &[u8] {
+        if self.at.is_null() {
+            return &[];
+        }
+        // SAFETY: the block is locked for `self`'s life, `len` bytes from `at`
+        // as GlobalSize measured it, and only read.
+        unsafe { core::slice::from_raw_parts(self.at, self.len) }
+    }
+}
+
+impl Drop for Dib {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+        // SAFETY: the block is the application's, locked once in `take` if
+        // `at` isn't null, unlocked and freed once, here.
+        unsafe {
+            if !self.at.is_null() {
+                GlobalUnlock(self.handle);
+            }
+            GlobalFree(self.handle);
+        }
+    }
+}
+
+impl core::fmt::Debug for Dib {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Dib").field("len", &self.len).finish()
+    }
+}
+
 /// A file held open for reading, others kept from writing or deleting it.
 struct File(HANDLE);
 
@@ -715,6 +794,213 @@ impl Dsm {
             memory: self.memory(),
         };
         (triplet, rc, Some((capability.ConType, block.read())))
+    }
+
+    /// `DAT_USERINTERFACE`: `MSG_ENABLEDS` (the UI shown or not),
+    /// `MSG_ENABLEDSUIONLY` or `MSG_DISABLEDS`, the hidden window the parent.
+    pub(crate) fn user_interface(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: u16,
+        show: bool,
+        window: HWND,
+    ) -> (Triplet, ReturnCode) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_USERINTERFACE, msg);
+        let mut ui = ffi::TW_USERINTERFACE {
+            ShowUI: u16::from(show),
+            ModalUI: 0,
+            hParent: window,
+        };
+        // SAFETY: DAT_USERINTERFACE takes a TW_USERINTERFACE, on this frame
+        // for the call (the source may write ModalUI); hParent is the hidden
+        // window, which outlives the source's use of it.
+        (triplet, unsafe {
+            self.call(app, Some(source), triplet, (&raw mut ui).cast())
+        })
+    }
+
+    /// `DAT_PENDINGXFERS`: `MSG_ENDXFER`, `MSG_RESET` or `MSG_STOPFEEDER`, and
+    /// the count it answers.
+    pub(crate) fn pending_transfers(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: u16,
+    ) -> (Triplet, ReturnCode, u16) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_PENDINGXFERS, msg);
+        let mut pending = ffi::TW_PENDINGXFERS::default();
+        // SAFETY: DAT_PENDINGXFERS writes a TW_PENDINGXFERS into `pending`, on
+        // this frame for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut pending).cast()) };
+        (triplet, rc, pending.Count)
+    }
+
+    /// `DG_IMAGE/DAT_IMAGEINFO/MSG_GET`.
+    pub(crate) fn image_info(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+    ) -> (Triplet, ReturnCode, ffi::TW_IMAGEINFO) {
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_IMAGEINFO, ffi::MSG_GET);
+        let mut info = ffi::TW_IMAGEINFO::default();
+        // SAFETY: DAT_IMAGEINFO writes a TW_IMAGEINFO into `info`, on this
+        // frame for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut info).cast()) };
+        (triplet, rc, info)
+    }
+
+    /// `DG_IMAGE/DAT_IMAGENATIVEXFER/MSG_GET`: on `TWRC_XFERDONE`, the DIB the
+    /// source made, now the application's.
+    pub(crate) fn native(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+    ) -> (Triplet, ReturnCode, Option<Dib>) {
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_IMAGENATIVEXFER, ffi::MSG_GET);
+        let mut handle: *mut c_void = null_mut();
+        // SAFETY: DAT_IMAGENATIVEXFER takes a pointer to a TW_HANDLE, `handle`,
+        // on this frame for the call, into which the source writes the DIB's.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut handle).cast()) };
+        let dib = (rc == ReturnCode::XFERDONE && !handle.is_null()).then(|| Dib::take(handle));
+        (triplet, rc, dib)
+    }
+
+    /// `DG_CONTROL/DAT_SETUPMEMXFER/MSG_GET`.
+    pub(crate) fn setup_memory(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+    ) -> (Triplet, ReturnCode, ffi::TW_SETUPMEMXFER) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_SETUPMEMXFER, ffi::MSG_GET);
+        let mut setup = ffi::TW_SETUPMEMXFER::default();
+        // SAFETY: DAT_SETUPMEMXFER writes a TW_SETUPMEMXFER into `setup`, on
+        // this frame for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut setup).cast()) };
+        (triplet, rc, setup)
+    }
+
+    /// `DG_IMAGE/DAT_IMAGEMEMXFER/MSG_GET` into `buffer`, which the source
+    /// writes at most `buffer.len()` bytes of (or `u32::MAX`, if it's
+    /// longer); what it says of them. `BytesWritten` is the source's word,
+    /// to be checked against the buffer.
+    pub(crate) fn memory_buffer(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        buffer: &mut [u8],
+    ) -> (Triplet, ReturnCode, ffi::TW_IMAGEMEMXFER) {
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_IMAGEMEMXFER, ffi::MSG_GET);
+        let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+        let mut transfer = ffi::TW_IMAGEMEMXFER {
+            Compression: ffi::TWON_DONTCARE16,
+            BytesPerRow: ffi::TWON_DONTCARE32,
+            Columns: ffi::TWON_DONTCARE32,
+            Rows: ffi::TWON_DONTCARE32,
+            XOffset: ffi::TWON_DONTCARE32,
+            YOffset: ffi::TWON_DONTCARE32,
+            BytesWritten: ffi::TWON_DONTCARE32,
+            Memory: ffi::TW_MEMORY {
+                Flags: ffi::TWMF_APPOWNS | ffi::TWMF_POINTER,
+                Length: length,
+                TheMem: buffer.as_mut_ptr().cast(),
+            },
+        };
+        // SAFETY: DAT_IMAGEMEMXFER takes a TW_IMAGEMEMXFER, on this frame for
+        // the call, whose Memory is `buffer`, borrowed mutably for the call, by
+        // pointer (TWMF_POINTER), the application's (TWMF_APPOWNS), `length`
+        // bytes of it, which is all the source may write.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut transfer).cast()) };
+        (triplet, rc, transfer)
+    }
+
+    /// `DG_CONTROL/DAT_EVENT/MSG_PROCESSEVENT`: `msg` offered to the source.
+    /// Whether it was the source's (`TWRC_DSEVENT`), and the message it
+    /// carried for the application.
+    pub(crate) fn process_event(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: &mut Message,
+    ) -> (ReturnCode, u16) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_EVENT, ffi::MSG_PROCESSEVENT);
+        let mut event = ffi::TW_EVENT {
+            pEvent: msg.as_mut_ptr(),
+            TWMessage: ffi::MSG_NULL,
+        };
+        // SAFETY: DAT_EVENT takes a TW_EVENT, on this frame for the call,
+        // whose pEvent is the MSG `msg` holds, borrowed mutably for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut event).cast()) };
+        (rc, event.TWMessage)
+    }
+
+    /// `DG_CONTROL/DAT_DEVICEEVENT/MSG_GET`.
+    pub(crate) fn device_event(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+    ) -> (Triplet, ReturnCode, ffi::TW_DEVICEEVENT) {
+        let triplet = Triplet::new(ffi::DG_CONTROL, ffi::DAT_DEVICEEVENT, ffi::MSG_GET);
+        let mut event = ffi::TW_DEVICEEVENT::default();
+        // SAFETY: DAT_DEVICEEVENT writes a TW_DEVICEEVENT into `event`, on this
+        // frame for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut event).cast()) };
+        (triplet, rc, event)
+    }
+
+    /// `DG_IMAGE/DAT_EXTIMAGEINFO/MSG_GET` for `ids`: the source's answer,
+    /// each entry with its data read out, inline or from the block its handle
+    /// names (freed after, as the application must).
+    pub(crate) fn ext_image_info(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        ids: &[u16],
+    ) -> Result<(Triplet, ReturnCode, Vec<ext_info::Answer>), crate::container::ContainerError>
+    {
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_EXTIMAGEINFO, ffi::MSG_GET);
+        let request = ext_info::request(ids)?;
+        // In words, so the block is aligned as TW_EXTIMAGEINFO is.
+        let mut words = vec![0u64; request.len().div_ceil(8)];
+        // SAFETY: `words` holds at least `request.len()` bytes; the two don't
+        // overlap.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                request.as_ptr(),
+                words.as_mut_ptr().cast::<u8>(),
+                request.len(),
+            )
+        };
+        // SAFETY: DAT_EXTIMAGEINFO takes a TW_EXTIMAGEINFO with room for
+        // NumInfos entries, as `words` has (`request` laid them out), on this
+        // frame for the call; the source fills them in.
+        let rc = unsafe { self.call(app, Some(source), triplet, words.as_mut_ptr().cast()) };
+        // SAFETY: `words` is `request.len()` bytes or more, all initialized.
+        let answer =
+            unsafe { core::slice::from_raw_parts(words.as_ptr().cast::<u8>(), request.len()) };
+        if rc != ReturnCode::SUCCESS {
+            return Ok((triplet, rc, Vec::new()));
+        }
+        let entries = ext_info::parse(answer, ids.len())?;
+        let answers = entries
+            .into_iter()
+            .map(|entry| {
+                let data = match entry.data() {
+                    ext_info::Data::None => ext_info::Read::None,
+                    ext_info::Data::Inline(bytes) => ext_info::Read::Bytes(bytes),
+                    ext_info::Data::Handle(handle) => {
+                        let block = Block {
+                            handle: handle as *mut c_void,
+                            memory: self.memory(),
+                        };
+                        ext_info::Read::Bytes(block.read())
+                    }
+                    ext_info::Data::Unknown => ext_info::Read::Unknown,
+                };
+                ext_info::Answer { entry, data }
+            })
+            .collect();
+        Ok((triplet, rc, answers))
     }
 
     /// `MSG_SET` (or another message that takes a container) with `bytes`,

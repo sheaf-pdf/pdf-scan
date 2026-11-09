@@ -472,3 +472,38 @@ in state 7; a `Dib` is `Send`.
   of the DSM's, a string too long refused before it's sent; a source forgotten and closed at the end, twice;
   the delivery check for a TWAIN 1 source (a unit test, the sample being TWAIN 2).
 - **The check:** as step 2's; 38 tests in each bitness.
+
+**Step 4, enabled, transfers and events** (2026-11-08; reports in `scratch/work/s0-8/step-4/`):
+- **One step down, from the record:** the record gained the source's state (4 to 7), set at each triplet that
+  moves it, and `Twain::step_down_to(floor)` walks down from there (`MSG_ENDXFER`, `MSG_RESET`,
+  `MSG_DISABLEDS`, `MSG_CLOSEDS`; a step refused is passed over to the next, but for `MSG_CLOSEDS`). Every
+  state's `Drop` is one call of it (`Transferred` and `MemoryTransfer` to 6, `Ready` to 5, `Enabled` to 4,
+  `Source` to 3), and so is the teardown. `MSG_XFERREADY` moves the record to 6 as it's received, not when
+  `next_event` hands it over: the sample is in state 6 before `MSG_ENABLEDS` returns, so an `Enabled` dropped
+  then starts with `MSG_RESET` (the spike's `TWCC_SEQERROR` lesson). Step 5 adds the rollback.
+- **The loop:** `Twain::wait` and `Enabled::next_event` share one pump. With a source enabled that delivers by
+  events, every message it takes is offered to `MSG_PROCESSEVENT` first, the crate's own posts too (a request
+  the DSM eats is still in the channel); by callback, the posts of the current generation are kept. `Next`
+  gained `Quit`; a request taken while looking for the source's message is put back ahead of the channel.
+  `Event::Device` holds `DAT_DEVICEEVENT`'s answer, boxed (it's 294 bytes).
+- **Transfers** as planned: `Native::Done(Dib, Transferred)` or `Cancelled`; `Dib` locked for its life,
+  `Send` and `Sync`, freed with `GlobalFree`. `image_info` gives `TW_IMAGEINFO` as TWAIN does.
+  `MemoryTransfer::preferred_size` takes the preferred size, else the largest, else 64 KiB, at least the
+  smallest and at most 64 MiB; `next_buffer` refuses a buffer under `MinBufSize` (`Error::BufferTooSmall`)
+  and checks `BytesWritten` against the buffer. `MSG_ENDXFER` from 6 or 7 gives `Pending`, the count kept
+  (`Ready::pending`, `None` for 0xFFFF).
+- **Extended image info:** the specification's rule (TWAIN 2.4, `TW_EXTIMAGEINFO`): an entry's `Item` is the
+  handle of a block, which the application frees, when the item's size times `NumItems` is larger than a
+  `TW_HANDLE`, else its data inline; a `TWTY_HANDLE` entry's `Item` is always a handle, its block the data's
+  bytes (the specification's barcode text). An unknown item type's `Item` can't be told from data, so isn't
+  freed. Unit tests; the sample refuses `DAT_EXTIMAGEINFO` (`TWCC_CAPUNSUPPORTED`) in state 7, and
+  `MSG_STOPFEEDER` (`TWCC_BADPROTOCOL`) in 6, both checked.
+- **The source's window** (`tests/ui.rs`, `#[ignore]`d): run here in both deliveries, `Ui::Shown` and
+  `settings_ui` (`CAP_ENABLEDSUIONLY` true) each enabled, no event in 5 seconds with no one at the window, and
+  closed by `MSG_DISABLEDS`. With someone there, `TWAIN_DSM_UI_SECONDS=60` gives time to press Scan, OK or
+  Cancel.
+- **Tests:** three pages through each mechanism with each delivery, the pending count after each (0xFFFF,
+  0xFFFF, then none); one page native and one through memory in RGB, gray and 1-bit, equal pixel for pixel.
+  The spike's `image` module is in `tests/support/` now (its 18 unit tests run in the transfers binary); the
+  spike's copy goes with it in step 6.
+- **The check:** as step 3's; 60 tests in each bitness, the 2 by hand besides.

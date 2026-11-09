@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::codes::ReturnCode;
 use crate::dsm::Dsm;
 use crate::error::{Error, Gone, RunError};
-use crate::ffi::TW_IDENTITY;
+use crate::ffi::{self, TW_IDENTITY};
 use crate::states::Delivery;
 use crate::window::{self, Apartment, WM_REQUEST, WM_SOURCE, Window};
 
@@ -120,8 +120,10 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
         loaded: Cell::new(false),
         connected: Cell::new(false),
         source_open: Cell::new(None),
+        level: Cell::new(Level::Open),
         generation: Cell::new(0),
         events: RefCell::new(VecDeque::new()),
+        held: RefCell::new(VecDeque::new()),
     };
 
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| f(&twain)));
@@ -201,12 +203,32 @@ pub struct Twain<T> {
     pub(crate) dsm: Cell<Option<&'static Dsm>>,
     pub(crate) loaded: Cell<bool>,
     pub(crate) connected: Cell<bool>,
-    /// The open source's delivery, if one is open.
+    /// The open source's delivery, if one is open, and its state.
     pub(crate) source_open: Cell<Option<Delivery>>,
+    pub(crate) level: Cell<Level>,
     /// The callback's posts carry this; a post of another is stale.
     pub(crate) generation: Cell<usize>,
     /// Messages from the source, as they came, not yet handed over.
     pub(crate) events: RefCell<VecDeque<u16>>,
+    /// Requests taken from the channel and put back, ahead of it.
+    pub(crate) held: RefCell<VecDeque<T>>,
+}
+
+/// Where the open source stands, as the record has it: TWAIN's states 4 to 7.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Level {
+    Open = 4,
+    Enabled = 5,
+    Ready = 6,
+    Transferring = 7,
+}
+
+/// Why a pump stopped.
+pub(crate) enum Pumped {
+    /// What it waited for came.
+    Stop,
+    Timeout,
+    Quit(i32),
 }
 
 struct Shared<T> {
@@ -238,49 +260,109 @@ impl<T> Twain<T> {
 
     /// The next request posted, if one is waiting.
     pub fn take_request(&self) -> Option<T> {
+        if let Some(request) = self.held.borrow_mut().pop_front() {
+            return Some(request);
+        }
         self.requests.try_recv().ok()
     }
 
     /// Pumps the thread's messages until a request is posted, the thread is
     /// asked to quit, or `timeout` passes. Other windows' messages on this
     /// thread are dispatched as a message loop would.
+    ///
+    /// While a source is enabled, its messages are kept for
+    /// [`Enabled::next_event`](crate::Enabled::next_event): each of the
+    /// thread's messages is offered to it first when it delivers by events.
     pub fn wait(&self, timeout: Duration) -> Wake<T> {
-        let deadline = Instant::now() + timeout;
+        let mut request = None;
+        let pumped = self.pump(Instant::now() + timeout, |twain| {
+            if request.is_none() {
+                request = twain.take_request();
+            }
+            request.is_some()
+        });
+        match (pumped, request) {
+            (_, Some(request)) => Wake::Request(request),
+            (Pumped::Quit(code), None) => Wake::Quit(code),
+            _ => Wake::Timeout,
+        }
+    }
+
+    /// Pumps the thread's messages until `done` says so, `deadline` passes,
+    /// or the thread is asked to quit. `done` is asked before each wait and
+    /// after each message.
+    pub(crate) fn pump(&self, deadline: Instant, mut done: impl FnMut(&Self) -> bool) -> Pumped {
         loop {
-            if let Some(request) = self.take_request() {
-                return Wake::Request(request);
+            if done(self) {
+                return Pumped::Stop;
             }
-            while let Some(msg) = window::take_message() {
+            while let Some(mut msg) = window::take_message() {
                 if msg.message() == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
-                    return Wake::Quit(msg.wparam() as i32);
+                    return Pumped::Quit(msg.wparam() as i32);
                 }
-                if msg.hwnd() == self.window.handle() && msg.message() == WM_REQUEST {
+                let ours = msg.hwnd() == self.window.handle();
+                if self.offered_to_source(&mut msg) {
+                    // The source's: not dispatched.
+                } else if ours && msg.message() == WM_REQUEST {
                     // The request itself is in the channel.
-                    continue;
-                }
-                if msg.hwnd() == self.window.handle() && msg.message() == WM_SOURCE {
+                } else if ours && msg.message() == WM_SOURCE {
                     self.callback_posted(&msg);
-                    continue;
+                } else {
+                    msg.dispatch();
                 }
-                msg.dispatch();
-            }
-            if let Some(request) = self.take_request() {
-                return Wake::Request(request);
+                if done(self) {
+                    return Pumped::Stop;
+                }
             }
             let now = Instant::now();
             if now >= deadline {
-                return Wake::Timeout;
+                return Pumped::Timeout;
             }
             window::wait_for_message(deadline - now);
         }
+    }
+
+    /// With a source enabled that delivers by events, `msg` offered to it
+    /// (`MSG_PROCESSEVENT`): true if it was the source's. The DSM answers
+    /// `TWRC_DSEVENT` for whatever message comes first after the source has
+    /// one for the application, and hands that over in it.
+    fn offered_to_source(&self, msg: &mut window::Message) -> bool {
+        let (Some(dsm), Some(Delivery::Events)) = (self.dsm.get(), self.source_open.get()) else {
+            return false;
+        };
+        if self.level.get() < Level::Enabled {
+            return false;
+        }
+        let (rc, message) = dsm.process_event(&self.app, &self.source, msg);
+        if rc != ReturnCode::DSEVENT {
+            return false;
+        }
+        if message != ffi::MSG_NULL {
+            self.source_message(message);
+        }
+        true
     }
 
     /// A message the callback posted, kept if it's this source's.
     fn callback_posted(&self, msg: &window::Message) {
         let current = msg.lparam() as usize == self.generation.get();
         if current && self.source_open.get() == Some(Delivery::Callback) {
-            self.events.borrow_mut().push_back(msg.wparam() as u16);
+            self.source_message(msg.wparam() as u16);
         }
+    }
+
+    /// A message from the source, kept for `next_event`. `MSG_XFERREADY`
+    /// moves the record to state 6 as it comes: the source is there already
+    /// (the sample, delivering by callback, even before `MSG_ENABLEDS`
+    /// returns), so a step down from here starts with `MSG_RESET`.
+    fn source_message(&self, message: u16) {
+        if message == ffi::MSG_NULL {
+            return;
+        }
+        if message == ffi::MSG_XFERREADY && self.level.get() == Level::Enabled {
+            self.level.set(Level::Ready);
+        }
+        self.events.borrow_mut().push_back(message);
     }
 
     /// The connection closed if the record says it's open: `MSG_CLOSEDSM`,

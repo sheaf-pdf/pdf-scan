@@ -347,11 +347,11 @@ impl<'t, T> Source<'t, T> {
         }
     }
 
-    fn twain(&self) -> &'t Twain<T> {
+    pub(crate) fn twain(&self) -> &'t Twain<T> {
         self.opened().twain()
     }
 
-    fn dsm(&self) -> &'static Dsm {
+    pub(crate) fn dsm(&self) -> &'static Dsm {
         self.opened().dsm()
     }
 
@@ -491,26 +491,6 @@ impl<T> fmt::Debug for Source<'_, T> {
             .field("id", &self.id())
             .field("delivery", &self.delivery)
             .finish()
-    }
-}
-
-impl<T> Twain<T> {
-    /// `MSG_CLOSEDS` of the source the record says is open, the record
-    /// updated. The end of `run` does it before closing the connection: the
-    /// DSM's own closing of sources left open (`apps.cpp`, `RemoveApp`)
-    /// stops before the last source it lists, so it never closes a source
-    /// installed alone.
-    pub(crate) fn close_source(&self) -> Result<(), Error> {
-        let (Some(dsm), Some(_)) = (self.dsm.get(), self.source_open.get()) else {
-            return Ok(());
-        };
-        let (triplet, rc) = dsm.source(&self.app, &self.source, false);
-        if rc != ReturnCode::SUCCESS {
-            return Err(self.dsm_failure(dsm, triplet, rc));
-        }
-        self.source_open.set(None);
-        self.events.borrow_mut().clear();
-        Ok(())
     }
 }
 

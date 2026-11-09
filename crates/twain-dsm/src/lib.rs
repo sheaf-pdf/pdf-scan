@@ -36,11 +36,10 @@
 #![deny(unsafe_code)]
 
 mod codes;
-// Their decoders serve the capability and transfer calls, which come with
-// the DSM's module.
-#[cfg_attr(not(test), allow(dead_code))]
+// Pure, so tested everywhere; off Windows, nothing calls them but the tests.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod container;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod ext_info;
 pub mod ffi;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -49,6 +48,8 @@ mod pe;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod dsm;
+#[cfg(windows)]
+mod enabled;
 #[cfg(windows)]
 mod error;
 #[cfg(windows)]
@@ -69,7 +70,14 @@ pub use container::{
     Container, ContainerError, Enumeration, Fix32, Frame, Item, ItemType, Items, Range,
 };
 #[cfg(windows)]
+pub use dsm::Dib;
+#[cfg(windows)]
+pub use enabled::{
+    Enabled, Event, MemoryTransfer, Native, Next, Pending, Ready, Strip, Transferred, Ui,
+};
+#[cfg(windows)]
 pub use error::{Error, Gone, LoadError, Refused, RunError};
+pub use ext_info::{ExtInfo, ExtValue};
 #[cfg(windows)]
 pub use states::{App, Delivery, Load, Loaded, Opened, SetOutcome, Source, SourceId};
 #[cfg(windows)]

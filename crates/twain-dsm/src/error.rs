@@ -38,6 +38,10 @@ pub enum Error {
     /// A block for the DSM couldn't be allocated.
     #[error("a block of {size} bytes couldn't be allocated")]
     Allocation { size: usize },
+    /// A memory transfer's buffer smaller than the source's smallest
+    /// (`TW_SETUPMEMXFER`'s `MinBufSize`).
+    #[error("a buffer of {len} bytes, and the source takes {min} at least")]
+    BufferTooSmall { len: usize, min: u32 },
 }
 
 fn by(label: &str, code: &Option<ConditionCode>) -> String {
