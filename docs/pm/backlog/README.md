@@ -1,14 +1,14 @@
 # The backlog
 
 Everything open, in one place, as pdf-lint's `scratch/backlog/` is (there, local; here, tracked). Started
-2026-11-08 with sheaf's open backlog entries that a crate here fixes or takes part of, copied out (Greg,
+2026-11-08 with sheaf's open backlog entries that a crate here fixes or takes part of, copied out (decided
 2026-11-08: "no changes in sheaf from here, but free to copy items out"). Each entry stays open in sheaf: it
 closes there when sheaf takes the crate (`sheaf/swaps.md`). The entries as sheaf wrote them are
 in `scratch/reference/sheaf/backlog/`. The prior-art survey (`research/prior-art/README.md`,
 2026-11-08) revised those and added the rest: its corrections, its unverified points that an experiment
 settles, and its upstream contributions.
 
-| Kind | File | S0 | S1 | S2 | later | Open | Waiting on Greg |
+| Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | | 5 | 1 | | 6 | |
 | feature (FEAT) | `features.md` | 1 | 2 | 2 | 6 | 11 | |
@@ -27,7 +27,7 @@ settles, and its upstream contributions.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.
-- **Upstream:** `upstream.md`, each waiting on Greg's OK; none blocks a slice.
+- **Upstream:** `upstream.md`, each waiting on the maintainer's OK; none blocks a slice.
 
 ## An item
 
@@ -38,7 +38,7 @@ One line each, so `rg` finds it whole:
 - **ID**: the kind's prefix and a number, never reused. Each file's head says the next free one. sheaf's own
   entries are cited as sheaf writes them (`B24`, `F10`), which no ID here clashes with.
 - **for**: the milestone, `S0`, `S1` or `S2`, or `later`.
-- **status**: `open`, or `waiting on Greg` where only he can move it.
+- **status**: `open`, or `waiting on review` where only the maintainer can move it.
 - **source**: where the item came from: sheaf's entry, an entry of build-or-adopt, the survey (by its notes'
   topic), a slice here.
 

@@ -30,7 +30,7 @@ Layer: Pages (`crates/README.md`). Paths are from `docs/pm/`.
   ScanTailor Advanced, gscan2pdf and NAPS2 are GPL: they set the bar (per-step switches, a deskew that
   refuses when its evidence disagrees), nothing more. Punch-hole removal and color dropout, if ever wanted,
   are FEAT-9 (patents checked first).
-- **Boundary:** image and imageproc (0.27, rayon); `in-progress` for progress and cancellation (Greg's, on
+- **Boundary:** image and imageproc (0.27, rayon); `in-progress` for progress and cancellation (the maintainer's, on
   crates.io); `fast_image_resize` on new resampling paths, after a measurement. imageproc stays the base
   (MIT, 410 dependents, maintained); its `rayon` feature covers maps, filters and warps, not median,
   morphology, labelling or integral images.

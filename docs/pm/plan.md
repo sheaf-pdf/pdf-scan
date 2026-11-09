@@ -13,13 +13,13 @@ pdf-semantics, pdf-color), which keeps pixels out of itself.
 ## Why now, and why as crates
 
 - **M5 is deferred, but its plan is done.** sheaf's M5 left scanner intake and separator sheets (slices 4 to
-  10) deferred "until there are scanners to test against" (Greg, 2026-10-23). The plan for them, proposals
-  1 to 22 and asks 1 to 14, is in `~/repos/sheaf/plan/m05-scan/`, taken as recommended at kickoff. It's the
+  10) deferred "until there are scanners to test against" (decided 2026-10-23). The plan for them, proposals
+  1 to 22 and asks 1 to 14, is in sheaf's `plan/m05-scan/`, taken as recommended at kickoff. It's the
   spec for the device crates here.
 - **They're library candidates already.** sheaf's `plan/libraries.md`: "scanner access (M5's
   `sheaf-scanner`) and Kodak patch codes … are candidates again when M5 resumes": no maintained Rust crate
   does SANE or TWAIN (entries 5 to 8), and none reads patch codes (entry 12).
-- **Library work may go first.** ROADMAP's ordering principle (Greg, 2026-10-23): between milestones, work
+- **Library work may go first.** ROADMAP's ordering principle (decided 2026-10-23): between milestones, work
   "that can be published as a library of its own" can go first.
 - **Half of it exists.** sheaf-image's cleanup, blank pages, patch codes and image files in and out are
   built, tested and in use (about 4,400 lines with their tests, `sheaf/from-sheaf.md`). Cutting them out needs no
@@ -85,7 +85,7 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 
 ## The milestones
 
-Details in `milestones/`. Devices first, by Greg's order (2026-11-08), on fakes and SANE's own test backend
+Details in `milestones/`. Devices first, by the maintainer's order (2026-11-08), on fakes and SANE's own test backend
 where no scanner is at hand; then the pixel crates cut from sheaf; then the PDF crates on the family.
 
 | # | Milestone | Crates | Needs | State |
@@ -96,31 +96,31 @@ where no scanner is at hand; then the pixel crates cut from sheaf; then the PDF 
 | — | Later: macOS (`ica`), a second barcode engine, a faster cleanup if S0 slice 4's throughput asks for it | | | — |
 
 **sheaf's side** is sheaf's own track, as pdf-lint's family has "sheaf's migration": sheaf swaps its copy
-for each crate in a PR of its own, when Greg says, and its copy goes, as it went for pdf-lint's checker.
+for each crate in a PR of its own, when the maintainer says, and its copy goes, as it went for pdf-lint's checker.
 It's done in sheaf, never from here, and sheaf's plan doesn't point here (decisions.md, "Made here"):
 `sheaf/from-sheaf.md` lists what each crate takes from sheaf, and `sheaf/swaps.md` what each swap replaces and
 which of sheaf's entries it closes.
 
 ## Standing rules
 
-pdf-lint's, which Greg set for that workspace, and sheaf's on licenses, taken as S0 slice 1 starts (ask 7,
+pdf-lint's, which the maintainer set for that workspace, and sheaf's on licenses, taken as S0 slice 1 starts (ask 7,
 as recommended; decisions.md, "Made here").
 
 - **Code, crate docs, crate READMEs and commit messages never mention** sheaf, its milestones, the corpus
   or anything counted on it, or `scratch/`; the org's name in a URL (`github.com/sheaf-pdf/…`) aside. They
   say what the code does, not where it came from. `docs/pm/` may name them, keeping nothing private
   (decisions.md). `just gates` checks every file outside `docs/pm/`.
-- **Nothing is published** (crates.io, tags, releases), pushed or merged without Greg's word. The PDF
+- **Nothing is published** (crates.io, tags, releases), pushed or merged without the maintainer's word. The PDF
   crates can't publish before the family crates they take are on crates.io (no path dependencies there):
   `pdf-images`' are, as alphas; `pdf-scan`'s pdf-structure and pdf-content-streams aren't yet
   (`pdf-lint/README.md`).
-- **Nothing is reported upstream without Greg's OK** (SANE backends, the TWAIN DSM, rxing, hayro, image-rs).
+- **Nothing is reported upstream without the maintainer's OK** (SANE backends, the TWAIN DSM, rxing, hayro, image-rs).
 - **Licenses:** every crate MIT OR Apache-2.0. GPL, LGPL and AGPL code (NAPS2, libinsane, simple-scan,
   sane-backends, jbig2dec, zbar) is studied and cited, never copied, translated or linked. An unmodified
   copyleft library loaded at run time is allowed (D17): libsane, `TWAINDSM.dll`. What ships beside an app
   (the DSM, its license text, a source offer) is the app's packaging, not a crate's.
 - **The ISO standards** (and Mopria's eSCL specification) are never quoted or published.
-- **sheaf isn't changed from here; anything in it may be copied out** (Greg, 2026-11-08). Its code (MIT OR
+- **sheaf isn't changed from here; anything in it may be copied out** (decided 2026-11-08). Its code (MIT OR
   Apache-2.0) is taken into the crates; its plan files are copied into `scratch/reference/sheaf/` and its open
   entries into `backlog/`, and they stay open in sheaf.
 - **A crate cut from sheaf gives sheaf's output byte for byte** at the commit it was cut from (the
@@ -131,5 +131,5 @@ as recommended; decisions.md, "Made here").
 - **Hostile input:** caps with sane defaults, read before the work they cap: an image's dimensions before
   it's decoded, a worker's message sizes before they're read (a driver's bytes are untrusted, and so is a
   crashed worker's half message). Decoders are fuzzed.
-- **Builds** as pdf-lint's: in its memory scope, no writes to `~/.cargo`, `rg` not grep, commits with the
+- **Builds** as pdf-lint's: in its memory scope, no writes to cargo's home directory, `rg` not grep, commits with the
   `Co-Authored-By` trailer.

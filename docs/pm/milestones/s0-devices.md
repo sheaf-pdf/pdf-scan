@@ -1,7 +1,7 @@
 # S0: Scan devices
 
 **The device layer, before the pages and the PDF: SANE on Linux, then TWAIN and WIA on Windows; the device
-model frozen once both have been through it.** Greg's order (2026-11-08: "we want to add a s0 milestone for
+model frozen once both have been through it.** The maintainer's order (2026-11-08: "we want to add a s0 milestone for
 the scan devices"): S0, then S1 pages, then S2 PDF (`decisions.md`). Needs nothing unbuilt; the hand checks
 need scanners, and the Windows slices a Windows machine (ask 4's point, now answered: device work starts
 before a scanner is at hand).

@@ -30,12 +30,12 @@ duplex layouts; slice 6 runs it on an fi-6130. The design below exposes what eac
 ## Taken as it starts
 
 Under the asks' standing rule (`asks.md`), starting this slice takes the answers it depends on as
-recommended, each open to Greg's review:
+recommended, each open to review:
 
 - **ask 2:** the cut, the ten crates; this slice depends on its device half, `sane-dl` a crate of its own
   beside `scan-device`. Recorded in `decisions.md` with step 1, and ask 2 leaves `asks.md`.
 - **asks 6 and 7** (the names; the standing rules) were taken as this slice started (`decisions.md`, "Made
-  here"); asks 3 and 4 Greg answered by putting S0 first.
+  here"); asks 3 and 4 were answered by putting S0 first.
 
 ## The design
 
@@ -477,7 +477,7 @@ left out, with why.
 runner (the open point in `crates/sane-dl.md`; `Sane::load()`'s bare `libsane.1.dylib` goes through dyld's
 search, which on Apple silicon doesn't include Homebrew's `/opt/homebrew/lib`, so the item says whether
 `load()` needs a second name or the app's path); an authorization callback, if a networked backend ever needs
-one; the `test` backend's resolution default (below), for Greg's OK before any report upstream; and whatever
+one; the `test` backend's resolution default (below), for the maintainer's OK before any report upstream; and whatever
 else the steps find.
 
 ## Baselines
@@ -485,7 +485,7 @@ else the steps find.
 - **The MSRV probe** (`scratch/work/s0-1/msrv-probe/`): each package's `rust-version` over `sane-dl`'s own
   normal and dev graphs, on every target; built and tested on the result.
 - **SANE as installed here** (2026-11-08): `libsane1`, `libsane-common`, `sane-utils` and, since the plan was
-  drawn, `libsane-dev` (Greg, the control file's note), all 1.4.0-1ubuntu1: `libsane.so.1` with the `test` and
+  drawn, `libsane-dev` (the maintainer, the control file's note), all 1.4.0-1ubuntu1: `libsane.so.1` with the `test` and
   `pnm` backends, and `/usr/include/sane/sane.h`. Observed with `scanimage` through a private
   `SANE_CONFIG_DIR` (`scratch/work/s0-1/probe-sane/`):
   - listing with the system's configuration: 9.54 s, nothing attached; an isolated directory naming `test` and
@@ -512,7 +512,7 @@ else the steps find.
 - **The fake's logs:** each scenario's expected call sequence, asserted by the tests.
 - **sheaf:** no comparison; nothing is cut from it.
 
-## Decisions taken alone, for Greg to review
+## Decisions taken alone, for review
 
 1. **The fake libsane is `fake-libsane`, a crate of its own for good** (`/crates/fake-libsane/`, never
    published), not moved into `scan-fixtures` in S1: a shared object loaded by path, kept free of the image
@@ -551,7 +551,7 @@ else the steps find.
 14. **No `saneopts.h`:** it's GPL with SANE's exception, not public domain. The standard option names wait
     for slice 5's `sane` backend, in our own words from the standard.
 15. **`sane-dl` 0.1.0-alpha.1, ready to publish, not published**, after pdf-lint's alphas, with its package
-    checked in `just ci` and CI; publishing is Greg's word.
+    checked in `just ci` and CI; publishing is the maintainer's word.
 16. **The MSRV job runs without libsane;** its libsane tests say they skipped. The check job's Ubuntu leg
     runs them on stable with the require variables.
 17. **No `[workspace.dependencies]` yet** (nothing shared); `[workspace.lints]` for the unsafe rules both
@@ -666,7 +666,7 @@ else the steps find.
     length, and `scanimage`'s 16-bit three-pass abort), each read against sane-backends' master first; the
     upstream ones "waiting on review", as the control file's note words what waits.
 
-## For Greg (security)
+## For review (security)
 
 1. **Loading a library runs its code** in the process: `load_from` trusts the path it's given, and the app
    chooses it (an override variable is the app's to guard). The default goes by soname through the system
@@ -804,7 +804,7 @@ before it was acted on; the plan as drawn is kept at `scratch/work/s0-1/plan.bef
     `sane_control_option` too?), and the fake's check would have held the library to one of them: both say
     the scan calls.
 27. *Behaviour, minor (security).* `BeforeSystem` also reads configuration from the current directory
-    before `/etc/sane.d` (`sane-dll(5)`): in `ConfigDir`'s docs and "For Greg (security)" 4.
+    before `/etc/sane.d` (`sane-dll(5)`): in `ConfigDir`'s docs and "For review (security)" 4.
 28. *Behaviour, minor.* A 1200 dpi 16-bit Letter page is 0.75 GiB (807,840,000 bytes), not 0.8.
 
 **Rejected:**
@@ -819,7 +819,7 @@ before it was acted on; the plan as drawn is kept at `scratch/work/s0-1/plan.bef
 4. *Install libsane in the MSRV job too:* the check job runs the same tests with libsane on stable; what
    1.89 can break is compiling, which the MSRV job shows without it.
 5. *Making the fake its own crate for good reaches past slice 1:* the slice's notes leave its name and place
-   to the plan, the plan's files must say where it lives, and it's decision 1, for Greg's review.
+   to the plan, the plan's files must say where it lives, and it's decision 1, for review.
 6. *A gate that the fake takes no dependency:* it has none, and S1 may want `scan-fixtures`' pages behind
    it; a gate would bind a later slice for little.
 
@@ -1007,7 +1007,7 @@ Commit: the one that carries this account.
     starts with whether or not `dll.conf` names it (`test:0` opened with a `dll.conf` naming only `pnm`,
     and with the system's, where `test` is commented out). So the fast path for a known device is
     `open` alone; a one-backend `ConfigDir` is for fast listings, and keeps other backends out of them.
-    For Greg (security) 7 says what that means for the names a worker opens.
+    For review (security) 7 says what that means for the names a worker opens.
   - **Concurrent opens:** `pnm` opens one device at a time (a second is `DEVICE_BUSY`); `test` opens
     both.
   - Stopping after the page in flight is step 4's.
@@ -1026,7 +1026,7 @@ Commit: the one that carries this account.
   - *The real test that opens devices at once* opens the `test` backend's two together, and `pnm`'s one
     at a time (above).
   - *Crate READMEs and changelogs* wait for step 5, as in step 1.
-- **Decisions taken alone:** 26 to 31 above; For Greg (security) 7.
+- **Decisions taken alone:** 26 to 31 above; For review (security) 7.
 - **Checked** (`scratch/work/s0-1/flow/checks.md`, "Step 2"): `just ci` with both require variables (68
   tests in 8 harnesses, none skipped; the gates read 8 binaries, as there are 5 integration harnesses;
   `sane-dl-msrv` on 1.89, the fake built by 1.89's cargo); the test list (68; step 1 had none); the header

@@ -1,8 +1,8 @@
 # pdf-lint: the PDF family pdf-scan consumes
 
 pdf-scan's PDF crates (`pdf-images`, `pdf-scan`) are built on the PDF crate family in pdf-lint's workspace
-(github.com/sheaf-pdf/pdf-lint, checked out at `~/repos/sheaf-arlington`). That family keeps moving, and most
-of it is in alpha releases. pdf-scan is its consumer, not its co-author (Greg, 2026-11-08: "pdf-lint will
+(github.com/sheaf-pdf/pdf-lint). That family keeps moving, and most
+of it is in alpha releases. pdf-scan is its consumer, not its co-author (decided 2026-11-08: "pdf-lint will
 continue to move. it is currently in alpha releases for most of the family of libraries. As a consumer of
 these crates if you identify any major shortcomings we should create proposals that can be handed off to them
 for refactor"). So:
@@ -42,7 +42,7 @@ pdf-lint's plan: read it before each slice that waits on one.
 
 ## How pdf-scan depends on it
 
-- **A published crate is pinned exactly** (`pdf-objects = "=0.1.0-alpha.2"`; Greg, 2026-11-08: "pin alphas
+- **A published crate is pinned exactly** (`pdf-objects = "=0.1.0-alpha.2"`; the maintainer, 2026-11-08: "pin alphas
   exactly is fine"): alphas may break between releases, so a bump is a change of its own, made after reading
   what moved.
 - **An unpublished crate is taken by path** (or a git revision), and the crate that takes it can't publish
@@ -82,7 +82,7 @@ tracks). Evidence is cited at a commit, by file and line, so it can be checked a
 ```markdown
 # PL-N: <the change, in a line>
 
-Status: draft | ready (Greg's OK to hand off) | handed off (date, how) | taken (where) | declined (why)
+Status: draft | ready (the maintainer's OK to hand off) | handed off (date, how) | taken (where) | declined (why)
         | landed (version)
 Crates: <the family crates it touches>
 Read at: <pdf-lint commit>, <date>
@@ -111,21 +111,21 @@ Minor shortcomings found on the way, a line each.
 
 ### Handing one off
 
-Greg's OK first, as for anything that leaves this workspace. Then Greg carries it to pdf-lint, or a pdf-lint
+The maintainer's OK first, as for anything that leaves this workspace. Then the maintainer carries it to pdf-lint, or a pdf-lint
 session reads it from here; nothing is written into pdf-lint's repository from here. Its status line and the
 index below record each step.
 
 ## Index
 
 From the family's fit (local), read at `d777a8f`. The files are in `scratch/pdf-lint/proposals/`. Each is
-a draft until Greg's OK.
+a draft until the maintainer's OK.
 
 | ID | Change | Crates | Status |
 |---|---|---|---|
 | PL-1 | Decode a stream through its standard filters and stop at its image filter (`pl01-decode-to-the-image-filter.md`) | pdf-structure, pdf-objects; pdf-content-streams, pdf-color | draft |
 | PL-2 | Write a file to an `io::Write` a body at a time, whole or as an update (`pl02-streaming-writer.md`) | pdf-structure | draft |
 | PL-3 | One hayro-ccitt for every consumer: `image-ends` on 0.5, and the MSRV route (`pl03-one-hayro-ccitt.md`) | pdf-content-streams; MSRV policy | draft |
-| PL-4 | A bounded graphics-state walk through q/Q/cm and forms (`pl04-graphics-state-walk.md`) | pdf-content-streams | draft; deferrable, and on the "interpreter stays out" line, so Greg's call first |
+| PL-4 | A bounded graphics-state walk through q/Q/cm and forms (`pl04-graphics-state-walk.md`) | pdf-content-streams | draft; deferrable, and on the "interpreter stays out" line, so the maintainer's call first |
 
 Smaller points not in a proposal, pdf-scan's to live with: pdf-fixtures is path-only and unpublished, so a
 consumer's tests run their own qpdf or reach into pdf-lint's checkout; pdf-filters has no per-row PNG

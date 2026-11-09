@@ -1,6 +1,6 @@
 # PDF images and writing scanned PDFs: prior art for `pdf-images` and `pdf-scan`
 
-As of 2026-11-08. Crate versions, dates, downloads and licenses are from the crates.io API, read on 2026-11-08 with a generic User-Agent. "Read in source" means I read the published crate's source (downloaded to the scratchpad, or already under `~/.cargo/registry/src/`), not built or run. Line numbers refer to that version. Codec internals (zune-jpeg, hayro-ccitt, hayro-jbig2, hayro-jpeg2000, fax, JBIG2 encoders) belong to another researcher, so they come up here only where the PDF-level glue depends on them.
+As of 2026-11-08. Crate versions, dates, downloads and licenses are from the crates.io API, read on 2026-11-08 with a generic User-Agent. "Read in source" means I read the published crate's source (downloaded to a temporary directory, or already in cargo's local registry cache), not built or run. Line numbers refer to that version. Codec internals (zune-jpeg, hayro-ccitt, hayro-jbig2, hayro-jpeg2000, fax, JBIG2 encoders) belong to another researcher, so they come up here only where the PDF-level glue depends on them.
 
 License rule used in the verdicts: GPL, LGPL, AGPL and MPL-2.0 projects are **study only** (read and cite, never copy, port or link). Only MIT, Apache-2.0, BSD, ISC, Zlib, CC0 or public-domain code may be ported.
 
@@ -112,9 +112,9 @@ No library in any language hands back an image's samples in its own color space,
 **The prior audit's corpus counts** (entry 33): `scans/` has 709 files, 464 with DCT, 150 CCITT, 127 JBIG2 and 52 JPX ([entry 33](file://scratch/reference/sheaf/research/build-or-adopt/33-pdf-image-samples-image-s-own.md)). 15 of the 127 JBIG2 scans have a `/JBIG2Globals` ([entry 37](file://scratch/reference/sheaf/research/build-or-adopt/37-jbig2-decode.md)).
 
 **The family today:**
-- `pdf-color` already types Indexed (with a `Lookup`), Separation, DeviceN (with `Attributes`) and ICC spaces ([pdf-color/src/space.rs:136-323](file://~/repos/sheaf-arlington/crates/pdf-color/src/space.rs)).
-- `pdf-filters` has the predictors ([predictor.rs](file://~/repos/sheaf-arlington/crates/pdf-filters/src/predictor.rs)).
-- `pdf-content-streams`' `image-ends` feature pins `hayro-ccitt = "0.3"` ([Cargo.toml:35-48](file://~/repos/sheaf-arlington/crates/pdf-content-streams/Cargo.toml)), while hayro-syntax 0.9.0 is on hayro-ccitt 0.5.0 ([Cargo.toml](https://docs.rs/crate/hayro-syntax/0.9.0/source/Cargo.toml.orig)).
+- `pdf-color` already types Indexed (with a `Lookup`), Separation, DeviceN (with `Attributes`) and ICC spaces (pdf-lint's `crates/pdf-color/src/space.rs`, lines 136-323).
+- `pdf-filters` has the predictors (pdf-lint's `crates/pdf-filters/src/predictor.rs`).
+- `pdf-content-streams`' `image-ends` feature pins `hayro-ccitt = "0.3"` (pdf-lint's `crates/pdf-content-streams/Cargo.toml`, lines 35-48), while hayro-syntax 0.9.0 is on hayro-ccitt 0.5.0 ([Cargo.toml](https://docs.rs/crate/hayro-syntax/0.9.0/source/Cargo.toml.orig)).
 
 ### Inferences
 - How the candidates cover the needs:
@@ -419,7 +419,7 @@ PDFium's per-image metadata (DPI, bpp, color space) and per-text-object render m
 - **OCRmyPDF's output validation** checks JPEG 2000 and CCITT images too since v17.13.0 ("JPEG 2000 and CCITT images are now checked too") ([release notes](https://github.com/ocrmypdf/OCRmyPDF/blob/main/docs/releasenotes/version17.md)).
 - **PDFBox `getRawRaster()`** returns native samples (Q1).
 - **hayro** tests against 1,600+ PDFs scraped partly from pdf.js's and PDFBox's suites ([README](https://github.com/LaurenzV/hayro/blob/main/README.md)).
-- **The family** already runs PDFium (`oracle/`) and qpdf (pdf-fixtures), and fuzzes every crate in CI ([sheaf-arlington README](file://~/repos/sheaf-arlington/README.md)).
+- **The family** already runs PDFium (`oracle/`) and qpdf (pdf-fixtures), and fuzzes every crate in CI (pdf-lint's `README.md`).
 
 ### Inferences
 - **Text round-trip cases to add**, beyond the plan's PDFium extraction:
@@ -465,7 +465,7 @@ The audit's shape holds: build on the family, port hayro's quirks, keep PDFium a
 - **Entry 91, the README quotes:** the README now claims "1,600+ PDFs" (audit: 1,400+) and no longer reads "experimental, work-in-progress". It now lists robustness ("many ways to trigger timeouts and OOM errors"), performance and API surface as open ([README](https://github.com/LaurenzV/hayro/blob/main/README.md)). The repo has 858 stars (audit: 814).
 - **Entry 33, pdf_oxide's downloads:** now 1.53M (audit: 1.35M). Not noted before: its image extractor counts DeviceN as 4 components regardless of N ([images.rs:670](https://docs.rs/crate/pdf_oxide/0.3.78/source/src/extractors/images.rs)).
 - **Entry 37's "under development" note** for hayro-jbig2 still holds in 0.4.0 ([README](https://docs.rs/crate/hayro-jbig2/0.4.0/source/README.md)).
-- **Version split:** `pdf-content-streams` pins `hayro-ccitt = "0.3"` ([Cargo.toml:41](file://~/repos/sheaf-arlington/crates/pdf-content-streams/Cargo.toml)), while the current release is 0.5.0. crates.md's "keep one version of each across the two workspaces" therefore already needs a bump ([crates.md](file://docs/pm/crates.md)).
+- **Version split:** `pdf-content-streams` pins `hayro-ccitt = "0.3"` (pdf-lint's `crates/pdf-content-streams/Cargo.toml`, line 41), while the current release is 0.5.0. crates.md's "keep one version of each across the two workspaces" therefore already needs a bump ([crates.md](file://docs/pm/crates.md)).
 - **Entry 03's pdf-writer and krilla facts** still hold: pdf-writer 0.15.0 of 2026-05-27 and krilla 0.8.2 of 2026-06-04 are still the latest.
 
 ### Inferences
@@ -488,7 +488,7 @@ The verdicts rest on the findings in Q1 to Q7. The decisive facts:
 
 **`pdf-images`:**
 1. **Dictionary read and capped before decoding** (`Width`, `Height`, `BitsPerComponent`, `ColorSpace`, `Decode`, `ImageMask`, `Mask`, `SMask`, `SMaskInData`, `Interpolate`, inline abbreviations). **Verdict: build our own** on pdf-objects and pdf-color. hayro has no area cap and pdf.js targets canvas (Q1). Port, as ideas: hayro's DCT dimension guard and patch, its short-data padding, and its name-resolved inline color spaces ([hayro-interpret decode/mod.rs](https://docs.rs/crate/hayro-interpret/0.9.0/source/src/x_object/decode/mod.rs); [dct.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/dct.rs)).
-2. **Stream filters.** **Verdict: use directly** (pdf-filters, the family) ([README](file://~/repos/sheaf-arlington/README.md)).
+2. **Stream filters.** **Verdict: use directly** (pdf-filters, the family) (pdf-lint's `README.md`).
 3. **DCT at PDF level** (`/ColorTransform`, APP14, YCCK, wrong SOF dimensions, the 65,535 cap). **Verdict: port** hayro-syntax `filter/dct.rs` (Apache-2.0 OR MIT, 181 lines) onto zune-jpeg. Its comment says the AI-generated marker scanner needs review, so write tests for it ([dct.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/dct.rs)).
 4. **CCITT parameters.** **Verdict: port** `filter/ccitt.rs`'s parameter mapping and partial-row recovery, but keep 1-bit packed output always ([ccitt.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/ccitt.rs)).
 5. **JBIG2 with `/JBIG2Globals`.** **Verdict: port** `filter/jbig2.rs`'s glue (globals decoded as data, then `Page::new_embedded`, then the black=1 inversion), with 1-bit output ([jbig2.rs](https://docs.rs/crate/hayro-syntax/0.9.0/source/src/filter/jbig2.rs)).
