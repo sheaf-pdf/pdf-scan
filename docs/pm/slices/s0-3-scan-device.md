@@ -1,8 +1,10 @@
 # S0 slice 3: scan-device, provisional
 
-Status: running, on branch `s0-3-scan-device`, from 2026-11-09: made by the plan review from `6f01d7f` (slice
-2's tip, as the run set it), then moved by the main session onto `master` at `3f33be5` before step 1, the base
-the steps are written for ("Taken as it starts", decision 1). Milestone: `milestones/s0-devices.md`, slice 3.
+Status: **done on branch `s0-3-scan-device`** (2026-11-09), waiting on review, the push and its pull request
+against `master`: its four steps, each checked, then its code review's 18 findings, all fixed ("Code review").
+The branch was made by the plan review from `6f01d7f` (slice 2's tip, as the run set it), then moved by the
+main session onto `master` at `3f33be5` before step 1, the base the steps are written for ("Taken as it
+starts", decision 1). Milestone: `milestones/s0-devices.md`, slice 3.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
 with a leading `/` (`/crates/scan-device/`, `/justfile`); `scratch/` from the root, local and never tracked.
@@ -22,7 +24,8 @@ it:
   `Debug` by hand for `RawImage` and `Encoded`, cancel and progress through `in-progress`, taken here.
 - **The `fake` backend, behind a feature:** devices listed under a deadline and opened as the `sane` backend
   will open them (a renamed device found by its maker and model, a name now another model's taken as gone),
-  batches of sheets and sides with their settings clamped and said, and proposal 22's scripts: a jam at sheet
+  batches of sheets and sides with their settings clamped and said, and [M5 proposal 22](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p22-testing-without-scanner.md)'s
+  scripts: a jam at sheet
   4 then Continue, a double feed, an open cover, an empty feeder at the start, a hang, a crash, a cancel
   mid-page (the sheet in flight finished, none fed after), a cancel after a duplex front (its back still
   delivered), a batch held by a full channel.
@@ -547,7 +550,7 @@ doesn't touch is left out.
   `scratch/work/s0-2/fix/just-ci.log`; 245 tests, `scratch/work/s0-2/tests-fix.txt`).
 - **The note's block** ("The model, for slice 3", the same at `6f01d7f` and `3f33be5`): what the crate is held
   to, type by type.
-- **Probe M1** (`scratch/work/s0-2/probes/model-sketch/src/lib.rs`, described in `slices/s0-2-seam-note.md`'s
+- **Probe M1** (`scratch/work/s0-2/probes/model-sketch/src/lib.rs`, described in `archive/slices/s0-2-seam-note.md`'s
   "So far", step 2, and its "Code review"; it has no README): read for the shapes it proved, its departures said
   above; never copied.
 - **The MSRV probe** (step 1, `scratch/work/s0-3/msrv-probe/`): `scan-device`'s own graph, normal, build and
@@ -625,7 +628,8 @@ doesn't touch is left out.
     feeder's head, so Continue is a batch run again from its number, and after a fault on a back its front comes
     again (the app's to drop or keep; said in the docs); `Gone` leaving the device gone; `FeederEmpty` not
     scriptable; `Event::Sheet(n)` sent before a fault at sheet `n`'s start, so the app can say which sheet
-    jammed (proposal 10's "Paper jam at sheet 14").
+    jammed ([M5 proposal 10](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p10-scanning-controls-errors-scanners-that-come.md)'s "Paper jam at
+    sheet 14").
 14. **The order of a batch's events:** `Applied` first, before `ScanError::FeederEmpty` too (SANE answers
     `NO_DOCS` after the settings are set); `Status(WarmingUp)` after it; then each sheet's `Sheet` and pages.
     The cancel check comes before each sheet is taken, so a cancel with the feeder already empty is
@@ -650,6 +654,9 @@ doesn't touch is left out.
 21. **CI's `scan-device-msrv` job after `twain-dsm-msrv`, with the other MSRV jobs,** on `ubuntu-latest` as
     `sane-dl-msrv` is (the model has no platform code, and the `check` job runs its tests on all three systems).
     On `6f01d7f`, it would go at the workflow's end instead, where the rebase merges it (the plan review's trial).
+    Since step 3 the crate's sources still have none, but its crash test has a `cfg(windows)` branch (a
+    constant, an exit code read), which this job leaves uncompiled on 1.89, and 1.89 has no Windows target
+    here either: accepted, and said in the job's comment (the code review).
 22. **The bookkeeping beside its kin, off slice 8's lines** (the plan review): `decisions.md`'s MSRV bullet after
     `sane-dl`'s, not after slice 8's ruling at the end of "Made here"; backlog IDs as `master` numbers them
     (TEST-12 next, TEST-11 being slice 8's), read again from `origin/master` as step 4 starts, so no item is
@@ -671,8 +678,9 @@ Taken in the steps:
 26. **How `RawImage` works its length out** (step 1): a private function gives a row's bytes and the image's in
     `u64`, refusing `Empty` and then `TooLarge` (past `u64`, or past the limit it's given); `data_len` gives it
     the platform's limit and turns the total into a `usize` with `try_from` (a second guard, never reached while
-    the limit is `usize::MAX`); `new` calls `data_len`, then checks the length and the padding; `stride()` is
-    worked out again from the format and the width, never stored.
+    the limit is `usize::MAX`; `isize::MAX` since the code review, which a 32-bit `usize` holds too); `new` calls
+    `data_len`, then checks the length and the padding; `stride()` is worked out again from the format and the
+    width, never stored.
 
 27. **More of a script's mistakes panic as they're written** (step 2), beside the caps the plan names:
     `FakeDevice::new` with an empty name (no stored id could open it), `FakeBackend::with` given a second device
@@ -694,7 +702,9 @@ Taken in the steps:
     sheet stays on the glass (`fed()` unchanged); duplex, where a test's caps give a flatbed one, reads both
     sides.
 32. **`pattern`'s bytes** (step 2): a first row from the sheet and side by Marsaglia's xorshift (shifts 13, 7 and
-    17, eight bytes a step), each row after it the one before turned left a pixel, padding bits cleared; pinned in
+    17, eight bytes a step), each row its bytes turned left by the row's number in pixels (bytes in `Bw1`), then
+    its padding bits cleared (so worded by the code review: at a `Bw1` width not a multiple of 8, a row isn't
+    the one before it turned, the bits cleared in one coming back in the next); pinned in
     a unit test by values a separate drawing (`scratch/work/s0-3/step-2/pattern-golden.py`, never committed)
     gives, so a change slice 4's byte-for-byte check would meet is seen here first.
 33. **Small names and forms** (step 2): `NotInstalled`'s `what` "the fake driver"; a USB name
@@ -737,23 +747,71 @@ Taken in the steps:
     `fake-event: ` among the test harness's own lines; waits bounded at 10 s and polled every 5 ms, a state
     watched for 300 ms.
 
+Taken in the code review's fixes:
+
+42. **`Paper` and the fake's `When` `#[non_exhaustive]`,** a departure from the note's block, written into the
+    note with a sentence at its head: paper may yet grow (an area with an offset, SANE's `tl-x` and `tl-y` or
+    TWAIN's `ICAP_FRAMES`; a detection bounded by a size), section 2's "To settle" says so, and a variant added
+    after slice 11's freeze would break every exhaustive match, slice 4's conversions among them; `When` beside
+    a `Fault` that already was. Nothing outside the crate matched either. The rest (the exhaustive `Resolutions`,
+    `Side` and `SideKnown`; `Copy` on growing enums; the plain structs) is slice 11's to weigh: Q-6.
+43. **`Backend::open`'s order is the fake's: `NotInstalled` may come before `BadId`,** which comes before the
+    backend lists or opens anything; the trait's docs say so, and the fake and its test are unchanged. A driver
+    API not installed is what an app can tell its user to fix, while an id no driver forms is the app's own
+    storage gone wrong; and a backend not installed has nothing to read an id against. Slices 5, 9 and 10 keep
+    the same order. The alternative, the id checked first in every backend, changes a tested behaviour for no
+    caller.
+44. **`pattern`'s docs follow its bytes,** not the bytes the docs: each row the first row's bytes turned by its
+    number, then its padding cleared. The pinned bytes stay, and slice 4's byte-for-byte check compares with
+    `pattern` itself; a code change would have moved every `Bw1` page for a sentence.
+45. **The build an app ships checked in `just clippy` and `just doc` for every member,** `cargo clippy
+    --workspace --lib` with default features and a default-feature `cargo doc` before the every-feature one,
+    rather than `cargo hack --each-feature` (a tool CI doesn't have, and each feature alone matters once slice
+    5 brings a second). Both run on CI's three systems through the `check` job.
+46. **The libsane gate builds every binary with every feature on,** as `deps()` reads the graphs (decision 7),
+    rather than recording that only default builds are read: a backend's feature (slice 5's `sane`) is exactly
+    where a link would come from.
+47. **The cancel's and the receiver's rules said, the behaviour kept:** a cancel doesn't wake a `send` held at a
+    full channel, so the caller keeps taking events or drops the receiver (the docs say so); and a sheet taken
+    before a `send` fails for a receiver gone isn't put back, since nobody takes pages any more and a driver's
+    start has fed it (`Done::Cancelled`'s docs say so). Making the fake wake a held `send` on a cancel would
+    promise what no real backend's blocking driver call can keep.
+48. **Backlog IDs with slice 1a beside it:** this slice's TEST-12 is kept although slice 1a's branch (at
+    `1f6d3f6`) took TEST-12 too: whichever merges second renumbers (the control file). The new items take IDs
+    free on both branches and on `origin/master`: TEST-13 and Q-6.
+49. **Slices 1 and 2's plans moved to `archive/slices/`** (the run's control file: both merged, as #2 and #3),
+    every reference to them updated but `crates/sane-dl.md`'s one, which this slice leaves alone while slice 1a
+    changes that file (the control file): its merge updates it.
+50. **This plan's decisions for review aren't filed one by one in the backlog:** `status.md`'s "Waiting on
+    review" names them by plan, with their counts, as slices 1, 2 and 8 have.
+
 ## For review (security)
 
 1. **`RawImage::new` is where a page from a worker becomes a page** (slice 4 decodes through it): its sizes are
-   worked out in checked `u64` against the platform's `usize`, so a 32-bit worker's or client's arithmetic
-   can't wrap to a small buffer that a short `data` would match; its length is exact; `data_len` gives a reader
-   the same answer before it reads, so it allocates once and never on a header's word alone.
+   worked out in checked `u64` against what one buffer can hold on the platform (`isize::MAX` bytes since the
+   code review: item 6), so a 32-bit worker's or client's arithmetic can't wrap to a small buffer that a short
+   `data` would match; its length is exact; `data_len` gives a reader the same answer before it reads, so it
+   allocates once and never on a header's word alone.
 2. **The fake's `Crash` and `Exit` end the process they run in,** and `Hang` holds a thread for good. They exist
    only behind the `fake` feature and fire only where a script asks; scripts are Rust values a test builds, not
    input from a pipe or a file, so no worker built with the fake can be made to crash by what it's sent. The docs
    say the feature is for tests and never for a shipped build; slice 4 keeps the fake to its test worker.
-3. **A stored id is untrusted** (the app's storage): the fake refuses one not of its form before anything else,
-   as `BadId`, which carries nothing of the id, as the note's SANE backend will.
+3. **A stored id is untrusted** (the app's storage): the fake refuses one not of its form before it lists or
+   opens anything (a backend not installed says so first: the code review's decision 43), as `BadId`, which
+   carries nothing of the id, as the note's SANE backend will.
 4. **The renamed-device fallback opens a device the user didn't name:** in the fake, as the note has SANE's,
    only from a USB connection's name, to exactly one listed device of that form with the stored maker and model,
    and said (`renamed_from`); a name now another model's is never opened as the stored device.
 5. **No page is printed:** `Debug` for `RawImage` and `Encoded` gives sizes, never bytes, so a log line or a
    failed assertion can't write a page (about 100 MB at 600 dpi color) or its content.
+6. **A page's size from a hostile header can't panic the reader that sizes its buffer by `data_len`** (the code
+   review's major finding, fixed in `eac0b5b`). The limit had been `usize::MAX`, but no allocation passes
+   `isize::MAX`: on a 32-bit system (slice 9's worker) `data_len` answered `Ok` for 2^31 to 2^32 − 1 bytes, and
+   a reader that allocated that length, as the docs tell it to, panicked with a capacity overflow, a crash a
+   driver's or a pipe's header could cause, where `TooLarge` was promised. Now `isize::MAX`, held by unit
+   tests on any host through the private limit and run on a 32-bit `usize` under WASI; whether the memory is
+   there stays the reader's cap to say (`plan.md`'s hostile-input rule: slice 4's client caps a page before it
+   allocates).
 
 ## Risks
 
@@ -1148,3 +1206,128 @@ over the graph `rusty-fork` joins, 25 packages, highest 1.85, so 1.89 stands, an
   are (`master`'s lines; the fix stage's bookkeeping). The 32-bit run's end filed as TEST-12 and said in
   `crates/scan-device.md` both, where the step's check offered either.
 - **Decisions:** none new for review; the counts stay 41 and 5.
+
+## Code review
+
+2026-11-09, on `3f33be5..97fa72c`, by three reviewers in parallel through three lenses (behaviour, adversarial and
+correctness; the crate as a published library; the repository's hygiene), their probes under
+`scratch/work/s0-3/review-behaviour/`, `review-api/` and `review-hygiene/`. The checks before it: step 4's check
+passed on `97fa72c` (`scratch/work/s0-3/flow/checks.md`): docs only, so `just ci` left out with step 3's run
+standing; 358 tests, none lost or added; `just gates` green (`scan-device` 8 packages); TEST-12 and Q-5 free on
+`origin/master` (`8276ad1`); the backlog in its format and its table exact; `crates/scan-device.md` as built
+matching the code, and Q-5 reproduced; the commit messages and `git grep` clean of the maintainer's name and
+private paths; a trial merge with `origin/master` conflicting in the root README alone.
+
+18 findings, 1 major and 17 minor, three of them found by two lenses: 15 distinct, each verified against the code
+first (the behavioural ones reproduced: below), **all fixed**, none refuted, none deferred; one part of one,
+slice 11's freeze, filed as Q-6. Fixed in `eac0b5b` (`RawImage`'s limit and `pattern`), `5674194` (the traits'
+and the model's docs, what may grow, the fake's builders), `5a5c367` (the recipes and the gates), and the last
+commit (this bookkeeping). Decisions 42 to 50 are the fixes' (above); "For review (security)" gains item 6.
+
+**Behaviour:**
+
+1. *Major: `RawImage`'s platform limit was `usize::MAX`, but no buffer passes `isize::MAX`.* Holds: under
+   Node's WASI (the reviewer's `datalen32-wasi.txt`) `data_len(Gray8, 65535, 65537)` answered `Ok(4294967295)`
+   and allocating it panicked ("capacity overflow"), `pattern` the same; on 64 bits, `Gray8` at `u32::MAX`
+   square (about 1.8e19 bytes) passed past 2^63 − 1. **Fixed** (`eac0b5b`): the limit `isize::MAX`; the unit
+   tests' 32-bit limit `i32::MAX` (2^31 − 1 bytes held, 2^31, 2^32 − 1 and 2.4e9 refused there), a 64-bit one
+   beside it (`Gray8` at `u32::MAX` square `TooLarge` everywhere, `Bw1`'s 2.3e18 bytes still a `Length` on 64
+   bits), and one pinning the platform's; `pattern` refusing what `data_len` refuses (a unit test, its 32-bit
+   sizes run on 32 bits only) and its first row made at its stride, where it had asked for 8 bytes more (which
+   only a row within 8 bytes of a 32-bit `isize::MAX` would meet: not tested, a 2 GiB row); `TooLarge`'s,
+   `new`'s and `data_len`'s docs, the crate docs, the README, the seam note's section 3 and
+   `crates/scan-device.md`. Security item 6.
+2. *Minor (twice, with the API lens's 9): `Backend::open`'s docs put `BadId` "before anything else", and the
+   fake answers `NotInstalled` first; `list`'s read as waiting the deadline out.* Holds: `FakeBackend::new()
+   .not_installed().open(<a sane: id>)` gives `NotInstalled`, and `a_backend_not_installed_says_so_before_anything_else`
+   pins it. **Fixed** (`5674194`) in the trait's docs, the fake as it is (decision 43): `BadId` before the
+   backend lists or opens anything, `NotInstalled` possibly first; `list` the devices found within the deadline,
+   or `TimedOut` where the listing isn't done by then.
+3. *Minor: `Device::scan`'s "no next sheet starts before the pages are taken".* Holds: a `send` on
+   `sync_channel(n)` returns once the event is buffered (the reviewer's three sheets through a bound of 16,
+   nobody reading, ending `FeederEmpty` with 7 events untaken; the fake module's own doctest does it through 8).
+   **Fixed** (`5674194`): the bound as it works (at most `n` events untaken, the backend then held at its next
+   `send`; each event waited on only through `sync_channel(0)`), in `Device::scan` and the crate docs, and the
+   seam note's two sentences (section 3, and "The model, for slice 3") the same.
+4. *Minor (twice, with the API lens's 11): `pattern`'s docs said each row is the one before turned, false in
+   `Bw1` at a width not a multiple of 8.* Holds: at 13 pixels its pinned rows are `a9 c8`, then `cc a8`, where
+   the first turned is `c8 a9`. **Fixed** (`eac0b5b`) in the docs, the bytes unchanged (decision 44): each row
+   the first row's bytes turned by its number in pixels (bytes in `Bw1`), then its padding cleared; a unit test
+   holds every row to that at 13, 9 and 40 pixels and in two other formats, and shows a 13-pixel row isn't the
+   one before turned. Decision 32 reads so now.
+
+**API:**
+
+5. *Minor: invariants stated and enforced nowhere* (a source's formats "never empty", `Caps::sources` too, read
+   as `[0]` by the fake only because its scripts are checked; `RawPage`'s `dpi` left to "the worker's client").
+   Holds: `SourceCaps::new` takes an empty `Vec`. **Fixed** (`5674194`): `Caps`' docs give the rules a backend
+   keeps, which the constructors don't check and code decoding caps from outside the process checks;
+   `Caps::sources` "never empty"; `RawPage`'s `dpi` said the same way, naming no party; the seam note's block
+   (`RawPage`'s doc) and its "What slice 4 needs of it" (an empty `Caps::sources` and a `SourceCaps` with no
+   format among what the client refuses), and `crates/scan-device.md`.
+6. *Minor: a cancel, then a wait for the batch with the receiver kept and not read, never returns.* Holds: the
+   check comes before a sheet is taken, and a `send` on a full channel waits (the reviewer's bound of 1 still
+   running 3 s after the cancel, then `Ok(Cancelled)` once the receiver was dropped). **Fixed** (`5674194`): the
+   crate docs' "Cancel and progress" and `Device::scan` say to keep taking events until `scan` returns, or drop
+   the receiver; the behaviour kept (decision 47).
+7. *Minor (twice, with the hygiene lens's 13): the build an app ships, the fake off, was never linted or
+   documented under `-D warnings`; and the self dev-dependency hides a member's missing `fake` under `cargo
+   test --workspace`.* Holds: the reviewer's link to `fake` passed `just doc` and failed a plain `cargo doc`;
+   their two-crate workspace, run again here, passes `cargo test --workspace` and fails `cargo test -p b`
+   (`E0433`). **Fixed** (`5a5c367`, decision 45): `just clippy` also lints each library with its default
+   features, and `just doc` documents with them before every feature, on CI's three systems; a link to `fake`
+   now fails `just doc`, and a helper only the fake uses fails `just clippy`'s new line while its first passes
+   (make-fails, below). Slice 4 is told in the seam note's "What slice 4 needs of it": `scan-device` with
+   `features = ["fake"]` in its own dev-dependencies, and its tests run with `-p` too.
+8. *Minor: `Done::Cancelled` promised the sheet in flight finished, which a receiver gone doesn't.* Holds:
+   `a_receiver_gone_mid_batch_ends_it_and_no_sheet_is_taken_after` has sheet 2 taken in simplex and never
+   scanned. **Fixed** (`5674194`): its two causes said apart; the behaviour kept (decision 47).
+9. *Minor: `Paper` exhaustive while paper may grow, and the fake's `When` beside a non-exhaustive `Fault`.*
+   Holds. **Fixed** (`5674194`, decision 42): both `#[non_exhaustive]`, the note's block written so; the rest
+   for slice 11, Q-6.
+10. *Minor: the fake's twelve builder methods weren't `#[must_use]`,* so `scanner.clone().refuses_open(..);`
+    scripted nothing without a word. Holds (clippy's `return_self_not_must_use` named each). **Fixed**
+    (`5674194`): each marked, with a message; that lint passes on the crate now.
+
+**Hygiene:**
+
+11. *Minor: the libsane gate built its binaries with default features alone.* Holds: the reviewer's feature
+    `sane` whose build script links libsane passed `just gates`. **Fixed** (`5a5c367`, decision 46): both builds
+    take `--all-features`, the comments say so, and the same make-fail now fails the gate, `scan-device`'s five
+    binaries named.
+12. *Minor: CI's `scan-device-msrv` comment, "no platform code", stale since step 3's crash test.* Holds.
+    **Fixed** (`5a5c367`): the comment, and decision 21, say its Windows branch is left uncompiled on 1.89,
+    accepted (no 1.89 Windows target here either).
+13. *Minor: the comment over `clippy` gave `doc`'s reason too.* Holds. **Fixed** (`5a5c367`): each recipe its own.
+14. *Minor: "its name its maker and model" in the fake's listing docs.* Holds. **Fixed** (`5674194`): "its name,
+    its maker and model joined by a space; its maker; its model", which says what the name is.
+15. *Minor: M5's proposals 9, 10 and 22 named in public files with no link.* Holds. **Fixed** (the bookkeeping):
+    the first mention of each in this plan and in `crates/scan-device.md` linked at sheaf's `3232a35` (each file
+    found there); the bare references elsewhere follow `README.md`'s "Citations", left as they are.
+
+**Checks after the fixes,** on `5a5c367` (`scratch/work/s0-3/fix/`): `just ci` green with SANE required (fmt;
+clippy every feature and each library alone; test; doc with default features and with every one; the gates,
+`scan-device` 8 packages and 25 binaries read for libsane, built with every feature; `sane-dl-package`, 16 files;
+`sane-dl-msrv`, `twain-dsm-msrv` and `scan-device-msrv` on 1.89). 361 tests, 3 added (two of `pattern`'s, one of
+the limit), none lost (`tests-fix.txt` against step 4's 358; four doctests' line numbers moved). The layout's and
+the fake's unit tests built for `wasm32-wasip1` from a copy of the crate without `rusty-fork` (whose
+`wait-timeout` doesn't build there) and run under Node's WASI: 25 passed, the 32-bit branches taken. Make-fails on
+a worktree (removed after; `make-fail.md`): the limit back to `usize::MAX` fails 3 tests here and aborts the WASI
+run (capacity overflow); a link to `fake` fails `just doc` at its default-feature line; a helper only the fake
+uses fails `just clippy`'s new line, the first passing; a feature whose build script links libsane fails `just
+gates`. `cargo clippy -p scan-device` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, the library alone and
+every target with every feature, clean. Left out, the fixes not touching their subject: the MSRV probe and `cargo
+tree` (no manifest or lock changed; `just ci`'s MSRV recipes ran), the timing loops and the batch's mutations
+(the batch's code unchanged), the fallback's mutations (opening unchanged), the publish dry run (`publish =
+false`).
+
+**What only CI shows** (TEST-13): the fake's tests on Windows and macOS (the crash child's exit, `0xC0000409` and
+`SIGABRT`; the exit's 42; the timing tests on slower runners); `just clippy`'s and `just doc`'s new lines on
+Windows and macOS (checked here for both targets by clippy, not by rustdoc); `scan-device-msrv` as CI's job; the
+gates on `ubuntu-latest`'s SANE with every feature built; and the layout tests on a 32-bit `usize` in CI (TEST-12).
+
+**The bookkeeping** (the last commit): the milestone's slice 3 done on the branch, and slices 1 and 2 merged;
+`status.md`; `slices/README.md`; slices 1 and 2's plans moved to `archive/slices/` and the references to them
+updated but `crates/sane-dl.md`'s (decision 49); `plan.md`'s head and its MSRV rule; the backlog's TEST-13 and Q-6,
+TEST-12 brought up to date, the README's table counted again; and the privacy scan of the branch's files and
+commit messages.

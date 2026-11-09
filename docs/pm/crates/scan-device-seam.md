@@ -14,9 +14,9 @@ model lacking, each change said. The model it describes is provisional until S0 
 (`milestones/s0-devices.md`).
 
 **Revised 2026-11-09 by S0 slice 2, after slice 7's revision below** (slice 7 ran first): its SANE rows in
-sections 1 to 3 and 5 to 8, from `sane-dl` as S0 slice 1 built it (`slices/s0-1-sane-dl.md`, "So far" and
+sections 1 to 3 and 5 to 8, from `sane-dl` as S0 slice 1 built it (`archive/slices/s0-1-sane-dl.md`, "So far" and
 "Code review") and the slice's probes through it, against SANE's `test` and `pnm` backends, the installed
-backends with nothing attached, and `fake-libsane` (`slices/s0-2-seam-note.md`, "So far"); a table of SANE's
+backends with nothing attached, and `fake-libsane` (`archive/slices/s0-2-seam-note.md`, "So far"); a table of SANE's
 names per backend (section 1); the two SANE unknowns answered, names that change on replugging (section 1)
 and stopping after the page in flight (section 7), each with what only the fi-6130 settles (S0 slice 6); the
 raw layout fixed (section 3) and held beside `scanimage`'s pages; and the model written down for slice 3 to
@@ -287,7 +287,7 @@ WIA's and ICA's columns are to confirm (slice 10, and the `ica` slice). The layo
 (the spike's `image` module, its module doc: rows top down, packed, RGB, gray and 1-bit with 0 black, the first
 pixel in the high bit, the bits past a row's last pixel zero), with 16-bit little-endian added, so the TWAIN side's
 conversion exists already and SANE's 1-bit gray is the one format a backend inverts. **Held beside a third party**
-(probe L2, `slices/s0-2-seam-note.md`, "So far"): `sane-dl`'s pages from the `test` backend at 157 pixels a row
+(probe L2, `archive/slices/s0-2-seam-note.md`, "So far"): `sane-dl`'s pages from the `test` backend at 157 pixels a row
 (not a multiple of 8), converted as the table says, equal the raster of `scanimage --format=png` of the same scan
 pixel for pixel at gray 1 (two pictures), 8 and 16 and color 8 and 16, PNG's big-endian 16-bit swapped first
 (unswapped, the bytes differ); PNG's 1-bit gray is 0 black, the high bit first, and SANE's bits as they came differ
@@ -436,7 +436,7 @@ sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks 
 feeders do, and whether `MSG_STOPFEEDER` helps where a driver has it.
 
 **Stopping after the page in flight (SANE): answered by S0 slice 2**, on the `test` backend's feeder and the
-fake's (`sheets 10`), through `sane-dl` (probe S1; `slices/s0-2-seam-note.md`, "So far"). SANE lets a frontend
+fake's (`sheets 10`), through `sane-dl` (probe S1; `archive/slices/s0-2-seam-note.md`, "So far"). SANE lets a frontend
 finish the page in flight and feed no more: read the page to its `EOF`, start no next page, and end the batch
 with `sane_cancel`, which `sane-dl`'s `Batch` calls as it's dropped. A batch dropped after its third page left
 the rest in the feeder, on both: the next batch gave 7 pages, then `NO_DOCS`. Step by step, `sane_cancel` after
@@ -545,7 +545,7 @@ the block in two places, written into it below: `Paper` `#[non_exhaustive]`, sin
 2's "To settle"), and `RawPage`'s doc saying who keeps its `dpi` (a backend) and who checks it (whoever decodes
 a page from outside the process).
 
-**Written by S0 slice 2, for review** (its decisions in `slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
+**Written by S0 slice 2, for review** (its decisions in `archive/slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
 builds, proposal 9's model with this note's changes ("Changes from proposal 9's model"). Names are the
 design's: slice 3 may rename and says so, and the model stays provisional until slice 11 freezes it. Plain
 data, every field public but `RawImage`'s; an enum or a struct that may grow is `#[non_exhaustive]`; pixel

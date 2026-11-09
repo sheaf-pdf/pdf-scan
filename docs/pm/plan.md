@@ -1,7 +1,8 @@
 # pdf-scan: the plan
 
-As of 2026-11-08. S0 slice 1 has built the workspace and `sane-dl`, with `fake-libsane` for its tests, done
-on its branch and waiting on review (`slices/s0-1-sane-dl.md`); the rest is planned.
+As of 2026-11-09. S0 slices 1, 2, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
+tests, the seam note revised, the TWAIN spike and `twain-dsm`. S0 slice 3 has built `scan-device`, provisional,
+done on its branch and waiting on review (`slices/s0-3-scan-device.md`); the rest is planned.
 
 pdf-scan is a workspace of crates for getting paper into PDF, which sheaf will depend on: scanners driven
 through each system's own driver API, in a worker process; page images cleaned up, judged blank or not, and
@@ -129,8 +130,8 @@ pdf-lint's, which the maintainer set for that workspace, and sheaf's on licenses
 - **A crate cut from sheaf gives sheaf's output byte for byte** at the commit it was cut from (the
   harness), where sheaf's output was right; where it wasn't (`backlog/bugs.md`), the fix is the slice's, said.
 - **Libraries:** typed errors with thiserror (sheaf's code uses anyhow); MSRV the family's, 1.89, unless a
-  dependency needs more, measured per crate over its own graph (`sane-dl`'s in S0 slice 1, 1.89; the pixel
-  crates' in S1 slice 1).
+  dependency needs more, measured per crate over its own graph (`sane-dl`'s in S0 slice 1, 1.89;
+  `scan-device`'s in S0 slice 3, 1.89; the pixel crates' in S1 slice 1).
 - **Hostile input:** caps with sane defaults, read before the work they cap: an image's dimensions before
   it's decoded, a worker's message sizes before they're read (a driver's bytes are untrusted, and so is a
   crashed worker's half message). Decoders are fuzzed.

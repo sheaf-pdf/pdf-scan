@@ -212,3 +212,5 @@ the last five from S0 slice 2's code review.
     scripted devices. Study only, nothing taken.
   - How the packaged crate's tests get the fake, once slice 11 makes it ready to publish: packaging drops the
     dev-dependency on the crate itself, a path alone, so its fake's tests don't build from the package (Q-5).
+  - What else of the model may grow before slice 11 freezes it: the enums still exhaustive (`Resolutions`,
+    `Side`, `SideKnown`), the plain structs a caller writes as literals, and `Copy` on the growing enums (Q-6).

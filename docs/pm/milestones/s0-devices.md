@@ -28,7 +28,8 @@ S1 back: S1 can start once the Linux slices are done.
    measured the pixel crates'. Checked: `just ci`; SANE's `test` and `pnm` backends in CI and the bindings
    against the installed `sane.h` (TEST-2); the fake's cases; missing libsane said, not a crash; each gate
    failing on a violation made for the check.
-   **Done on the branch** (2026-11-08; `slices/s0-1-sane-dl.md`): branch `s0-1-sane-dl`, from `137be1a`
+   **Done, and merged 2026-11-09** (pull request #2, squashed as `3ebea15`; `archive/slices/s0-1-sane-dl.md`).
+   Done on the branch 2026-11-08: branch `s0-1-sane-dl`, from `137be1a`
    to its head (the code as of `493b0c7`, its privacy commit `9b8bd5a`, then the record). `sane-dl`
    0.1.0-alpha.1, ready to publish and not published, MSRV 1.89, with `fake-libsane`; its five steps checked
    and its code review's 22 findings fixed. For review: the plan's "Decisions taken alone, for review" (72)
@@ -41,7 +42,8 @@ S1 back: S1 can start once the Linux slices are done.
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the
    unknowns TWAIN is to settle kept. Checked: reviewed before slice 3 starts, since it fixes slice 3's API.
-   **Done on the branch** (2026-11-09; `slices/s0-2-seam-note.md`), waiting on review: branch `s0-2-seam-note`,
+   **Done, and merged 2026-11-09** (pull request #3, squashed as `70d7b20`; `archive/slices/s0-2-seam-note.md`).
+   Done on the branch 2026-11-09, as it waited on review: branch `s0-2-seam-note`,
    from slice 1's tip `4624760` to its head (the fixes at `6e89de8`, then the record), docs only, three steps,
    each checked, then its code review's 25 findings fixed (one deferred in part, BUG-7). The note's SANE rows
    from slice 1 and the slice's probes, the two SANE unknowns answered (what only slice 6 settles is TEST-9), the
@@ -63,15 +65,21 @@ S1 back: S1 can start once the Linux slices are done.
    taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
    row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
    copy (an image codec added to `scan-device`).
-   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), waiting on review: branch
-   `s0-3-scan-device`, from `master` at `3f33be5`, four steps, each checked; its code review and fixes next.
+   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), waiting on review, the push and its pull
+   request: branch `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes), then
+   the record; four steps, each checked, then its code review's 18 findings (15 distinct, 1 major) all fixed.
    `scan-device` 0.0.0, unpublished, MSRV 1.89: the note's model type for type, nothing renamed, with a
    constructor for each `#[non_exhaustive]` struct, `RawImage::data_len` and `Debug` by hand for `Opened` besides
    (`crates/scan-device.md`); the `fake` feature, turned on for the crate's tests by a dev-dependency on itself,
    its scripts Rust values, every script of proposal 22 tested (here on Linux; on Windows and macOS by CI once
-   pushed), the crash and the exit in child processes; the gates reading each devices crate's graph with every
-   feature on, `scan-device` among them, and failing on a codec added as a dependency and as one behind a feature.
-   For review: the plan's "Decisions taken alone, for review" (41) and "For review (security)" (5).
+   pushed: TEST-13), the crash and the exit in child processes; the gates reading each devices crate's graph,
+   and building the binaries they read for libsane, with every feature on, `scan-device` among them, and failing
+   on a codec added as a dependency and as one behind a feature. The code review's major finding: `RawImage`'s
+   sizes now held to what one buffer can hold (`isize::MAX`), where a 32-bit reader sizing its buffer by
+   `data_len` could panic; and `Paper` made `#[non_exhaustive]`, a change to the note's block. For review: the
+   plan's "Decisions taken alone, for review" (50, of which 42 to 50 the code review's) and "For review
+   (security)" (6), above all decisions 42 (`Paper`), 43 (`open`'s order) and 47 (a cancel's and a receiver's
+   rules said, the behaviour kept), and Q-6 (what else to settle before slice 11 freezes the model).
 4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What slice
    4 needs of it" has it: an `open` request carrying the stored `DeviceInfo` and a deadline, answered with
    `renamed_from` and the device found, before `caps` and `scan`, the worker chosen by the device's driver; an
