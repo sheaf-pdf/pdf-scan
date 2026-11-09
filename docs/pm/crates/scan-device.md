@@ -2,8 +2,14 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-- **What:** the device model of M5 proposal 9, as `crates/scan-device-seam.md`'s "The model, for slice 3"
-  writes its types and traits down (S0 slice 2, for review), and the backends behind it.
+**As built** in S0 slice 3 (`slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
+checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish = false`): the model, and the
+`fake` backend; no backend for a driver API yet (`sane` is slice 5's). MSRV 1.89 (`decisions.md`). No `unsafe`
+(`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`).
+
+- **What:** the device model of [M5 proposal 9](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p09-device-model.md), as `crates/scan-device-seam.md`'s "The model, for slice 3"
+  writes its types and traits down (S0 slice 2, for review), built so in S0 slice 3, every name the note's; and
+  the backends behind it.
   - `DeviceInfo` (an id such as `sane:fujitsu:fi-7160:12345`, `twain64:PaperStream IP fi-7160`, `wia:{…}`,
     compared whole and read by nobody, a SANE name's bytes read as Latin-1; name, maker, model, driver: what the
     app stores and gives back to open), `Caps` (a list of sources, flatbed or feeder, each with its duplex, its
@@ -25,11 +31,85 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
     which holds a backend back while it's full (proposal 9's channel, as sheaf's OCR job's is), cancel and
     progress through `in-progress`'s `Progress`, checked between sheets, so a cancel finishes the sheet in
     flight.
+  - **What the crate adds to the note's block** (S0 slice 3, its decisions 3 and 23 to 26), in modules by
+    concept (`device`, `caps`, `image`, `page`, `error`), private, everything re-exported at the root:
+    - A constructor for each `#[non_exhaustive]` struct, infallible, taking owned values:
+      `DeviceInfo::new(id, name, maker, model, driver)` and `Settings::new(source, dpi, format)` (one side,
+      `Paper::Auto`, raw only) as the note names them; `Caps::new(sources)` (no settings window),
+      `SourceCaps::new(source, resolutions, formats)` (no duplex, no encodings, `max_area` `None`, `paper_auto`
+      false), `Applied::new(settings, clamped)` and `RawPage::new(pixels, dpi, sheet, side, side_known)`. The
+      rules the docs put on these values (a `dpi` finite and above 0; at least one source, each with at least
+      one format; a `Resolutions::List` never empty, a `Range`'s `min` not past its `max`) are each a
+      backend's to keep, the fake's among them, and a decoder's to check (slice 4's client); the
+      constructors don't check them (the code review's wording, `Caps`' and `RawPage`'s docs).
+    - `RawImage::new(format, width, height, data)` refuses, in order: a width or height of 0 (`Empty`); a row's
+      bytes or the image's past `u64`, in checked arithmetic, or past what one buffer can hold on the platform,
+      `isize::MAX`, the most any allocation can be (`TooLarge`; `usize::MAX` until the code review); a
+      `data` of any other length (`Length`); a `Bw1` row whose bits past its last pixel aren't 0 (`Padding`,
+      the first such row named). `RawImage::data_len(format, width, height)` gives the bytes such an image
+      holds, refused as `new` refuses it, so a reader caps a page before its bytes and allocates once. The
+      platform's limit is a parameter of the private function both use, so the 32-bit case is unit-tested on
+      any host. The raw layout is stated once, in the crate docs.
+    - `Debug` by hand for `RawImage` and `Encoded` (the format or kind, the size, `len`; never a byte), and for
+      `Opened` (its `info` and `renamed_from`, the device left out as `..`).
+    - `pub use in_progress`, so an app names the very version `Device::scan`'s `Progress` is.
+    - From the code review: `Paper` `#[non_exhaustive]`, a departure from the note's block written into it
+      (paper may grow: section 2's "To settle"), and the fake's `When` too; the fake's twelve builder methods
+      `#[must_use]`, so a script made on a clone and dropped is warned of.
 - **Backends, each a feature:**
-  - `fake`: scripted (proposal 22): pages and sides, a jam at sheet 4 then Continue, a double feed, an open
-    cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in flight finished, none
-    fed after), a cancel after a duplex front (its back still delivered), a stored device opened as a renamed
-    one found by its maker and model. On every system, in CI. Nothing scripted at this level exists elsewhere.
+  - `fake`, **built in S0 slice 3**: scripted ([proposal 22](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p22-testing-without-scanner.md)): pages and sides, a jam at sheet 4 then Continue, a
+    double feed, an open cover, an empty feeder at the start, a hang, a crash, a cancel mid-page (the sheet in
+    flight finished, none fed after), a cancel after a duplex front (its back still delivered), a stored device
+    opened as a renamed one found by its maker and model. On every system, in CI. Nothing scripted at this
+    level exists elsewhere.
+    - **The feature:** `scan_device::fake`, off by default, for tests and never for a shipped build (its faults
+      can block a thread for good and end the process). The crate's own tests, doctests included, turn it on
+      through a dev-dependency on the crate itself, so a plain `cargo test` runs them and a build without the
+      feature has no fake in it; `cargo doc` and `clippy` take `--all-features` (the justfile), and the crate
+      docs name the fake's items in code only, so `cargo doc` without the feature stays clean: `just doc` and
+      `just clippy` check that too, each library documented and linted with its default features alone as well
+      (the code review). A crate that tests through the fake asks for the feature in its own dev-dependencies:
+      `cargo test --workspace` unifies it from this crate's tests, hiding one that forgot (the seam note's "What
+      slice 4 needs of it").
+    - **Scripts are Rust values,** no text format: `FakeBackend` (`new`, `with(FakeDevice)`,
+      `listing_takes(delay)`, `not_installed()`) holds `FakeDevice`s (`new(name, maker, model)`, its id
+      `fake:<name>`; `caps`, `unlisted`, `refuses_open`, `reports_sides`, `warms_up`, `settings_window`), each
+      also a handle on its paper shared by its clones (`load`, `glass`, `fed`, `in_feeder`), so a test loads
+      paper between batches and reads the sheets fed while a batch waits on another thread; the paper is never
+      locked across a `send`, a `Progress` call or a hang. A feeder and a glass hold `Sheet`s (`new`, Letter;
+      `size`; `side(side, pixels)`, a page given; `fault(side, when, fault)`). `pattern(format, width, height,
+      sheet, side)` draws the pages, the same bytes on every system, different by sheet and side, public so
+      slice 4 checks its pipe byte for byte against it. By default a device has a feeder with duplex (50 to 600
+      dpi in steps of 1, the five formats, Legal, size detection) and a flatbed (75, 150, 300 and 600 dpi,
+      the five formats, 215.9 by 297 mm). A script's mistakes panic as they're written (caps the model forbids
+      or with a resolution of 0, an empty name, two devices of one id, a sheet's size not finite and above 0,
+      `FeederEmpty` scripted as a fault).
+    - **Listing and opening** as the note's section 1 and its mapping table have the `sane` backend do it:
+      `list` after its scripted delay, `TimedOut` where that isn't under the deadline; `open` answering
+      `NotInstalled` where scripted, then `BadId` (not `fake:` and a name), then listing under the deadline; the
+      stored id listed with the stored maker and model opened, `info` the listing's; listed as another model,
+      taken as gone; unlisted but scripted so, opened with the stored info; taken as gone, a fallback only from
+      a USB connection's name (`fake:libusb:<bus>:<device>`) to exactly one listed device of that form with the
+      stored maker and model, said in `renamed_from`, else `Gone`; a scripted refusal answered once the device
+      is found.
+    - **A batch:** the settings clamped to the chosen source's caps, and `Applied` sent with each change and
+      what was asked (a source the caps lack, the first listed; duplex off where there's none; the nearest dpi,
+      the higher of two as near, never past a range's `max`; a format the source lacks, the first listed;
+      paper cut to the largest area, a size with no area `Auto`, `Auto` without size detection the largest
+      area; encodings not offered dropped), without a panic or an overflow whatever the values. The clamping is
+      the fake's, not a public function of the model: a real backend reads back what its driver took. Then
+      `WarmingUp` where scripted, and sheet by sheet: `check()` before each, its number counted on from
+      `first_sheet` in checked arithmetic, `Sheet(n)`, the front's page and in duplex the back's;
+      `ScanError::FeederEmpty` before any page (after `Applied`), `Done::FeederEmpty` after, a flatbed's
+      `Done::OnePage`. A page is the one given on its sheet, delivered as given, or drawn at the applied paper
+      and dpi, or a short stand-in in the first encoding asked that fits its format (the fake encodes nothing);
+      none past 512 MiB, refused before anything is allocated; its progress in bytes, a row at a time. Every
+      `send` waits while the channel is full; one that fails ends the batch as `Done::Cancelled`.
+    - **Faults:** at a side's start (after its sheet's `Sheet` event) or midway (half its rows counted), each
+      firing once. `Error` ends the batch with the pages before it kept and the sheet put back at the feeder's
+      head, so Continue is a batch run again from its number (its front again after a fault on its back);
+      `Gone` leaves the device gone to every holder of it; `Hang` parks the batch's thread for good; `Crash`
+      aborts the process and `Exit(code)` exits it, for a test's or a worker's process, never an app's.
   - `sane` (Linux), on `sane-dl`: the batch loop and the backend quirks that are about scanning rather
     than the API (proposal 6): `sane_start` per page until `NO_DOCS`, which on the first page means the
     feeder is empty; one flatbed page per press; `page-height` set after `source`; parameters that make no
@@ -81,9 +161,31 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
     directly, missing bindings contributed upstream; the session flow after scanline (MIT). A safe scanning
     layer over ImageCaptureCore is a hole nobody fills.
   - Patch codes the driver reports, optional, as hints beside pixel reading (FEAT-5).
-- **Boundary:** no image codecs, imageproc, PDF crate or GUI toolkit under it. A gate keeps it so.
-  Dependencies: `in-progress` (cancel and progress, in its public API; taken by S0 slice 3, vetted in S0 slice
-  2's plan) and `thiserror`; each backend its binding, behind its feature.
+- **Boundary:** no image codecs, imageproc, PDF crate or GUI toolkit under it. A gate keeps it so: the gates'
+  devices-layer loop reads its graph with every feature on, so a dependency a backend's feature brings is read
+  as a default one is, and the libsane gate builds every binary with every feature on (S0 slice 3, the latter
+  from its code review; 8 packages as built: itself, `in-progress`, `thiserror` and its macro's
+  `thiserror-impl`, `proc-macro2`, `quote`, `syn` and `unicode-ident`).
+  Dependencies: `in-progress = "0.1.0"` (cancel and progress, in its public API and re-exported; taken by S0
+  slice 3, vetted in S0 slice 2's plan and read again in slice 3's; a caret requirement, since an exact pin
+  would keep an app on a later 0.1.x from resolving) and `thiserror` (the workspace's); each backend its
+  binding, behind its feature (`sane-dl` in slice 5, `twain-dsm` in slice 9, `windows` in slice 10). For its
+  tests: the crate itself with `fake`, and `rusty-fork` (the workspace's), whose child processes take the crash
+  and the exit.
+- **MSRV:** 1.89, the family's floor (`decisions.md`): the highest `rust-version` in its own graph (`cargo tree
+  -p scan-device`, normal, build and dev, on every target; 25 packages) is 1.85, `in-progress` 0.1.0's and
+  `getrandom` 0.4.3's (through `rusty-fork`'s `tempfile`). CI tests it on 1.89 (`scan-device-msrv`).
+- **Tests** (S0 slice 3; 115): units for the layout (each format's, `Empty`, `Length` short and long, the
+  padding bits, `TooLarge` past `u64`, past a 64-bit `isize` and past a 32-bit one through the private limit,
+  `data_len` agreeing with `new`, `Debug` without a byte), the fake's clamping, page sizes and `pattern`'s
+  bytes pinned, its rows as its docs say and its sizes refused as `data_len` refuses them; in
+  `/crates/scan-device/tests/`, from outside the crate, `model.rs` (each constructor, what's `Send`, `Opened`,
+  each error's message, a push-shaped device that moves a child progress and a `SyncSender` clone into a thread
+  of its own and sees a cancel from a third) and `fake_devices.rs`, `fake_batches.rs` and `fake_faults.rs`
+  (every rule above and every script of proposal 22, the crash and the exit in child processes through
+  `rusty-fork`); doctests, among them the crate's example through the fake. The layout's units ran on a real
+  32-bit `usize`, under WASI: in step 1, and again in the code review's fixes on a copy of the crate without
+  `rusty-fork`, whose `wait-timeout` doesn't build there; running them there in CI is TEST-12.
 - **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
   frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
   sheaf takes it no sooner (`sheaf/swaps.md`).
@@ -105,4 +207,10 @@ the last five from S0 slice 2's code review.
     proposal 9 (namespaced ids, `FeederEmpty`, partial pages kept), with WIA and WSD backends and SANE-net
     and eSCL in open PRs. Not a dependency: its pages are encoded images, its `scan` feature puts `image`,
     `png` and `tiff` under the device layer, it needs Rust 1.95, and it's one account's, days old. Study
-    its contract; check it again before S0 slices 3 and 9.
+    its contract; check it again before S0 slice 9. Checked again for slice 3 (2026-11-09): still 0.1.0
+    alone, `printscan-sane` unpublished; its test doubles are per-call stand-ins for its own trait, not
+    scripted devices. Study only, nothing taken.
+  - How the packaged crate's tests get the fake, once slice 11 makes it ready to publish: packaging drops the
+    dev-dependency on the crate itself, a path alone, so its fake's tests don't build from the package (Q-5).
+  - What else of the model may grow before slice 11 freezes it: the enums still exhaustive (`Resolutions`,
+    `Side`, `SideKnown`), the plain structs a caller writes as literals, and `Copy` on the growing enums (Q-6).

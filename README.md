@@ -17,9 +17,9 @@ published yet.
 | `sane-dl` | SANE, the scanner API of Linux and the other Unix-like systems, with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled into images, a cancel token any thread can use. 0.1.0-alpha.1, not yet published ([README](crates/sane-dl/README.md)) |
 | `fake-libsane` | A stand-in for libsane that `sane-dl`'s tests load: scripted devices, hostile values, SANE's calling rules checked (never published) |
 | `twain-dsm` | TWAIN on Windows through the system's Data Source Manager, its API safe: the DSM loaded only after its signer is checked, its states as types the compiler checks, its bindings checked against `twain.h`, capabilities in all four containers, native and memory transfers, requests from other threads. Built; 0.0.0, kept unpublished until the `twain` backend (S0 slice 9) has used its API |
+| `scan-device` | A device model for scanners, one shape whatever driver API reaches them: devices listed and opened (a renamed one said), what each source can do, settings clamped and said, batches of pages on a bounded channel, cancelled between sheets through `in-progress`, pages in one raw layout checked as they're made; and `fake`, a scripted backend for tests, behind a feature. Provisional and unpublished (0.0.0) ([README](crates/scan-device/README.md)) |
 
-Next: `scan-device`, a device model over each system's driver API (SANE, then TWAIN and WIA) with a fake for
-tests; and `scan-worker`, which runs drivers in a process of their own.
+Next: `scan-worker`, which runs drivers in a process of their own.
 
 ## Pages and PDF
 

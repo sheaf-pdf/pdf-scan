@@ -13,10 +13,10 @@ settles, and its upstream contributions.
 | bug (BUG) | `bugs.md` | 1 | 5 | 1 | | 7 | |
 | feature (FEAT) | `features.md` | 2 | 2 | 2 | 6 | 12 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 4 | 2 | 1 | 1 | 8 | |
-| question (Q) | `questions.md` | 1 | 1 | 2 | | 4 | |
+| test (TEST) | `tests.md` | 6 | 2 | 1 | 1 | 10 | |
+| question (Q) | `questions.md` | 3 | 1 | 2 | | 6 | |
 | upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
-| **all** | | **15** | **15** | **7** | **8** | **45** | **12** |
+| **all** | | **19** | **15** | **7** | **8** | **49** | **12** |
 
 ## Where to start
 
@@ -29,7 +29,10 @@ settles, and its upstream contributions.
   at hand. From slice 2: FEAT-12 (stored ids refused before `sane_open`), TEST-10 (the
   stored-id worker's configuration, tested without the system's) and Q-4 (a device's strings as bytes) in slice
   5; TEST-9 (what only the fi-6130 shows of names and cancels) in slice 6's hand check; UP-12 and UP-13
-  (`scanimage`, sane-dll(5)) wait on review.
+  (`scanimage`, sane-dll(5)) wait on review. From slice 3: TEST-12 (`scan-device`'s layout tests on a 32-bit
+  `usize` again, in CI) by slice 4 or 9; TEST-13 (its code on CI's Windows and macOS) closed by CI's run of its
+  pull request; Q-5 (the packaged crate's tests without the fake) and Q-6 (what else of the model may grow) in
+  slice 11.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

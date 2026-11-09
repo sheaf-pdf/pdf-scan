@@ -4,6 +4,7 @@ resolver = "3"
 # their oldest supported Rust may differ, as their dependencies do.
 members = [
     "crates/sane-dl",
+    "crates/scan-device",
     "crates/fake-libsane",
     "crates/twain-dsm",
 ]
