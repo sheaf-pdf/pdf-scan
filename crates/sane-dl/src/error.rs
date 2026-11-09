@@ -14,7 +14,8 @@ type Source = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// No library could be opened by the names tried: missing, or not one
+    /// No library could be opened by the names tried: SANE isn't installed
+    /// where the system's loader looks, or what's there isn't a library
     /// this process can load (`source` says which, for the last one).
     #[error("couldn't open a SANE library (tried {})", list_paths(tried))]
     NotFound {
@@ -25,11 +26,11 @@ pub enum LoadError {
         source: Source,
     },
     /// This system has no default SANE library (Windows): SANE isn't its
-    /// scanner API. [`Sane::load_from`](crate::Sane::load_from) still loads
-    /// one by its path.
+    /// scanner API, so nothing is loaded.
     #[error("there is no default SANE library on this system")]
     NoDefault,
-    /// The library lacks one of SANE's functions, so it isn't SANE's.
+    /// The library found under SANE's name lacks one of SANE's functions,
+    /// so it isn't SANE. None of them was called.
     #[error("the library has no `{name}`, so it isn't SANE")]
     MissingSymbol {
         /// The function missing.

@@ -510,6 +510,22 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
     `load_from`'s caller.
 21. **The `MissingSymbol` unit test exists only where the system library it opens is known** (step 1): Linux with
     glibc (`libc.so.6`; musl's isn't that), macOS and Windows, by `cfg` rather than a skip at run time.
+22. **The gate's `jq` is a file of its own, `/scripts/public-api.jq`** (step 2), which the recipe runs with `-f`,
+    rather than inline in `/justfile`: about 280 lines, its comment saying what it reads and why, kept clear of
+    just's `{{ }}` and of bash's quoting.
+23. **An `unsafe impl` is known by its trait** (step 2): rustdoc's JSON on the pinned nightly gives `is_unsafe:
+    false` for every impl, written `unsafe impl`s included (a probe, `scratch/work/s0-1a/step-2/probe-json/`), so
+    the gate takes an impl as unsafe when its trait is the crate's own declared `unsafe` or one of std's stable
+    unsafe traits by path (`Send`, `Sync`, `GlobalAlloc`), and lists an impl of any other crate's trait as "its
+    safety unread". The flag is read as well, should a later pin set it. It bears on the list only: no impl fails.
+24. **The gate's list** (step 2): every public item by the path a user writes (re-exports followed, globs too),
+    then under each type its fields, variants, inherent items and trait impls; the five stable auto traits on
+    one line (`auto Send, !Sync, …`), the compiler's others (`Freeze`, `UnsafeUnpin`) and blanket impls left out
+    (counted); `unsafe` marked on a function, method or trait. Its header names the format, the toolchain and the
+    target.
+25. **A fake child's loader variable holds no empty entry** (step 2, from step 1's check): `split_paths` of an
+    unset variable gives one empty entry, which the loader reads as the working directory, so it's left out; the
+    child's search is then the fake's directory and what the parent was given, as security item 1 advises.
 
 ## For review (security)
 
@@ -712,3 +728,96 @@ having loaded the system's libsane (its version 1.2.1, not the fake's 1.0.0); th
 `unix` with `fake_library()` made to panic, and the run has no failure (80 passed, 98 ignored), while one test's
 marking taken off fails it. Left to the step's checking agent: `just ci` whole (gates, MSRV, the package), the
 `SAFETY:` comments read against their calls.
+
+**Step 1's check** (2026-11-09, at `142420e`, by the checking agent; its record is local, `scratch/work/s0-1a/flow/
+checks.md`): passed. `just ci` with both require variables green (246 tests, `sane-dl`'s 178 on 1.89 too, the
+gates, the package's 16 files); the test list 246 to 246, the two path tests moved and none lost; both make-fails
+redone on a worktree of its own (98 fake tests failing at the guard; the marking flipped, 80 passed, 98 ignored);
+`clippy` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin` green; each `as-sane/<binary>/` holding SANE's leaf
+name alone; the `SAFETY:` comments read against their calls. One low finding, taken by step 2 (decision 25): the
+fake child's loader variable got an empty entry, the working directory, where the parent had none. One wording
+nit for step 2: "a path where nothing is" means an absolute one, and dyld looks for its file name too.
+
+### Step 2: `load_from` gone, `ffi`'s function types inside the crate, the public API's gate (2026-11-09)
+
+One commit, this one, which holds this record.
+
+- **`Sane::load_from` removed.** The private loader's contract (`Api::load`, `Sane::start`) loses its case:
+  each name is SANE's own by system, so what opens is what the loader finds under it, in the environment the
+  process started with; or a library already in the process exporting none of SANE's names; or an absolute path
+  where nothing is, its file name one no library has (dyld looks for it under that name in its variables'
+  directories too). Every `SAFETY:` comment that named `load_from`'s caller (`Api::load`'s two,
+  `load()`'s, the `NotFound` unit test's) is rewritten; `look_up`'s contract and comment named none.
+- **The docs:** `Sane::load` gains "Which library, and why this is safe": no code chooses the library; a library
+  under SANE's name is taken as SANE, as one linked at build time is; never closed; another SANE through
+  `LD_LIBRARY_PATH` or `DYLD_LIBRARY_PATH` at the process's start, naming a directory of SANE's own libraries
+  alone, or a run path; too late from inside the process; ignored in a set-id process and one dyld restricts.
+  The crate docs' "Loading" points there; the README's "What it does" and "Loading, and what can fail" say the
+  same, and that a worker's client sets the variable on the worker's command beside `SANE_CONFIG_DIR`.
+  `LoadError::NoDefault` no longer points at `load_from`; `NotFound` and `MissingSymbol` say "where the system's
+  loader looks" and "found under SANE's name". The changelog's entry is rewritten so, with a paragraph saying
+  what changed before the release (`load_from`, `ffi`'s function types; step 4 adds `Image`'s `Debug`).
+- **`ffi`:** its 14 function-pointer types and `SANE_Auth_Callback` are `pub(crate)`; the notice's list of
+  changes says so, and the module doc says types and constants, nothing callable, the structs plain data.
+  The header contract takes `src/ffi.rs` by `#[path]` with `#[allow(dead_code)]`, as the fake does, its module
+  doc saying so.
+- **`just public-api`** (decisions 10, 22 to 24): `public_api_nightly := "nightly-2026-10-16"`; the recipe
+  checks `jq` and that toolchain are there, removes the last JSON, runs `cargo +nightly-2026-10-16 rustdoc
+  --locked -p sane-dl --lib -- -Z unstable-options --output-format json --document-hidden-items` with
+  `CARGO_TARGET_DIR` at `public-api/` under the target directory, and reads it with `/scripts/public-api.jq`
+  (`--argjson format 61`, the floor 1,000 of the crate's own items): the shape first (`format_version`; every
+  function's, trait's and function pointer's `is_unsafe` a boolean; every impl's `is_synthetic` and
+  `blanket_impl`; every `use`'s `id`, `is_glob` and `name`; the root the crate's module; more own items than
+  the floor), then the failures, each named with its source line, then the `unsafe impl`s, listed, then the
+  list to `public-api/sane-dl.txt` and a line of counts. In `ci` before `msrv`; the justfile's header says it
+  needs `jq` and the pinned nightly. CI's `public-api` job after `sane-dl-package`: `ubuntu-latest`,
+  `dtolnay/rust-toolchain@master` with `toolchain: nightly-2026-10-16` and a comment keeping it in step with
+  the variable, `persist-credentials: false` under the workflow's read-only permissions.
+- **`loader_path`** (the tests' helper) leaves empty entries out (decision 25).
+
+**The gate's first green run, and the API read against the table** ("What a caller keeps today"): 1,651 items
+of the crate's own read, 129 public by path, 266 functions (hidden items included), none unsafe; no failure, no
+`unsafe impl` (the crate's two, on `RawHandle` and `CancelHandle`, are on private types). The list (758 lines,
+kept locally as `scratch/work/s0-1a/step-2/public-api-sane-dl.txt`) was read whole, and the docs of every public
+item searched and read for a rule asked of the caller:
+
+| Item | After step 2 |
+|---|---|
+| `Sane::load_from` | Gone: not in the list |
+| `Sane::load()`, which library | Said in its docs; no rule of the caller's |
+| `Sane::load()`, one copy | `links` within a build; across builds still the program's rule, in `Sane`'s docs, until step 3 (Linux) |
+| `Sane`, `Handle`, `CancelToken` | Bound by types: the list's auto line gives `Sane` and `CancelToken` `Send, Sync`, `Handle` `Send, !Sync`, `Batch` `Send, !Sync` |
+| `Handle::select_fd` | A `RawFd` ("never close it, read it, or keep it past then"): advice, since any use of it is the caller's own `unsafe` |
+| `ConfigDir::write` | "must exist and be an absolute path": checked, `ConfigError::BadPath`; "a directory private to the process": advice for security, no soundness at stake |
+| `ffi`'s function types, `SANE_Auth_Callback` | `pub(crate)`: not in the list, and no unsafe function pointer anywhere in it |
+| `ffi`'s structs and union | Raw pointers in public fields, plain data (`!Send, !Sync` in the list); a union's field is read only in `unsafe` |
+| Advice elsewhere | List devices in a process of their own (calls wait, never UB); whether a batch goes on after an error, and stopping after the page in flight, are the caller's (`Batch` and `Handle` end a pending scan with `sane_cancel` when dropped) |
+| `Image` (BUG-7) | Step 4 |
+
+`mem::forget` of each owning type, read in the code: `Sane` (an `Arc` of the instance) leaks the instance, so
+`sane_exit` never runs and the process's slot stays taken (a later load is `AlreadyLoaded`); `Handle` leaks its
+reference to the instance and its device, never closed, so the same, and a `CancelToken` cloned from it may
+still cancel, which stays sound, since the handle is still open and SANE still started; `Batch` (it borrows the
+handle mutably) leaves the handle's pending scan to its next call or its drop, which cancels it; `CancelToken`
+leaks a small allocation and nothing of SANE's. A leak at worst, each: no soundness rests on a drop running,
+since a leak only withholds `sane_close` and `sane_exit`, and what they'd have ended stays valid.
+
+**Departed from the plan:** the gate's `jq` sits in `/scripts/public-api.jq` (decision 22); an `unsafe impl` is
+known by its trait, since rustdoc's flag for impls is always false here (decision 23); the step takes step 1's
+check's finding on `loader_path` (decision 25), which the plan didn't hold. The recipe also checks the pinned
+toolchain is installed first, failing with the command that installs it.
+
+**Checked here** (records in `scratch/work/s0-1a/step-2/`): `cargo fmt --check`; `cargo clippy --workspace
+--all-targets -D warnings`; `cargo doc -D warnings` of `sane-dl` and `fake-libsane`; their tests with both require
+variables, 221 passed (the header contract against the installed 1.4.0 `sane.h` among them, and the fake built
+against the changed `ffi.rs`); `just public-api` green. The test list: 246, the same names as step 1's, the
+README's doctest now at line 184 of `lib.rs` (183 before). Make-fails, on a worktree removed after (the branch
+unchanged): the nine cases planted together and run once, the eight named (`load_from`, the hidden `unsafe fn`,
+the unsafe method, the unsafe trait, the alias of an `unsafe extern "C" fn`, the `*const u8` parameter,
+`ffi::SANE_Handle` returned, `libloading::Library` re-exported) and the two `unsafe impl`s (of the planted unsafe
+trait, and `Send` for a public type) listed, not failed; then alone the expected format changed to 62, failing
+the shape check, and (more than asked) the floor raised and `is_unsafe` renamed in a copy of the JSON, each
+failing it too; `SaneStrstatusFn`'s return changed to `SANE_String`, which the library still compiles with, and
+the header contract failing to compile at its row for it. Left to the step's checking agent: `just ci` whole,
+`clippy --all-targets` and `doc` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, the `SAFETY:` comments
+read against their calls.

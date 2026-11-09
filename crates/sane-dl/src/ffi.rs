@@ -18,7 +18,9 @@
 // declarations, for sane-dl, which loads libsane at run time and so links
 // none of these functions:
 // - the functions are declared as function-pointer types (`SaneInitFn` and
-//   the rest), each with the C function's parameters and return type;
+//   the rest), each with the C function's parameters and return type, and
+//   kept inside the crate (`pub(crate)`), as the authorization callback's
+//   type is;
 // - every C enum (`SANE_Status`, `SANE_Value_Type`, `SANE_Unit`,
 //   `SANE_Constraint_Type`, `SANE_Action`, `SANE_Frame`) is an integer type
 //   with a constant per enumerator, never a Rust enum, since a library may
@@ -33,15 +35,17 @@
 // - the comments are reworded, and the structs' field `type` is spelled
 //   `r#type`.
 
-//! SANE's C API as `sane.h` declares it: types, constants and function
-//! types.
+//! SANE's C API as `sane.h` declares it: its types and constants.
 //!
 //! The raw names, for anyone who wants them, and what the rest of this crate
-//! is built on. Nothing here calls anything: the functions are declared as
-//! the types of pointers to them, which the crate looks up in the library it
-//! loads. Every C enum is an integer type with constants,
-//! because a backend may return a value the enum doesn't list, and a Rust
-//! enum holding one would be undefined behaviour.
+//! is built on. Nothing here calls anything, and nothing here can be called:
+//! the functions' types, as pointers, and the authorization callback's are
+//! the crate's own, inside it, since a pointer of one would be `unsafe` to
+//! call; the crate looks the functions up in the library it loads. Every C
+//! enum is an integer type with constants, because a backend may return a
+//! value the enum doesn't list, and a Rust enum holding one would be
+//! undefined behaviour. The structs are plain data, as SANE gives them:
+//! reading through one of their pointers is the reader's own `unsafe`.
 //!
 //! Translated from SANE 1.4.0's public-domain `sane.h`, whose notice heads
 //! this module's source with what was changed. A test checks these
@@ -353,7 +357,7 @@ pub const SANE_MAX_PASSWORD_LEN: SANE_Int = 128;
 
 /// A callback a backend calls to ask for a user name and password for
 /// `resource`, written into the two buffers.
-pub type SANE_Auth_Callback = Option<
+pub(crate) type SANE_Auth_Callback = Option<
     unsafe extern "C" fn(
         resource: SANE_String_Const,
         username: *mut SANE_Char,
@@ -362,25 +366,25 @@ pub type SANE_Auth_Callback = Option<
 >;
 
 /// `sane_init`: starts SANE, giving its version code.
-pub type SaneInitFn =
+pub(crate) type SaneInitFn =
     unsafe extern "C" fn(version_code: *mut SANE_Int, authorize: SANE_Auth_Callback) -> SANE_Status;
 /// `sane_exit`: ends SANE.
-pub type SaneExitFn = unsafe extern "C" fn();
+pub(crate) type SaneExitFn = unsafe extern "C" fn();
 /// `sane_get_devices`: lists the devices.
-pub type SaneGetDevicesFn = unsafe extern "C" fn(
+pub(crate) type SaneGetDevicesFn = unsafe extern "C" fn(
     device_list: *mut *mut *const SANE_Device,
     local_only: SANE_Bool,
 ) -> SANE_Status;
 /// `sane_open`: opens a device by its name.
-pub type SaneOpenFn =
+pub(crate) type SaneOpenFn =
     unsafe extern "C" fn(devicename: SANE_String_Const, handle: *mut SANE_Handle) -> SANE_Status;
 /// `sane_close`: closes a device.
-pub type SaneCloseFn = unsafe extern "C" fn(handle: SANE_Handle);
+pub(crate) type SaneCloseFn = unsafe extern "C" fn(handle: SANE_Handle);
 /// `sane_get_option_descriptor`: an option's descriptor, or null.
-pub type SaneGetOptionDescriptorFn =
+pub(crate) type SaneGetOptionDescriptorFn =
     unsafe extern "C" fn(handle: SANE_Handle, option: SANE_Int) -> *const SANE_Option_Descriptor;
 /// `sane_control_option`: reads or sets an option's value.
-pub type SaneControlOptionFn = unsafe extern "C" fn(
+pub(crate) type SaneControlOptionFn = unsafe extern "C" fn(
     handle: SANE_Handle,
     option: SANE_Int,
     action: SANE_Action,
@@ -389,24 +393,24 @@ pub type SaneControlOptionFn = unsafe extern "C" fn(
 ) -> SANE_Status;
 /// `sane_get_parameters`: the parameters of the frame to come, or of the one
 /// being read.
-pub type SaneGetParametersFn =
+pub(crate) type SaneGetParametersFn =
     unsafe extern "C" fn(handle: SANE_Handle, params: *mut SANE_Parameters) -> SANE_Status;
 /// `sane_start`: starts a frame.
-pub type SaneStartFn = unsafe extern "C" fn(handle: SANE_Handle) -> SANE_Status;
+pub(crate) type SaneStartFn = unsafe extern "C" fn(handle: SANE_Handle) -> SANE_Status;
 /// `sane_read`: reads a frame's data.
-pub type SaneReadFn = unsafe extern "C" fn(
+pub(crate) type SaneReadFn = unsafe extern "C" fn(
     handle: SANE_Handle,
     data: *mut SANE_Byte,
     max_length: SANE_Int,
     length: *mut SANE_Int,
 ) -> SANE_Status;
 /// `sane_cancel`: cancels what's in progress, from any thread.
-pub type SaneCancelFn = unsafe extern "C" fn(handle: SANE_Handle);
+pub(crate) type SaneCancelFn = unsafe extern "C" fn(handle: SANE_Handle);
 /// `sane_set_io_mode`: reads blocking or not.
-pub type SaneSetIoModeFn =
+pub(crate) type SaneSetIoModeFn =
     unsafe extern "C" fn(handle: SANE_Handle, non_blocking: SANE_Bool) -> SANE_Status;
 /// `sane_get_select_fd`: a file descriptor that's readable when data is.
-pub type SaneGetSelectFdFn =
+pub(crate) type SaneGetSelectFdFn =
     unsafe extern "C" fn(handle: SANE_Handle, fd: *mut SANE_Int) -> SANE_Status;
 /// `sane_strstatus`: a status as text.
-pub type SaneStrstatusFn = unsafe extern "C" fn(status: SANE_Status) -> SANE_String_Const;
+pub(crate) type SaneStrstatusFn = unsafe extern "C" fn(status: SANE_Status) -> SANE_String_Const;

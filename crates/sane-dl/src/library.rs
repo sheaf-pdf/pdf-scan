@@ -36,7 +36,7 @@
 use std::ffi::{CString, c_char};
 use std::fmt;
 use std::mem;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -85,32 +85,34 @@ impl Api {
     /// functions it exports by SANE's names are then called with the types
     /// `sane.h` gives them. Each of `names` must be one of these:
     ///
-    /// - the system's SANE, found under SANE's own name by the system
-    ///   loader's search ([`Sane::DEFAULT_LIBRARIES`]), trusted as a library
-    ///   linked at build time is: a library under SANE's name is SANE;
+    /// - SANE's own name, by system ([`Sane::DEFAULT_LIBRARIES`]), so that
+    ///   what opens is what the system's loader finds under it, in the
+    ///   environment the process started with: the system's SANE, trusted
+    ///   as a library linked at build time is, since a library under SANE's
+    ///   name is SANE;
     /// - a library already in the process that exports none of SANE's
     ///   names, so opening it runs no initialiser and nothing of it is
-    ///   called, or a path where nothing is;
-    /// - a library [`Sane::load_from`]'s caller has promised under its
-    ///   `# Safety`.
+    ///   called;
+    /// - an absolute path where nothing is, its file name one no library
+    ///   has (dyld looks for that name in its variables' directories too),
+    ///   so nothing opens.
     unsafe fn load(names: &[PathBuf]) -> Result<Api, LoadError> {
         let mut last_error = None;
         for name in names {
             // SAFETY: opening a library runs its initialisers in this
             // process. `name` is one of the three this function's contract
-            // allows: the system's SANE, trusted as a library linked at
-            // build time would be; a library already in the process, whose
-            // initialisers have run, or nothing at all; or one
-            // `load_from`'s caller has promised may run here. The library
-            // is never unloaded, so no finaliser of it runs while anything
-            // it set up may still be in use.
+            // allows: SANE's own name, so the system's SANE, whose
+            // initialisers run here as a library linked at build time
+            // would have them run; a library already in the process, whose
+            // initialisers have run; or nothing at all. The library is
+            // never unloaded, so no finaliser of it runs while anything it
+            // set up may still be in use.
             match unsafe { libloading::Library::new(name) } {
                 // SAFETY: `look_up`'s contract. The library was opened from
                 // `name`, which this function's contract makes the system's
-                // SANE or one `load_from`'s caller promised, each exporting
-                // SANE's functions with `sane.h`'s types, or a library that
-                // exports none of SANE's names, of which there's nothing to
-                // ask.
+                // SANE, exporting SANE's functions with `sane.h`'s types, or
+                // a library that exports none of SANE's names, of which
+                // there's nothing to ask.
                 Ok(library) => return unsafe { Api::look_up(Box::leak(Box::new(library))) },
                 Err(error) => last_error = Some(error),
             }
@@ -945,9 +947,34 @@ impl Sane {
     /// the first that opens) and starts it.
     ///
     /// Where it isn't installed this is [`LoadError::NotFound`], naming what
-    /// was tried, and on Windows [`LoadError::NoDefault`]. `sane_init` is
-    /// called with no authorization callback, so a backend that asks for a
-    /// password gets none.
+    /// was tried, and on Windows [`LoadError::NoDefault`]. A library found
+    /// under SANE's name that lacks one of SANE's 14 functions is
+    /// [`LoadError::MissingSymbol`], before any of them is called.
+    /// `sane_init` is called with no authorization callback, so a backend
+    /// that asks for a password gets none.
+    ///
+    /// # Which library, and why this is safe
+    ///
+    /// No code chooses the library, this crate's or its caller's: it's the
+    /// one the system's loader finds under SANE's name, in the environment
+    /// the process started with. Opening it runs its code in this process,
+    /// and its functions are called as `sane.h` declares them, so a library
+    /// under SANE's name is taken as SANE, as one linked at build time
+    /// would be. It's never closed, so none of its code runs at an unload.
+    ///
+    /// To load another SANE, one a program ships or a build of one's own,
+    /// give the process that loads it the loader's search path as it
+    /// starts: `LD_LIBRARY_PATH` on Linux and the other Unix-like systems,
+    /// `DYLD_LIBRARY_PATH` on macOS (where dyld looks for the file name of
+    /// each of the installed paths there), naming a directory that holds
+    /// SANE's own libraries alone, since the variable reaches every library
+    /// the process loads by name. Or build a run path into the program. Set
+    /// from inside the running process, the variable comes too late: the
+    /// loader reads it as the process starts. Whoever starts a process
+    /// chooses its libraries this way, as with any library linked at build
+    /// time; the loaders ignore these variables in a set-id process, and
+    /// dyld in a process it restricts, such as one under the hardened
+    /// runtime.
     pub fn load() -> Result<Sane, LoadError> {
         if Self::DEFAULT_LIBRARIES.is_empty() {
             return Err(LoadError::NoDefault);
@@ -955,31 +982,11 @@ impl Sane {
         let names: Vec<PathBuf> = Self::DEFAULT_LIBRARIES.iter().map(PathBuf::from).collect();
         // SAFETY: the names are SANE's own, by system: its soname, found by
         // the system loader's search, or the paths its package managers
-        // install it at. What the loader finds under them is the system's
+        // install it at, under whose file name dyld searches its own
+        // variable's directories first. What the loader finds under them,
+        // in the environment the process started with, is the system's
         // SANE, the first case `start`'s contract allows.
         unsafe { Sane::start(&names) }
-    }
-
-    /// Loads the library at `path` as SANE, and starts it.
-    ///
-    /// A library without one of SANE's 14 functions is
-    /// [`LoadError::MissingSymbol`], before any of them is called.
-    ///
-    /// # Safety
-    ///
-    /// Loading a library runs its code in this process, and this crate
-    /// calls its functions as `sane.h` declares them, trusting their types:
-    ///
-    /// - the library at `path` must be one this process may run, trusted as
-    ///   much as the program itself: one the program ships or the user
-    ///   chose, never one an untrusted party can write;
-    /// - each function it exports by one of SANE's names (`sane_init`,
-    ///   `sane_open` and the rest) must have the type `sane.h` gives it,
-    ///   and keep SANE's contract for it, as a SANE library does.
-    pub unsafe fn load_from(path: impl AsRef<Path>) -> Result<Sane, LoadError> {
-        // SAFETY: this function's caller has promised the library at `path`
-        // (its `# Safety`), the last case `start`'s contract allows.
-        unsafe { Sane::start(&[path.as_ref().to_path_buf()]) }
     }
 
     /// Takes the process's slot, loads the first of `names` that opens
@@ -988,10 +995,10 @@ impl Sane {
     ///
     /// # Safety
     ///
-    /// As [`Api::load`]'s: each of `names` is the system's SANE, found under
-    /// SANE's own name by the system loader's search; a library already in
-    /// the process that exports none of SANE's names, or a path where
-    /// nothing is; or a library [`Sane::load_from`]'s caller has promised.
+    /// As [`Api::load`]'s: each of `names` is SANE's own name, so what opens
+    /// is the system's SANE, found under it by the system loader's search; a
+    /// library already in the process that exports none of SANE's names; or
+    /// an absolute path where nothing is, under a file name no library has.
     unsafe fn start(names: &[PathBuf]) -> Result<Sane, LoadError> {
         let slot = Slot::take()?;
         // SAFETY: `names` are as `Api::load`'s contract asks (this
@@ -1796,13 +1803,15 @@ mod tests {
     fn a_missing_library_is_not_found_with_what_was_tried() {
         let _loading = loading();
         // A fresh directory holds nothing, and an absolute path is opened
-        // as it is, never searched for.
+        // as it is, never searched for (but by dyld, under its file name,
+        // which no library has).
         let dir = tempfile::tempdir().expect("couldn't make a temporary directory");
         let missing = dir.path().join("no-such-libsane");
         assert!(missing.is_absolute(), "{}", missing.display());
         let names = [missing];
-        // SAFETY: nothing is at `missing`, a case `start`'s contract allows:
-        // nothing opens, so nothing runs.
+        // SAFETY: `missing` is absolute, nothing is at it (a fresh
+        // directory), and no library has its file name, a case `start`'s
+        // contract allows: nothing opens, so nothing runs.
         match unsafe { Sane::start(&names) } {
             Err(LoadError::NotFound { tried, .. }) => assert_eq!(tried, names),
             other => panic!("expected NotFound, got {other:?}"),

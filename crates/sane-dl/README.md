@@ -54,8 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Loading.** `Sane::load` opens the system's library: `libsane.so.1` on Linux and the other Unix-like
   systems, through the system loader's own search, and on macOS `libsane.1.dylib` at the paths Homebrew and
   MacPorts install it (`Sane::DEFAULT_LIBRARIES`). Windows has none, since SANE isn't its scanner API.
-  `Sane::load_from` opens the library at a path the caller gives. Then `sane_init`, with no authorization
-  callback, so a backend that asks for a password gets none.
+  Another SANE is loaded through the loader's own search path, given to the process as it starts (below).
+  Then `sane_init`, with no authorization callback, so a backend that asks for a password gets none.
 - **Devices under a deadline.** `Sane::devices` lists them on a thread of its own, and stops waiting at the
   deadline: listing can take seconds, as every backend loaded looks for its devices, and some hang.
 - **A known device, fast.** `Sane::open` opens a device by its name, with no listing first. `ConfigDir`
@@ -81,10 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Loading happens only when asked for, and fails with a `LoadError`:
 
-- `NotFound`: no library could be opened by the names tried, which it lists (SANE isn't installed, or the
-  path is wrong);
-- `NoDefault`: this system has no default library (Windows); `load_from` still loads one by its path;
-- `MissingSymbol`: the library lacks one of SANE's functions, so it isn't SANE;
+- `NotFound`: no library could be opened by the names tried, which it lists (SANE isn't installed where the
+  system's loader looks);
+- `NoDefault`: this system has no default library (Windows), so nothing is loaded;
+- `MissingSymbol`: the library found under SANE's name lacks one of SANE's functions, so it isn't SANE;
 - `Init`: `sane_init` answered a status other than `GOOD`;
 - `UnsupportedVersion`: the library follows a SANE other than version 1 (it's ended before this returns);
 - `AlreadyLoaded`: SANE is already loaded in this process.
@@ -93,11 +93,20 @@ There's one `Sane` per process, since SANE is started once per process; once it 
 it are gone, SANE is ended (`sane_exit`) and another may load. A load that fails leaves nothing behind. The
 library is never unloaded, since backends may leave threads or exit handlers in it.
 
-Loading a library runs its code in this process, and its functions are called as `sane.h` declares them, so
-`load_from` is `unsafe`: the path given must name a library trusted as much as the program itself, never one
-an untrusted party can write, whose SANE functions have `sane.h`'s types. `load` opens only the system's own
-SANE, trusted as a library linked at build time would be; on macOS by its installed paths, never by a bare
-name, which dyld would look for in the working directory too.
+Loading a library runs its code in this process, and its functions are called as `sane.h` declares them.
+`load` is safe because no code chooses the library, this crate's or its caller's: it's the one the system's
+loader finds under SANE's name, in the environment the process started with, taken as SANE as a library
+linked at build time would be, and never closed. On macOS that's at its installed paths, never by a bare name,
+which dyld would look for in the working directory too.
+
+To load another SANE, one a program ships or a build of one's own, give the process that loads it the
+loader's search path as it starts: `LD_LIBRARY_PATH` on Linux and the other Unix-like systems,
+`DYLD_LIBRARY_PATH` on macOS (where dyld looks there for the file name of each installed path first). Name a
+directory that holds SANE's own libraries alone, since the variable reaches every library the process loads
+by name. Or build a run path into the program (`$ORIGIN/…` on Linux). Set from inside the running process,
+the variable comes too late: the loader reads it as the process starts. So a program that runs SANE in a
+worker process sets it on the worker's command, as it sets `SANE_CONFIG_DIR`. The loaders ignore these
+variables in a set-id process, and dyld in a process it restricts, such as one under the hardened runtime.
 
 A program holds one copy of this crate: its manifest's `links` key makes cargo refuse two versions of it in
 one build, since each would start SANE as if it were alone.

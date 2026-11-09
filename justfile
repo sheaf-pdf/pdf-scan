@@ -12,14 +12,21 @@
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
 twain_dsm_msrv := `grep -m1 '^rust-version' crates/twain-dsm/Cargo.toml | cut -d'"' -f2`
 
+# The nightly whose rustdoc writes the JSON `public-api` reads. The JSON's
+# format moves between nightlies, so this moves only on purpose, with the
+# format the recipe expects and scripts/public-api.jq read again. Keep in
+# step with the `public-api` job's toolchain in .github/workflows/ci.yml.
+public_api_nightly := "nightly-2026-10-16"
+
 default:
     @just --list --unsorted
 
 # What they need: `msrv` each crate's oldest Rust installed (`rustup
 # toolchain install <version>`), `gates` jq and readelf, `sane-dl-package`
-# the network.
+# the network, `public-api` jq and the pinned nightly above (`rustup
+# toolchain install nightly-2026-10-16`).
 # Everything CI runs.
-ci: fmt clippy test doc gates sane-dl-package msrv
+ci: fmt clippy test doc gates sane-dl-package public-api msrv
 
 # Check formatting; `cargo fmt --all` fixes it.
 fmt:
@@ -74,6 +81,70 @@ sane-dl-package:
         grep -qxF -- "$file" "$dir/files.txt" || { echo "the package lacks $file" >&2; exit 1; }
     done
     echo "sane-dl-package: $(wc -l < "$dir/files.txt") files, each a source, the build script, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
+
+# Each crate made ready to publish, its public API read from rustdoc's JSON
+# on the pinned nightly, hidden items included, so `#[doc(hidden)]` hides
+# nothing (scripts/public-api.jq says what it reads and why). It fails,
+# naming each, on an `unsafe` function, method or trait, an `unsafe`
+# function pointer anywhere, a raw pointer in a public signature (the
+# crate's own type aliases followed), and a re-export of another crate's
+# item, which it can't read; it lists each `unsafe impl`, the crate's own
+# promise and never its caller's, without failing. First it checks the JSON
+# is the shape the jq was written against, so a moved pin fails rather than
+# passes unread. Built under public-api/ in the target directory (under
+# CARGO_TARGET_DIR where that names another), apart from stable's builds,
+# where it writes every public item, by path and kind, to <crate>.txt. The
+# host's target only: an item behind another system's `cfg` isn't in its
+# JSON. A crate joins the list as it's made ready to publish, with the
+# least number of its own items a whole read finds.
+# No unsafe in a published crate's public API, from rustdoc's JSON.
+public-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    toolchain={{ public_api_nightly }}
+    format=61
+    command -v jq >/dev/null || { echo "public-api: jq is missing, and the gate needs it" >&2; exit 1; }
+    toolchains=$(rustup toolchain list)
+    if ! grep -q "^$toolchain-" <<< "$toolchains"; then
+        echo "public-api: $toolchain isn't installed (rustup toolchain install $toolchain)" >&2
+        exit 1
+    fi
+    dir=${CARGO_TARGET_DIR:-$PWD/target}/public-api
+    failed=0
+    for entry in sane-dl:1000; do
+        crate=${entry%%:*}
+        floor=${entry##*:}
+        json=$dir/doc/${crate//-/_}.json
+        # Removed first, so what's read is this run's.
+        rm -f "$json"
+        CARGO_TARGET_DIR="$dir" cargo +"$toolchain" rustdoc --locked -p "$crate" --lib \
+            -- -Z unstable-options --output-format json --document-hidden-items
+        if ! report=$(jq --argjson format "$format" --argjson floor "$floor" -f scripts/public-api.jq "$json"); then
+            echo "public-api: $crate: jq couldn't read rustdoc's JSON ($json): has its shape changed?" >&2
+            exit 1
+        fi
+        if jq -e 'has("shape")' <<< "$report" >/dev/null; then
+            echo "public-api: $crate: rustdoc's JSON isn't the shape scripts/public-api.jq was written against (format $format), so nothing was read:" >&2
+            jq -r '.shape[] | "  " + .' <<< "$report" >&2
+            exit 1
+        fi
+        host=$(rustc +"$toolchain" -vV | sed -n 's/^host: //p')
+        {
+            echo "# $crate's public API: rustdoc's JSON (format $format) on $toolchain, for $host, hidden items included; blanket impls left out."
+            jq -r '.list[]' <<< "$report"
+        } > "$dir/$crate.txt"
+        jq -r --arg crate "$crate" \
+            '.unsafe_impls[] | "public-api: \($crate): \(.) (listed, not failed: the crate keeps that promise, not its caller)"' <<< "$report"
+        if jq -e '.failures | length > 0' <<< "$report" >/dev/null; then
+            echo "public-api: $crate's public API holds unsafe:" >&2
+            jq -r '.failures[] | "  " + .' <<< "$report" >&2
+            failed=1
+        fi
+        jq -r --arg crate "$crate" --arg file "$dir/$crate.txt" \
+            '.counts as $c | "public-api: \($crate): \($c.own) items of its own read, \($c.public) public by path, \($c.functions) functions, \($c.unsafe_functions) unsafe; \(.failures | length) failures, \(.unsafe_impls | length) unsafe impls; every public item listed in \($file)"' <<< "$report"
+    done
+    if [[ $failed -ne 0 ]]; then exit 1; fi
+    echo "public-api: no unsafe in the public API"
 
 # twain-dsm's tests for `target` (x86_64-pc-windows-msvc or
 # i686-pc-windows-msvc), the 32-bit one too, whose `usize` a driver's sizes

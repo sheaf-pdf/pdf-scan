@@ -7,18 +7,26 @@ here what changed and how code follows. A crate that depends on an alpha names i
 cargo's default, `0.1.0-alpha.1`, takes any later alpha of 0.1.0 too. The heading takes its date when the
 version is published.
 
+Changed before the release, for anyone who built this version from the repository: `Sane::load_from` is
+gone, so the library is always the one the system's loader finds under SANE's name, and `ffi`'s
+function-pointer types (`SaneInitFn` and the rest, and `SANE_Auth_Callback`) are inside the crate.
+
 - **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
   `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on
-  Windows, `LoadError::NoDefault`), and `Sane::load_from`, an `unsafe fn` since it trusts the library it's
-  given, one by its path; then `sane_init`, with no authorization callback, and a SANE other than version 1
-  refused after its `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`,
-  `Init`, `UnsupportedVersion`, `AlreadyLoaded`. One `Sane` per process, and another once it has ended; a
-  failed load leaves nothing behind; the library is never unloaded. Nothing links libsane; the manifest's
+  Windows, `LoadError::NoDefault`), as the system's loader finds it, in the environment the process started
+  with; no code chooses another. Another SANE is loaded through the loader's own search path
+  (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`), given to the process as it starts, or a run path built in. Then
+  `sane_init`, with no authorization callback, and a SANE other than version 1 refused after its
+  `sane_exit`. `LoadError`: `NotFound` with the names tried, `NoDefault`, `MissingSymbol`, `Init`,
+  `UnsupportedVersion`, `AlreadyLoaded`. One `Sane` per process, and another once it has ended; a failed load
+  leaves nothing behind; the library is never unloaded. Nothing links libsane; the manifest's
   `links = "sane-dl"`, with a build script that builds nothing, keeps a program to one copy of the crate.
+  No public function is `unsafe`.
 - **The bindings,** `sane_dl::ffi`: SANE 1.4.0's `sane.h` as Rust declarations, types and constants only,
-  its public-domain notice kept and what was changed said. Every C enum is an integer type with constants,
-  the values the header reserves among them, never a Rust enum. A test checks them against the installed
-  header: every constant's value, every struct's size and field offsets, every function's type.
+  its public-domain notice kept and what was changed said; the types of its functions, which the crate
+  looks up in the library, stay inside the crate. Every C enum is an integer type with constants, the values
+  the header reserves among them, never a Rust enum. A test checks them against the installed header: every
+  constant's value, every struct's size and field offsets, every function's type.
 - **Statuses and frame types as SANE gives them.** `Status` and `FrameFormat` keep any integer, with a
   constant and a name for each SANE defines; `Version` from `sane_init`'s code. `Error::Status` carries the
   status and the function that answered it (`Call`).
@@ -61,4 +69,5 @@ version is published.
   a frame's reading stopped there.
 - **The package** holds the sources, the build script, this changelog and the README, whose licence links
   are the repository's URLs, a test holding them so. The tests stay in the repository: they build a
-  stand-in libsane from the workspace and load it, beside SANE's own `test` and `pnm` backends.
+  stand-in libsane from the workspace and load it as SANE, through the loader's search path, beside SANE's
+  own `test` and `pnm` backends.

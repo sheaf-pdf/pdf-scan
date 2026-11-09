@@ -371,10 +371,12 @@ pub fn fake_library() -> &'static Path {
 }
 
 /// The loader's search path for a child that loads the fake: `dir` first,
-/// then whatever this process was given.
+/// then whatever this process was given. An empty entry is left out, since
+/// the loader would read it as the working directory.
 fn loader_path(dir: &Path) -> OsString {
     let given = std::env::var_os(LOADER_PATH).unwrap_or_default();
-    std::env::join_paths(std::iter::once(dir.to_owned()).chain(std::env::split_paths(&given)))
+    let given = std::env::split_paths(&given).filter(|entry| !entry.as_os_str().is_empty());
+    std::env::join_paths(std::iter::once(dir.to_owned()).chain(given))
         .expect("the fake's directory can't be put on the loader's search path")
 }
 

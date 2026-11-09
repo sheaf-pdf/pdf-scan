@@ -197,3 +197,24 @@ jobs:
       - uses: extractions/setup-just@v4
       - name: Package, and check what the package holds
         run: just sane-dl-package
+
+  # sane-dl's public API read from rustdoc's JSON, hidden items included: no
+  # unsafe function, method or trait, no unsafe function pointer, no raw
+  # pointer in a public signature, no re-export of another crate's item; each
+  # unsafe impl listed. On a pinned nightly, so the JSON's format moves only
+  # when the pin does, never under an unrelated pull request.
+  public-api:
+    name: sane-dl's public API holds no unsafe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Keep in step with public_api_nightly in the justfile, which `just
+      # public-api` runs.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-16
+      - uses: extractions/setup-just@v4
+      - name: The public API
+        run: just public-api
