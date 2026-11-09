@@ -22,7 +22,7 @@ Stays in sheaf (named here so nobody cuts it by mistake):
 
 | sheaf file | Lines | Why it stays |
 |---|---|---|
-| `crates/sheaf-image/src/codes.rs`, `codes/tests.rs` | 237 + 420 | The barcode reader's policy is separator finding's (unless ask 2 moves it) |
+| `crates/sheaf-image/src/codes.rs`, `codes/tests.rs` | 237 + 420 | The barcode reader's policy is separator finding's (ask 2, as taken: `decisions.md`) |
 | `crates/sheaf-image/src/raster.rs` | 162 | Rendered pages as pixels: sheaf-render's |
 | `crates/sheaf-ops/src/intake.rs` | 429 | The pipeline, its batches and landings into sheaf's documents |
 | `crates/sheaf-ops/src/scan.rs`, `blank.rs` | 348, 279 | `sheaf scan`, and blank pages by a page's content and pixels together |

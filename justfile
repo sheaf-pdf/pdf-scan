@@ -52,13 +52,22 @@ gates:
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
     for crate in sane-dl; do
+        # The list first, so a `cargo tree` that fails (a crate named here
+        # that isn't a member) fails the gate, rather than leaving the loop
+        # nothing to read; and the crate itself must be in its own list.
+        if ! list=$(deps "$crate"); then
+            fail "cargo tree couldn't list $crate's dependencies"
+            continue
+        fi
+        grep -qxF -- "$crate" <<< "$list" || { fail "$crate isn't in its own dependency list, so it wasn't read"; continue; }
         while read -r d; do
             [[ $d =~ $codec ]] && fail "$crate depends on $d, an image codec"
             [[ $d == imageproc ]] && fail "$crate depends on imageproc, which is pixel work"
             [[ $d =~ $pdf ]] && fail "$crate depends on $d, a PDF crate"
             [[ $d =~ $ocr ]] && fail "$crate depends on $d, an OCR or model runtime"
             [[ $d =~ $gui ]] && fail "$crate depends on $d, a GUI toolkit"
-        done < <(deps "$crate")
+        done <<< "$list"
+        echo "gates: $crate's graph read for the devices layer ($(wc -l <<< "$list") packages)"
     done
     # Nothing links libsane: it's loaded at run time. No package declares it
     # as the native library it links...
@@ -92,7 +101,10 @@ gates:
     [[ -z $users ]] || fail "these take fake-libsane as a dependency: $users"
     # No file git tracks or would track outside docs/pm uses the downstream
     # app's name (docs/pm/plan.md, "Standing rules"), but as the org in a URL.
-    named=$(git ls-files -z --cached --others --exclude-standard -- ':!docs/pm' | xargs -0 grep -IilP 'shea[f](?!-pdf/)' || true)
+    # git grep exits 1 for no match, and above 1 when it couldn't search.
+    status=0
+    named=$(git grep -IilP --untracked 'shea[f](?!-pdf/)' -- ':!docs/pm') || status=$?
+    [[ $status -le 1 ]] || fail "git grep couldn't search the files for the downstream app's name (exit $status)"
     [[ -z $named ]] || fail "these use the downstream app's name: $named"
     if [[ $failed -ne 0 ]]; then exit 1; fi
     echo "gates: all hold"

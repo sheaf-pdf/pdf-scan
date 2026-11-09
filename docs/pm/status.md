@@ -2,8 +2,9 @@
 
 As of 2026-11-08.
 
-**Planning.** Nothing is built: the workspace has no `Cargo.toml`. It's a git repository, pushed on
-2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; `master`), holding `docs/pm/` alone.
+**Building S0 slice 1.** On its branch, the workspace and `sane-dl`'s first, empty cut (step 1 of 5). It's a
+git repository, pushed on 2026-11-08 to github.com/sheaf-pdf/pdf-scan (private; `master`), holding
+`docs/pm/` alone.
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -42,5 +43,6 @@ As of 2026-11-08.
   on the branch, nothing pushed.
 - **Next:** the slice's run, its code review and fixes; then Greg's review, and on his word the push and the
   pull request, CI on the three systems closing the slice. Then S0 slice 2, the seam note revised.
-- **Waiting on Greg:** the slice's review and its push; `asks.md`, asks 2 and 5; PL-1 to PL-3, ready to hand
-  off on his OK; PL-4, which first needs his call on pdf-lint's "the interpreter stays out" line.
+- **Waiting on Greg:** the slice's review and its push; `asks.md`, ask 5 (ask 2 taken as S0 slice 1 started,
+  `decisions.md`); PL-1 to PL-3, ready to hand off on his OK; PL-4, which first needs his call on pdf-lint's
+  "the interpreter stays out" line.

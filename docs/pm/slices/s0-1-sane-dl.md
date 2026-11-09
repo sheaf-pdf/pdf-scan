@@ -568,6 +568,9 @@ else the steps find.
     so the `readelf` gate is proven before step 2's FFI code leans on it.
 24. **The cancel token's flag is sticky** until a call returns `Cancelled` for it; page assembly reads
     blocking; `set_auto` takes no value and needs `SANE_CAP_AUTOMATIC`.
+25. **The name gate ignores case** (step 1): the stash's pattern as it was, with `grep -i`, so a sentence
+    that starts with the downstream app's name, capitalized, is caught too; the org's name in a URL still
+    passes.
 
 ## For Greg (security)
 
@@ -714,3 +717,94 @@ before it was acted on; the plan as drawn is kept at `scratch/work/s0-1/plan.bef
    it; a gate would bind a later slice for little.
 
 ## So far
+
+### Step 1: the workspace, and sane-dl's empty crate (2026-11-08)
+
+Commits `d0941e1` (the workspace) and the one that carries this account (ask 2 recorded, this section,
+and the repair after the check).
+
+- **What it does:** `/Cargo.toml` (resolver 3; members `crates/sane-dl` and `crates/fake-libsane`; no
+  `[workspace.dependencies]`, its comment saying when it returns; `[workspace.lints]` denying
+  `unsafe_op_in_unsafe_fn` and `clippy::undocumented_unsafe_blocks`, taken by both crates); `/Cargo.lock`
+  (resolved with 1.89 declared: the same versions as the probe's newest, libloading 0.9.0, thiserror
+  2.0.21, rusty-fork 0.3.1, tempfile 3.27.0); `LICENSE-MIT` and `LICENSE-APACHE` as stashed;
+  `.gitattributes` with the PNM types; the root README, scanner access first; the justfile; CI.
+  `sane-dl` 0.0.0, `publish = false`, `rust-version = "1.89"`, its four dependencies named, a crate doc
+  and `#![deny(unsafe_code)]` (the design's root rule, ahead of step 2's one module that allows it);
+  `fake-libsane` 0.0.0, `cdylib`, `publish = false`, no dependencies, a crate doc, the same root rule.
+- **The MSRV probe** (`scratch/work/s0-1/msrv-probe/`, its README): over `sane-dl`'s own graph, every
+  target, normal and build: libloading 0.9.0's 1.88.0 is the highest; with dev too, still 1.88.0
+  (getrandom 0.4.3 1.85 next; rusty-fork, fnv, quick-error and wait-timeout declare none). So 1.89, the
+  floor; the probe built and tested on 1.89 at the newest versions. The fake has no dependencies: 1.89.
+- **The gates** (`just gates`, needing `jq` and `readelf`, and failing at once, saying so, without
+  either): the devices layer's patterns over `cargo tree -p sane-dl --target all -e normal,build`;
+  `links = "sane"` over `cargo metadata`'s whole graph; `readelf -d` over the test harnesses (`cargo test
+  --no-run`, `profile.test` artifacts) and the workspace's `cdylib`s (`cargo build`, by target kind),
+  printing the count and failing if it's 0 (here 3: both crates' unit-test harnesses and
+  `libfake_libsane.so`); `fake-libsane`'s `publish` and every member's dependencies of any kind from
+  `cargo metadata --no-deps`; the name gate. They passed here with the new files still untracked.
+- **CI:** the check job on the three systems, its Ubuntu leg installing `libsane1` and `libsane-dev`
+  (`--no-install-recommends`), printing their versions, failing if `libsane1` lacks the `test` or `pnm`
+  backend, and setting `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1` for the steps after;
+  the gates job with both installed; `sane-dl-msrv` on `dtolnay/rust-toolchain@1.89`, its note to keep
+  it in step with `rust-version`. Read-only permissions, credentials not persisted, as S1 slice 1's
+  decisions 5 and 6.
+- **Ask 2** recorded in `decisions.md` (folded into "Asks 2, 6 and 7") and gone from `asks.md`; the four
+  places that pointed at it as open (`plan.md`, `sheaf/from-sheaf.md`, `milestones/later.md`, `status.md`)
+  now point at the decision, and `status.md`'s first line says the slice is building.
+- **Departures from the plan, and why:**
+  - *A make-fail as worded can't fail:* a build script's `cargo:rustc-link-lib=sane` alone links
+    nothing, since rustc passes `-Wl,--as-needed` first and nothing references libsane, so no binary
+    needs it and the gate rightly passes (a probe, `scratch/work/s0-1/step-1/make-fail.md`; mold, the
+    linker here, also folds a second `-lsane` into the first). The make-fail that does link prints
+    `cargo:rustc-link-arg=-Wl,--no-as-needed,-lsane`. The gate reads what binaries need, so a reference
+    to libsane in code no test reaches would slip past it (the linker drops dead code); the `links`
+    check, and `sane-dl` taking SANE's functions only as pointers from the loader, never as symbols,
+    cover that.
+  - *The name gate ignores case* (decision 25).
+  - *The require variables* are set by the step that installs SANE (`$GITHUB_ENV`), so they hold exactly
+    where SANE is installed, rather than on the test step by matrix.
+  - *`fake-libsane`'s checks read `cargo metadata`* (its `publish` and every member's declared
+    dependencies, dev and build included) rather than grepping the manifest and `cargo tree -i`, which
+    sees only resolved normal and build edges.
+  - *Crate READMEs and changelogs* wait for step 5, as the plan has them.
+- **Checked here:** `cargo fmt --check`, `clippy -D warnings`, `cargo test` and `cargo doc -D warnings`
+  (the justfile's recipes), `just gates`; the user's cargo home unchanged (names and times to depth 3,
+  before and after). Left for the checking agent: `just ci` with `sane-dl-msrv` on 1.89, the test list,
+  the gates' make-fails, `cargo tree`, the CI file's reading.
+- **Checked** before the repair (`scratch/work/s0-1/flow/checks.md`, "Step 1"): `just ci` with
+  `sane-dl-msrv` on 1.89; the test list (0 tests in 3 harnesses; no workspace before, so none lost);
+  `cargo tree -p sane-dl` against the devices layer's rule; the MSRV probe redone from the real lock's
+  metadata (libloading's 1.88.0 the highest, so 1.89) and the fake checked on 1.89; `cargo check` for
+  `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`; the user's cargo home unchanged; the gates with an
+  untracked file (3 binaries read), and every make-fail on a worktree, each violation named in its own
+  message; the CI file against S1 slice 1's decisions 5 and 6; the commits' messages and diff. All passed
+  but two, repaired in this commit:
+  1. *The devices layer's gate held having read nothing.* Cause: the loop read `deps` through a process
+     substitution (`done < <(deps "$crate")`, the stash's construct), whose exit status neither `set -e`
+     nor `pipefail` sees: with the loop naming `sane-dll`, cargo said no package matched and the gate said
+     "all hold". Fix: the list is taken first (`if ! list=$(deps "$crate")`), so a failing `cargo tree`
+     fails the gate; the crate must be in its own list, or the gate fails; the loop reads the list, and
+     the gate prints how many packages it read (10 for `sane-dl`), as the `readelf` gate prints its count.
+  2. *CI's backend check passed with either backend.* Cause: one `grep -E '(test|pnm)'` over `libsane1`'s
+     files, which matches if either is there, so the step failed only if both were missing. Fix: the file
+     list taken once into a variable and each backend looked for by name, the step printing the paths it
+     finds and failing with the name of the one that's missing; not `dpkg | grep -q`, which can fail on
+     SIGPIPE under `pipefail`.
+  - *With them, the name gate's swallowed errors* (the check's note, not counted as a failure): `git
+    ls-files | xargs grep … || true` held when git or grep couldn't read. Now `git grep -IilP
+    --untracked` over the same files (tracked, and untracked but not ignored, outside `docs/pm/`), with
+    only its exit 1, no match, allowed; a file deleted from the checkout but still tracked is skipped,
+    where `grep` failed on it. One narrowing: `git grep -I` also skips what `.gitattributes` marks binary,
+    so an ASCII PNM isn't read, where `grep -I` read one with no NUL bytes in it.
+  - *Checked again*, on a worktree under `scratch/work/s0-1/repair-1/` (removed after; the branch, status,
+    stash and worktree list unchanged): clean, with an untracked file holding the org's URL and an ignored
+    one naming the app, the gates pass (10 packages, 3 binaries); the loop naming `sane-dll` fails ("cargo
+    tree couldn't list"); the list's names swapped for versions (`awk`'s second field) fails ("isn't in its
+    own dependency list"); `GIT_DIR` pointing nowhere fails (git grep's exit 128); `png` taken by
+    `sane-dl`, the name in tracked `lib.rs` and in an untracked file, and `.gitattributes` deleted, fails
+    on `png` and those two files alone. CI's step, taken from the file and run under `bash -e` and under
+    `-eo pipefail` with stand-ins for `apt-get` and `dpkg`: passes on this machine's `libsane1` list (both
+    backends printed, both variables written), fails naming `pnm` on the list without it and `test` on
+    the list without it, and fails when `dpkg` does; the step as it was passed on the list without `pnm`.
+    Then `just ci` on the committed tree.

@@ -42,7 +42,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libsane1 libsane-dev
           dpkg-query --show libsane1 libsane-dev
-          dpkg --listfiles libsane1 | grep -E '/sane/libsane-(test|pnm)\.so' || { echo "libsane1 lacks the test or pnm backend" >&2; exit 1; }
+          files=$(dpkg --listfiles libsane1)
+          for backend in test pnm; do
+            grep "/sane/libsane-$backend\.so" <<< "$files" || { echo "libsane1 lacks the $backend backend" >&2; exit 1; }
+          done
           echo "SANE_DL_REQUIRE_LIBSANE=1" >> "$GITHUB_ENV"
           echo "SANE_DL_REQUIRE_HEADER=1" >> "$GITHUB_ENV"
       - name: Check formatting

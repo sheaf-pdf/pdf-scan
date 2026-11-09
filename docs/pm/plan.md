@@ -72,7 +72,7 @@ Ten crates in three layers, nine published and one for tests (details and bounda
   today.
 - **Barcode reading** (`sheaf_image::codes`, 237 lines over rxing): thin, and its policy (formats limited,
   QR first, going on past a code the caller turns down) is separator finding's. Stays with separation in
-  sheaf, unless ask 2 says otherwise.
+  sheaf, as ask 2 was taken (`decisions.md`).
 - **Separation:** finders and rules, sheaf's own `SHEAFSEP1` sheet, the review, bookmarks and splits. Core
   to sheaf (M5 ask 11, proposal 20), in sheaf's own format and ops.
 - **The intake pipeline and its landings:** batches, undo groups, documents with no file yet.

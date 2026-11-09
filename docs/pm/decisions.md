@@ -104,8 +104,14 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
     per step, code review, fixes; steered by a control file, restartable part-way.
   - The workflow's agents commit on the slice's branch as they go (the `Co-Authored-By` trailer, messages
     never naming sheaf); the branch isn't pushed and no pull request opened without Greg's word.
-- **Asks 6 and 7, taken as recommended as S0 slice 1 starts** (the asks' standing rule), each open to Greg's
-  review:
+- **Asks 2, 6 and 7, taken as recommended as S0 slice 1 starts** (the asks' standing rule), each open to
+  Greg's review:
+  - ask 2, the cut: ten crates, `scan-device` (the model, and its backends behind features), `sane-dl`,
+    `twain-dsm`, `scan-worker`, `scan-image`, `scan-cleanup`, `patch-codes`, `pdf-images`, `pdf-scan`, and
+    `scan-fixtures` (never published). SANE's and TWAIN's bindings are useful alone and nobody has them;
+    patch codes are the crate nobody else has; each layer's gate stays simple. Barcode reading stays with
+    separation in sheaf. S0 slice 1 depends on its device half: `sane-dl` a crate of its own beside
+    `scan-device`, so a SANE user takes no TWAIN types (recorded with the slice's step 1);
   - ask 6, the names: `scan-device`, `sane-dl`, `twain-dsm`, `scan-worker`, `scan-image`, `scan-cleanup`,
     `patch-codes`, `pdf-images`, `pdf-scan`, `scan-fixtures`;
   - ask 7, the standing rules: pdf-lint's, with the first narrowed: code, crate docs, crate READMEs and commit
