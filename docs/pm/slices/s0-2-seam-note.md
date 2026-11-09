@@ -108,8 +108,8 @@ give; what only the fi-6130 can show is said, and is TEST-9's.
   hands them over byte for byte (probe N1). **A name no longer listed answers `INVAL` from `sane_open`,** from the
   installed backends themselves with nothing attached, not from the fake (whose `INVAL` for an unlisted name is
   its own rule, so no evidence): while reviewing the plan, `scanimage -d` with an empty private configuration
-  opened `fujitsu:fi-6130dj:12345`, `fujitsu:libusb:001:004`, `canon_dr:`, `epson2:`, `avision:`, `kodak:` and
-  `xerox_mfp:libusb:001:004`, `pixma:04A91234_ABCDE`, `test:9`, `pnm:2` and `nosuch:0`, each answering "Invalid
+  opened `fujitsu:fi-6130dj:12345`, `libusb:001:004` under `fujitsu`, `canon_dr`, `epson2`, `avision`, `kodak`
+  and `xerox_mfp`, `pixma:04A91234_ABCDE`, `test:9`, `pnm:2` and `nosuch:0`, each answering "Invalid
   argument" in 0.02 to 0.55 s (`scratch/work/s0-2/review/stale-open.txt`; `dll`'s log shows `fujitsu` and `epson2`
   loaded by their prefix, `stale-open-dll.txt`). Probe N1 opens the same names through `sane-dl`, which reports
   `Status { INVAL, Open }`. So at open `INVAL` covers a device gone and a backend not installed (`nosuch:0`)
@@ -274,14 +274,15 @@ millimetres (decision 17). Names are the design's; slice 3 may rename and says s
   model 0), PGM and PPM byte for byte, 16-bit and 1-bit RGB through the `test` backend in the model's layout
   (the 16-bit conversion a function of the source's byte order, so its swap is unit-tested on CI's
   little-endian hosts), ids from Latin-1, the fallback on `INVAL` at open in a worker given the id's
-  one-backend `ConfigDir` (the fake listing a device under a new name), and the feeder keeping its sheets
-  after a cancel. Slice 2's own entry says it's done on its branch (step 3).
+  one-backend `ConfigDir` (`BeforeSystem`, naming none for an id with no backend: decisions 18 and 19; the fake
+  listing a device under a new name), decision 20's refusals before `sane_open`, and the feeder keeping its
+  sheets after a cancel. Slice 2's own entry says it's done on its branch (step 3).
 - **The backlog** (step 3): TEST-9 (slice 6's SANE questions: the fi-6130's name and what replugging does; a
   sheet pulled in before the page in flight ends; the back after a cancel after a front; its vendor and model
   strings); Q-4 (SANE's strings are Latin-1 by the standard: whether `sane-dl` gives vendor, model and kind as
   bytes too, where it now gives lossy UTF-8, settled by slice 5; written only as the study finds it, with what
-  backends are seen to send); and whatever the probes find. The README's counts recounted with `rg`, or left
-  out.
+  backends are seen to send); decision 20's refusals, slice 5's; and whatever the probes find. The README's
+  counts recounted with `rg`, or left out.
 - **Not changed:** `decisions.md` (the model's facts live in the note, this plan's decisions are for review),
   `crates/twain-dsm.md`, `plan.md` (slice 3 adds `in-progress` to its graph), `crates/scan-worker.md` (slice 4
   writes its protocol from the note's "What slice 4 needs", and the milestone's slice 4 points there), the PDF
@@ -529,12 +530,44 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     millimetres would make them inexact; `f32` as proposal 9's `dpi` already is. `Settings` then derives
     `PartialEq`, not `Eq`. The alternative, `u32` micrometres (exact for the three constants and for WIA's
     thousandths of an inch), needs a unit the name doesn't say; slice 3 may take it and say so.
-18. **The worker that opens a stored SANE id is started with a one-backend `ConfigDir` for that id's backend,**
-    so the fallback's listing runs in it, fast and confined to that backend: SANE reads its configuration once,
-    as it starts, so a worker can't narrow its own listing afterwards, and `ConfigDir` leaves the variable to the
-    caller. The client (slice 4) passes it at the spawn; the `sane` backend (slice 5) says what it needs. The
-    alternative, listing through the system's configuration in that worker, waits on every backend's probe (about
-    9 s here) and lets a listing cross backends, which security item 1 forbids.
+18. **The worker that opens a stored SANE id is started with a one-backend `ConfigDir` for that id's backend**
+    (none where `backend_of` gives none: decision 19), written `Search::BeforeSystem` (step 1's repair), so the
+    fallback's listing runs in it, fast and confined to that backend, while the backend still reads its own
+    `<backend>.conf` and `dll` the system's `dll.aliases` (decision 19): SANE reads its configuration once, as it
+    starts, so a worker can't narrow its own listing afterwards, and `ConfigDir` leaves the variable to the caller.
+    The client (slice 4) passes it at the spawn; the `sane` backend (slice 5) says what it needs. The alternative,
+    listing through the system's configuration in that worker, waits on every backend's probe (about 9 s here) and
+    lets a listing cross backends, which security item 1 forbids; an `Isolated` directory leaves a backend on its
+    built-in defaults and resolves no alias.
+19. **An alias needs nothing of its own: its worker's directory is decision 18's, naming the backend `backend_of`
+    gives, or none where it gives none, and the alias resolves there** (step 1, revised by its repair). An alias in
+    the system's `dll.aliases` is listed in place of the device's name and may be named anything: `Desk scanner`
+    has no `:` (probe N1, `backend_of` none), and `office:scan`'s `office` is no backend (the check's probe,
+    `backend_of` `Some("office")`), so nothing in a listing tells an alias from a backend's name. None is needed:
+    SANE takes each file from the first of its directories that holds one, so a `BeforeSystem` directory holding
+    `dll.conf` and an empty `dll.d` but no `dll.aliases` lists its own backends and resolves the system's aliases
+    at open (the repair's probe, a directory standing for the system's after it: `office:scan` opened `test`'s
+    device 0 through a directory naming `office`, `Desk scanner` `test`'s device 1 through one naming none, each
+    listing 0 devices). An alias whose name names no backend has no fallback, by construction: its listing finds
+    nothing, and `INVAL` is `Gone`; one named after the backend it aliases falls back within that backend, as any
+    id. No worker opening a stored id runs with the system's `dll.conf`. The first version of this decision gave an
+    id with no backend before a `:` the system's configuration and left the directory's search unsaid: it missed
+    the alias with a colon (an `Isolated` directory naming `office` answers `INVAL`: `Gone` though there), and sent
+    `:0` to the system's last-listed backend (decision 20). The alternative, reading `dll.aliases` ourselves to
+    find the alias's backend, reads SANE's configuration files, which `sane-dl` leaves to SANE.
+20. **The `sane` backend refuses, before `sane_open`, an id whose name starts with one of `dll`'s testing
+    prefixes** (`fakeusb:`, `fakeusbdev:`, `fakeusbout:`) **or with `:`, or is empty** (step 1; the last two
+    added by its repair): no listing gives the first, and through them a name makes SANE replay USB traffic from
+    a file the name gives, or record into one (`backend/dll.c`; probe N1). A name whose backend part is empty
+    goes to `dll`'s first backend, the last its `dll.conf` lists (`sane_open`; `add_backend` puts each before the
+    others): `:0` opened `pnm:0` through a configuration naming `test` then `pnm` (the check's probe), the
+    device of sane-dll(5)'s "default backend", which the id never named. In decision 19's directory it reaches
+    that directory's backend or answers `INVAL` (the repair's probe: `:0` and the empty name through a directory
+    naming none), so the refusal gives a malformed id its own error, not `Gone`, and doesn't rest on which
+    directory a worker was given. No backend forms such a name through `dll`; an alias named with a leading `:`
+    is refused too, a limit. Slice 5's, its backlog item written in step 3. An empty name after the backend
+    (`fujitsu:`), or a backend's name alone (`fujitsu`), which opens the backend's first device, isn't refused:
+    it stays within the backend the id names, as the fallback does.
 
 ## For review (security)
 
@@ -550,7 +583,20 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
 4. **The probes load SANE only through private configuration directories,** and `pnm` reads only the files the
    probe wrote. N1's stale names load installed backends by prefix (`fujitsu`, `canon_dr`, `epson2`, `avision`,
    `kodak`, `xerox_mfp`, `pixma`), each of which looks for its scanners on USB and finds none: reads only, with
-   no configuration file of theirs in the private directory.
+   no configuration file of theirs in the private directory. *Corrected in step 1:* `pixma`'s open also
+   broadcasts its network discovery (BJNP) on each IPv4 and IPv6 interface, loopback skipped (seen with
+   `SANE_DEBUG_BJNP`), as any open of a `pixma` name no longer there does, so N1 sent discovery packets on the
+   local network, and found no scanner. `kodak` looks on SCSI, not USB.
+5. **A stored SANE id reaches `dll`'s own name rules** (step 1, probe N1; its repair): `fakeusb:<file>` makes
+   SANE read and parse an XML file the id names (a missing one answered `ACCESS_DENIED` after libxml2 tried to
+   load it), `fakeusbout:<file>:<name>` makes it record a USB backend's traffic into one, a name whose backend
+   part is empty (`:<device>`, or the empty name) opens a device of `dll`'s first backend, the last its
+   `dll.conf` lists, which the id never named, and an empty name after the backend opens that backend's first
+   device. No listing gives a testing prefix and no backend an empty backend part, so the `sane` backend refuses
+   both before `sane_open` (decision 20), beside item 2's checks; the empty name after a backend stays within
+   it. An alias resolves through the system's `dll.aliases` in the worker (decision 19) and opens the device the
+   system's listing showed under it, on whichever backend the alias names: the system's configuration, which the
+   listing trusts already, not a fallback, which stays within the directory's backend (item 1).
 
 ## Risks
 
@@ -684,3 +730,128 @@ before it was acted on; the plan as drawn is kept at `scratch/work/s0-2/plan.bef
 7. *`cargo check --target x86_64-pc-windows-gnu`:* no code changes; the plan's "Left out" already says so.
 
 ## So far
+
+### Step 1: SANE as slice 1 and the probes found it: the SANE rows (2026-11-09)
+
+One commit, the one that carries this account. Docs only: `crates/scan-device-seam.md` and this plan.
+
+- **What it does:** the note's revision paragraph, above slice 7's and saying it came after; the SANE rows of
+  sections 1, 2, 3, 5, 6 (its three SANE cells, and a paragraph on `sane-dl`'s statuses and
+  `LoadError::NotFound`), 7 and 8, as `sane-dl` gives SANE and as the probes found it; SANE sentences added to
+  the "To settle" of sections 1, 2 and 6; a table of SANE's names, a row per backend with its source (section
+  1); the two SANE unknowns answered, names that change on replugging (section 1, with the fallback's listing in
+  a worker started with the id's one-backend `ConfigDir`) and stopping after the page in flight (section 7),
+  each with what only slice 6 settles; the unknowns table's two SANE rows rewritten in place. Nothing of the
+  model's paragraphs yet (step 2), but where a SANE answer names it (the Latin-1 id, the fallback, decisions 18
+  to 20). Slice 7's TWAIN rows, its TWAIN paragraphs and the TWAIN unknowns are byte for byte as at `4624760`:
+  every line of that note missing from this one is a SANE row, a SANE cell's row of section 6 (its TWAIN, WIA and
+  ICA cells equal), or a first-version "To settle" line, checked by a script over both files. Section 7's "To
+  settle" is left as it was, since slice 7's TWAIN text shares its lines; the answer is a paragraph after it.
+- **The probes** (`scratch/work/s0-2/probes/`, its `README.md` holding how to run them and each output quoted;
+  `run.sh`; a crate `seam-probe` taking `sane-dl` by path, an empty `[workspace]` and its own lock, built
+  `--offline`; the fake built from `/crates/fake-libsane/` into a target directory there): one scenario a
+  process, in the memory scope, under `timeout` (no try needed again), through an isolated `ConfigDir` written
+  by `sane-dl` or through the fake.
+  - *N1, names:* `test` and `pnm` listed in 0.001 s (`pnm:0`, `pnm:1`, `test:0`, `test:1`), as `scanimage -L`
+    lists them. Through the fake, `fujitsu:fi-6130dj:12345`, `canon_dr:libusb:001:004`, a name with a Latin-1
+    byte (`epson2:net:caf\xe9.local`) and one with UTF-8 bytes given byte for byte, each made a Latin-1 id and
+    back to equal bytes, and opened by them (the fake opens only a listed name); the vendor's Latin-1 byte lost
+    to lossy UTF-8 (`"Caf\u{fffd} Scan"`: Q-4's case). The eleven stale names, through a configuration naming no
+    backend: each `Status { status: Status::INVAL, call: Open }`, the backend's own log showing the open
+    reaching it (`fujitsu`, `canon_dr` and `kodak` ending `no device found`, `epson2` `open failed: Invalid
+    argument`, `test` `device '9' not found`), `nosuch:0` `INVAL` from `dll` (`couldn't find backend`); 0.000 to
+    0.020 s, `pixma` 0.534 s (the review's `scanimage` run: the same eleven, "Invalid argument").
+  - *S1, stopping* (`test:0` at 10 dpi from its feeder; the fake with `sheets 10`; the same counts on both
+    unless said): a batch dropped after 3 pages, then `(7, Start)`, then `(10, Start)` on `test` and `(0,
+    Start)` on the fake, which doesn't fill again; `sane_cancel` after a page's `EOF`, then `start 2: GOOD`, then
+    a batch `(8, Start)`; the token midway through page 2 (`at 640 of Some(1209) bytes`, the fake's `32 of
+    Some(64)`), `page 2: Cancelled`, then `(8, Start)`; the token after page 1 returned, `page 2: Cancelled`,
+    then `(9, Start)`, the fake's log holding no `sane_start` between. The fake's duplex: a batch ended after
+    page 1 (`F`), the next batch's first page `B`, page 2. No `violation` in any of the fake's logs.
+  - *L1, SANE's samples* (`test:0` at 50 dpi, 157 by 196): gray 1 `Solid black` every byte `0xff`, padding bits
+    included, `Solid white` `0x00`; gray 8 and RGB 1 and 8, black `0x00` and white `0xff`; RGB 1's stride 60
+    (3 × 20), its `Color pattern` row 0 eight bars of `000` to `111` as R G B bits; a three-pass page with its
+    frames in the order blue, green, red equal byte for byte to the one-pass page, at 1 and at 16 bits; a 16-bit
+    gray page, each sample swapped, equal to `scanimage`'s PGM (`P5 157 196 65535`; 29,223 of 30,772 samples
+    with two different bytes); a 13 by 3 PBM through `pnm` given back byte for byte (`b3 af 00 07 ff f8`), its
+    set padding bits included.
+- **Departures from the plan, and why:**
+  - *`canon_dr` names by its connection alone*, not by model and serial as the plan expected: the lines that
+    would use `init_serial` are commented out at `a113b257`. *`kodak` is SCSI*, its names device paths (its
+    models speak SCSI and FireWire; sane-kodak(5)), not a USB connection; its stale `libusb` name still answered
+    `INVAL` from `kodak`. *`plustek` names by its configuration's `device` line* (`auto` by default). The
+    note's table says what was found.
+  - *N1 gained two scenarios:* an alias in `dll.aliases`, and `dll`'s USB testing prefixes (`fakeusbout:`,
+    `fakeusb:`), both name rules of `dll` that a stored id meets: decisions 19 and 20, security item 5. Found on
+    the way: a name with no `:` is read by `dll` as a backend's name (`backend/dll.c`, and the alias probe), not
+    as the default backend's device, as sane-dll(5) says.
+  - *`pixma`'s open broadcasts its network discovery:* security item 4 corrected.
+  - *1-bit RGB's channel order shown through three-pass*, the frames labelled by SANE, not beside the 8-bit
+    page: the `test` backend draws its 1-bit `Color pattern` apart from its 8-bit one (a comparison at a
+    threshold of 128 differed in about half the samples), so there's no third party for 1-bit RGB here, as the
+    plan said of `scanimage`.
+  - *The fake's names include a UTF-8 one,* to show the Latin-1 id goes back byte for byte whatever the bytes.
+  - *The `airscan` row cites sane-airscan(5) alone:* slice 1's copy of its `airscan.c` has no commit recorded.
+  - *SANE as installed says `1.2.1-debian`* (`scanimage --version`, and `dll`'s and `pnm`'s debug lines),
+    though the packages are 1.4.0-1ubuntu1: the build's version string; the note keeps "1.4.0", the packages'.
+- **Decisions taken alone:** 19 and 20 above; the names table placed in section 1 after its API table, and the
+  answers as paragraphs of their own in sections 1 and 7, so no TWAIN line moves.
+- **Quick checks here:** `git diff --stat` touching `docs/pm/` alone; the trial merge (`git merge-tree
+  --write-tree --name-only` of a commit of this tree and `origin/s0-8-twain-dsm` at `0f08bb0`) conflicting in
+  the six files of `4624760` alone, the seam note merging cleanly, slice 8's paragraph landing after slice 7's;
+  the TWAIN lines as above; the diff and this message scanned for local paths, the maintainer's name and
+  pdf-lint's plan. The test list as the slice's base, the probes run again and the other checks of the core are
+  the checking agent's; `just ci` isn't run (no file outside `docs/pm/` changed; Baselines).
+- **Its check** (at `f0fc619`; record in `scratch/work/s0-2/flow/checks.md`, "Step 1"): the test list at
+  `4624760` and at `f0fc619` 245 tests, the same names (the slice's base); nothing outside `docs/pm/` changed;
+  the message and added lines free of local paths, the maintainer's name and pdf-lint's plan; the trial merge
+  against `0f08bb0` and against slice 8's current tip `6ca9a2d` conflicting in the six files of `4624760` alone;
+  `just gates` holding; every cited path, section, man page and studied line found; N1, S1 and L1 run again from
+  the README, each output the step quotes reproduced; each names-table row held against its source; the TWAIN
+  lines byte for byte as at `4624760`. Two failures, both of `dll`'s name rules, and six minor wordings.
+- **Repaired after its check** (amending this step's commit, docs only):
+  - *`dll`'s fourth name rule was missed.* The note said three rules and that a name without a `:` isn't
+    sane-dll(5)'s default backend's, but `sane_open` has a fourth: a name whose backend part is empty
+    (`:<device>`, and the empty name) opens on `dll`'s first backend, the last its `dll.conf` lists
+    (`backend/dll.c` at `a113b257`, `sane_open`'s `if (!be_name[0]) be = first_backend;`; `add_backend` puts each
+    before the others). The check's probe: `:0` through a configuration naming `test` opened `test`'s device 0,
+    through one naming `test` then `pnm` `pnm:0`. With `backend_of(":0")` `None`, the first decision 19 sent such
+    an id to the system's configuration, where it opens a device of a backend the id never named. *Cause:* step
+    1 read `sane_open`'s branch for a name without a `:` and not the one after it. *Fixed:* the note's paragraph
+    gives the rule and says the default backend lives on there; decision 20 refuses an id whose name starts with
+    `:` or is empty, beside the testing prefixes; security item 5 lists it.
+  - *Decision 19 took `backend_of`'s `None` for an alias,* but an alias may hold a colon: `alias office:scan
+    test:0` lists `office:scan`, `backend_of` `Some("office")` (the check's probe), so decision 18's worker got a
+    directory naming `office`, no backend, and, `Isolated`, no aliases: `INVAL` (the check's probe through a
+    directory naming `test`, the repair's through one naming `office`), and `Gone` though the device is there.
+    *Cause:* the alias probe tried one alias, without a colon. *Fixed:* decisions 18 and 19 revised, for review:
+    the worker's directory is written `Search::BeforeSystem` and names `backend_of`'s backend or none; SANE takes
+    each file from the first of its directories that holds one, so that directory's `dll.conf` and empty `dll.d`
+    decide what lists while the system's `dll.aliases` still resolves an alias at open, whatever its name; no
+    worker opening a stored id runs with the system's `dll.conf`, and an alias whose name names no backend has no
+    fallback by construction. The note's section 1 model paragraph says so; security item 5 says an alias opens on
+    the backend the system's alias names, which the listing trusts already.
+  - *The repair's probe* (`scratch/work/s0-2/repair-1/`, `run.sh` and `out/`; `seam-probe` as built for N1, each
+    case a process in the memory scope under `timeout`; a one-backend directory written by `sane-dl` placed
+    before a private one standing for the system's, `SANE_CONFIG_DIR="<one>:<system>"`, as `BeforeSystem` places
+    it before `/etc/sane.d`, which isn't read; the stand-in naming `test` and `pnm` and holding `alias
+    office:scan test:0` and `alias "Desk scanner" test:1`): through a directory naming `office`, `office:scan`
+    opened `test`'s device 0 (`dll`'s log adding backend `test`, `test`'s `sane_open: devicename = "0"`, GOOD)
+    and the listing found 0 devices (`dll` finding no backend `office`), while through that directory alone
+    (`Isolated`) the open answered `INVAL`; through a directory naming none, `Desk scanner` opened `test`'s device
+    1 and the listing found 0; through one naming `test`, the listing gave `office:scan` and `Desk scanner`, the
+    system's aliases applied, and `test:9` answered `INVAL` from `test`; through the stand-in alone, `:0` opened
+    `pnm`'s device 0 and the empty name and `:` `pnm`'s first (`devicename = ""`); `:0` through a directory naming
+    `test` opened `test`'s device 0, and `:0` and the empty name through one naming none answered `INVAL`, `dll`
+    finding no backend `''`. rc 0 each, no timeout.
+  - *The minor wordings, while there:* `avision`'s 97 USB lookups are of 94 ids (some twice; N1's log);
+    `fakeusb:<file>` and `fakeusbdev:<file>` take the rest of the name as the file, `fakeusbout:<file>:<name>` a
+    name after it (`dll.c`); the `plustek` row says what of its naming isn't read (`plustek-usb.c`); `pixma`'s
+    broadcast goes out on each IPv4 and IPv6 interface, loopback skipped (step-1's BJNP log), in the note and
+    security item 4; section 1's lock is every call's but `sane_cancel`'s, as section 8 and `sane-dl`'s README say;
+    the design's list of the review's stale names gives each `libusb:001:004` as the review's run opened it.
+  - *Checks run again,* on the amended commit: the repair's probe above, and the check's `:0` results reproduced
+    by it; every changed line traced to `dll.c`, a probe's output or the README; the trial merge against `0f08bb0`
+    and `6ca9a2d`; the TWAIN lines against `4624760`; the diff and message scanned. Left out: `just ci` and the
+    test list (nothing outside `docs/pm/` changed since `4624760`; the check's list stands), the other probes
+    (no claim of theirs changed).
