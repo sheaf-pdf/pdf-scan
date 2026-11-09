@@ -1,7 +1,8 @@
 # S0 slice 3: scan-device, provisional
 
-Status: **done on branch `s0-3-scan-device`** (2026-11-09), waiting on review, the push and its pull request
-against `master`: its four steps, each checked, then its code review's 18 findings, all fixed ("Code review").
+Status: **done on branch `s0-3-scan-device`** (2026-11-09), pushed, in pull request #6 against `master`
+(`master` merged in after #5), waiting on review and CI: its four steps, each checked, then its code review's
+18 findings, all fixed ("Code review").
 The branch was made by the plan review from `6f01d7f` (slice 2's tip, as the run set it), then moved by the
 main session onto `master` at `3f33be5` before step 1, the base the steps are written for ("Taken as it
 starts", decision 1). Milestone: `milestones/s0-devices.md`, slice 3.

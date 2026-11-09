@@ -65,15 +65,15 @@ S1 back: S1 can start once the Linux slices are done.
    taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
    row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
    copy (an image codec added to `scan-device`).
-   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), waiting on review, the push and its pull
-   request: branch `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes), then
-   the record; four steps, each checked, then its code review's 18 findings (15 distinct, 1 major) all fixed.
+   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), pushed, in pull request #6, waiting on
+   review and CI: branch `s0-3-scan-device`, from `master` at `3f33be5`, to `5a5c367` (the code review's fixes),
+   then the record, and `master` merged in after #5; four steps, each checked, then its code review's 18 findings (15 distinct, 1 major) all fixed.
    `scan-device` 0.0.0, unpublished, MSRV 1.89: the note's model type for type, nothing renamed, with a
    constructor for each `#[non_exhaustive]` struct, `RawImage::data_len` and `Debug` by hand for `Opened` besides
    (`crates/scan-device.md`); the `fake` feature, turned on for the crate's tests by a dev-dependency on itself,
-   its scripts Rust values, every script of proposal 22 tested (here on Linux; on Windows and macOS by CI once
-   pushed: TEST-13), the crash and the exit in child processes; the gates reading each devices crate's graph,
-   and building the binaries they read for libsane, with every feature on, `scan-device` among them, and failing
+   its scripts Rust values, every script of proposal 22 tested (here on Linux; on Windows and macOS by CI on
+   pull request #6: TEST-13), the crash and the exit in child processes; the gates reading each devices crate's
+   graph, and building the binaries they read for libsane, with every feature on, `scan-device` among them, and failing
    on a codec added as a dependency and as one behind a feature. The code review's major finding: `RawImage`'s
    sizes now held to what one buffer can hold (`isize::MAX`), where a 32-bit reader sizing its buffer by
    `data_len` could panic; and `Paper` made `#[non_exhaustive]`, a change to the note's block. For review: the
@@ -140,12 +140,13 @@ S1 back: S1 can start once the Linux slices are done.
    against `twain.h` 2.5, the state
    machine, the STA thread and hidden top-level window, capabilities, transfers, condition codes; built for
    both targets. It exposes what the seam needs (`crates/twain-dsm.md`, "For the seam").
-   - **Built 2026-11-08** (`slices/s0-8-twain-dsm.md`), safe by construction (`decisions.md`): its six steps
+   - **Built 2026-11-08** (`archive/slices/s0-8-twain-dsm.md`), safe by construction (`decisions.md`): its six steps
      on branch `s0-8-twain-dsm`, each pushed; generated bindings and a header contract in both bitnesses; the
      DSM loaded only after its signer is checked; TWAIN's states as owned types on the caller's thread, a
      record apart from them that the teardown trusts; capabilities, both transfers, both deliveries, cancels
      and requests, tested through the sample source in both bitnesses. `twain-spike` is deleted, its record
-     kept. Code-reviewed and fixed 2026-11-09; CI green on pull request #4 and approval close it.
+     kept. Code-reviewed and fixed 2026-11-09. **Closed 2026-11-09:** CI green on pull request #4, every job,
+     merged.
 9. **scan-device's `twain` backend** and a 32-bit worker in CI (`i686-pc-windows-msvc`, the worker alone),
    the client's merge of both lists. The model's changes the backend asks for are made here, in
    `scan-device`, the `fake` and `sane` backends and the worker's protocol together. Checked: 10 images
