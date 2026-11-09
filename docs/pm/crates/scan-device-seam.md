@@ -537,6 +537,10 @@ no caller (S0 slice 2's code review).
 
 ## The model, for slice 3
 
+**Built as written by S0 slice 3** (2026-11-09, `slices/s0-3-scan-device.md`), every name kept: what
+`scan-device` adds to the block (a constructor for each `#[non_exhaustive]` struct, `RawImage::data_len`,
+`Debug` by hand for `Opened`, the `fake` backend) is said in `crates/scan-device.md`.
+
 **Written by S0 slice 2, for review** (its decisions in `slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
 builds, proposal 9's model with this note's changes ("Changes from proposal 9's model"). Names are the
 design's: slice 3 may rename and says so, and the model stays provisional until slice 11 freezes it. Plain

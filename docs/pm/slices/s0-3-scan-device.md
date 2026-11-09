@@ -1090,3 +1090,61 @@ slowest; the gates' graph of `scan-device` still 8 packages.
   didn't name; a device gone answering `Gone` from every backend that holds it, where the plan said every later
   call; 27 make-fails where the plan named four. No other: names as the design has them.
 - **Decisions:** 35 to 41 ("Taken in the steps").
+
+**Step 4, the plan's files; the slice's end** (2026-11-09; one commit, "Record S0 slice 3 in the plan's files", on
+`b798a34`; docs only, `docs/pm/` alone). The checks before it: step 3's check passed on `b798a34`
+(`scratch/work/s0-3/flow/checks.md`): `just ci` green with SANE required, run after `cargo clean -p scan-device` so
+clippy ran fresh, `scan-device-msrv` on 1.89 with `rusty-fork` built; 358 tests, 19 added, all in `fake_faults`,
+none lost; clippy with `--all-targets --all-features -D warnings` clean for `x86_64-pc-windows-gnu` and
+`x86_64-apple-darwin`; `cargo doc` without the feature clean; the three binaries with timing tests run 50 times
+each, 8 at a time, in the memory scope, 150 runs, none failing (the crash test takes about 1.1 s here, up to 7.45 s
+with 8 at once, since each abort goes to the system's crash handler one at a time: this machine's, far under the
+test's 60 s); the plan's four batch mutations each failing tests (2, 14, 1 and 1, and 9), and one of the check's
+own (a jammed sheet put back at the feeder's tail: one test, the only one that tells head from tail); the MSRV
+over the graph `rusty-fork` joins, 25 packages, highest 1.85, so 1.89 stands, and `cargo tree -e normal,build
+--all-features` the same 8 packages. It found the unit tests no longer building for `wasm32-wasip1` since
+`rusty-fork` joined (its `wait-timeout`, `E0433`), as decision 5 foresaw: filed below.
+
+- **`crates/scan-device.md` as built:** an "As built" head (0.0.0, `publish = false`, the model and `fake`, MSRV
+  1.89, `#![forbid(unsafe_code)]` and `#![warn(missing_docs)]`); what the crate adds to the note's block (the six
+  constructors and their defaults, `RawImage::new`'s refusals in order and `data_len`, the platform's limit a
+  parameter, `Debug` by hand for `RawImage`, `Encoded` and `Opened`, `pub use in_progress`, the modules); the
+  `fake` backend as built (the feature and the self dev-dependency, the scripts' items, the default caps and the
+  mistakes that panic, listing and opening, a batch and its clamp rules, the faults); the boundary as the gates
+  now read it (every feature on; 8 packages); the dependencies (`in-progress`'s caret and re-export, `thiserror`,
+  each backend's binding by slice, the tests' two); the MSRV and how it was measured; its 112 tests; "Open" with
+  printscan's check for this slice and Q-5. "Stability" unchanged.
+- **The rest:** `crates/README.md`'s `scan-device` line (built, 0.0.0, not published); `plan.md`'s family row and
+  its graph (`in-progress` under `scan-device`, the arrow to it as `pdf-scan`'s to what it takes; the fixtures'
+  lines a line lower for it); the note's "The model, for slice 3" headed by one sentence (built as written, the
+  additions in `crates/scan-device.md`), off every TWAIN line; the milestone's slice 3 entry (done on the branch,
+  waiting on review, 41 decisions and 5 security items, the code review next); `decisions.md`'s MSRV bullet right
+  after `sane-dl`'s; `status.md`'s line for the slice, after slice 2's, and its "Waiting on review" (slice 3's
+  counts) and "Next" (slice 3's code review) lines kept true; `slices/README.md`'s line, after slice 2's.
+- **The backlog,** read again from `origin/master` as the step started (it had moved to `8276ad1`, pull request
+  #5, closing slice 8, which touched no backlog file: the next free IDs still TEST-12, FEAT-13, BUG-8, DOC-2, Q-5
+  and UP-14; slice 1a's branch takes none so far): **TEST-12** (`RawImage`'s layout tests on a 32-bit `usize`
+  again, in CI: the `twain-dsm` job's `i686-pc-windows-msvc`, where `rusty-fork` builds, or slice 9's 32-bit
+  worker job) and **Q-5** (the packaged crate's tests without the fake: packaging drops the path-only
+  dev-dependency on itself, so from a `cargo package` of the crate the three fake test files don't build and the
+  crate docs' example fails as a doctest, while the layout's tests pass; a probe of `cargo package --no-verify` and
+  of the unpacked crate's tests, in a target directory under `scratch/work/s0-3/step-4/package-probe/`, removed
+  after; for slice 11). Each in the README's format, counted into its table again with `rg` (S0 17, all 47).
+- **Checks, the implementation's:** the diff is `docs/pm/` alone, so `just ci` isn't run (no build, test or gate
+  reads `docs/pm/`; step 3's run on the same code stands); `cargo fmt --all -- --check` and `cargo clippy --locked
+  --workspace --all-targets --all-features -- -D warnings` clean all the same. Neither new ID is on `origin/master`
+  (`git grep`, at `8276ad1`, finds each only as the next free one). `scan-device`'s publish dry run not run:
+  `publish = false` until slice 11 (the probe above packages without publishing or verifying). The branch's five
+  commit messages read for the maintainer's name, local paths, `scratch/`, the downstream app and pdf-lint's plan:
+  none. `git grep -i` for the maintainer's name: the root `LICENSE-MIT` alone. Every path the edited lines cite
+  found. A trial merge of the step's tree with `origin/master` (`git merge-tree`) conflicts in the root
+  `README.md` alone, step 1's `scan-device` row beside the `twain-dsm` row #5 rewrote; every `docs/pm/` file merges.
+- **What only CI shows:** the fake's tests on Windows and macOS (the crash child's exit there, `0xC0000409` and
+  `SIGABRT`; the exit's code 42; the 10 s and 300 ms timing tests and the crate docs' example on slower runners),
+  clippy on `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (checked here as `windows-gnu` and
+  `x86_64-apple-darwin`), `scan-device-msrv` as CI's job on 1.89, and the gates on `ubuntu-latest`'s SANE.
+- **Departures:** `status.md`'s "Waiting on review" and "Next" lines changed beside its new line, so neither says
+  what's no longer so; its head paragraph, slice 8's entries and the merged state of slices 1 and 2 left as they
+  are (`master`'s lines; the fix stage's bookkeeping). The 32-bit run's end filed as TEST-12 and said in
+  `crates/scan-device.md` both, where the step's check offered either.
+- **Decisions:** none new for review; the counts stay 41 and 5.

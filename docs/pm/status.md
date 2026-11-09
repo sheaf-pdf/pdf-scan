@@ -69,9 +69,15 @@ machine, code-reviewed and fixed, in pull request #4, rebased onto `master` afte
   raw layout fixed, and the model written down for slice 3, then revised by its code review (25 findings
   fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
   1's; CI's run on the three systems then shows nothing of its own (docs only).
+- **Done on its branch: S0 slice 3, `scan-device` provisional** (`slices/s0-3-scan-device.md`;
+  `s0-3-scan-device`, from `master` at `3f33be5`), through the `scan-slice` workflow: four steps, each checked;
+  its code review and fixes next. `scan-device` 0.0.0, unpublished, MSRV 1.89: the seam note's model as written,
+  with a constructor for each growing struct and `RawImage::data_len`, and the `fake` backend, every script of
+  proposal 22 tested; the gates read each devices crate's graph with every feature on. TEST-12 and Q-5 filed.
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
   (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
-  8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the
-  maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 3, `scan-device` provisional, once slice 2's pull request is open; then slice 4 on
-  Linux. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+  3 (41 and 5); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3,
+  ready to hand off on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the
+  interpreter stays out" line.
+- **Next:** S0 slice 3's code review and its fixes, then its pull request; then slice 4 on Linux. On Windows,
+  slice 9 (the `twain` backend), once slices 3 and 4 are done.

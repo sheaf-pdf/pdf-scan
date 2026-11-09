@@ -130,6 +130,11 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   target) is libloading 0.9.0's 1.88, below the family's floor, so 1.89. CI tests it on 1.89
   (`sane-dl-msrv`, its pin kept in step with the manifest's `rust-version`). `fake-libsane`, with no
   dependencies, takes the same.
+- **`scan-device`'s MSRV is 1.89** (S0 slice 3, 2026-11-09, measured as `sane-dl`'s was): the highest
+  `rust-version` in its own graph (`cargo tree -p scan-device`, normal, build and dev, on every target; 25
+  packages) is 1.85, `in-progress` 0.1.0's and `getrandom` 0.4.3's (through `rusty-fork`'s `tempfile`), below the
+  family's floor, so 1.89. CI tests it on 1.89 (`scan-device-msrv`, its pin kept in step with the manifest's
+  `rust-version`).
 - **S0 slice 7, the TWAIN spike, runs on the Windows machine ahead of slices 2 to 6** (2026-11-08: "we
   can write a slice plan here"), while slice 1 runs on Linux. It depends on nothing they build; it revises the
   seam note's TWAIN rows before slice 2 revises its SANE ones. Slice 8 still follows it; slice 9 still waits on

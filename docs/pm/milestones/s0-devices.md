@@ -63,6 +63,15 @@ S1 back: S1 can start once the Linux slices are done.
    taken as gone, and a batch held by a full channel; `RawImage::new`'s checks unit-tested (the length, a 1-bit
    row's padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped); the gate made to fail on a
    copy (an image codec added to `scan-device`).
+   **Done on the branch** (2026-11-09; `slices/s0-3-scan-device.md`), waiting on review: branch
+   `s0-3-scan-device`, from `master` at `3f33be5`, four steps, each checked; its code review and fixes next.
+   `scan-device` 0.0.0, unpublished, MSRV 1.89: the note's model type for type, nothing renamed, with a
+   constructor for each `#[non_exhaustive]` struct, `RawImage::data_len` and `Debug` by hand for `Opened` besides
+   (`crates/scan-device.md`); the `fake` feature, turned on for the crate's tests by a dev-dependency on itself,
+   its scripts Rust values, every script of proposal 22 tested (here on Linux; on Windows and macOS by CI once
+   pushed), the crash and the exit in child processes; the gates reading each devices crate's graph with every
+   feature on, `scan-device` among them, and failing on a codec added as a dependency and as one behind a feature.
+   For review: the plan's "Decisions taken alone, for review" (41) and "For review (security)" (5).
 4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What slice
    4 needs of it" has it: an `open` request carrying the stored `DeviceInfo` and a deadline, answered with
    `renamed_from` and the device found, before `caps` and `scan`, the worker chosen by the device's driver; an

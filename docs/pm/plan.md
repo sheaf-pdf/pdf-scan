@@ -33,7 +33,7 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 
 | Crate | Layer | What | Starts from |
 |---|---|---|---|
-| `scan-device` | devices | The device model (devices, what each can do, settings, pages, errors) and backends behind features: `fake`, `sane`, `twain`, `wia` | M5 proposals 5, 7 to 10, 22; unbuilt |
+| `scan-device` | devices | The device model (devices, what each can do, settings, pages, errors) and backends behind features: `fake`, `sane`, `twain`, `wia` | M5 proposals 5, 7 to 10, 22; the model and `fake` built in S0 slice 3 (0.0.0, provisional, unpublished) |
 | `sane-dl` | devices | SANE loaded at run time: its own bindings from `sane.h`, a safe handle, cancel from another thread, frames assembled | M5 proposal 6; built in S0 slice 1 (0.1.0-alpha.1, unpublished) |
 | `twain-dsm` | devices | TWAIN through the Data Source Manager loaded at run time: bindings, the state machine, a hidden window and its messages, 32- and 64-bit | M5 proposal 7; unbuilt |
 | `scan-worker` | devices | Drivers out of process: the protocol, the worker's loop over any backend, the client with its watchdog | M5 proposal 4; unbuilt |
@@ -52,9 +52,11 @@ Eleven crates in three layers, nine published and two for tests (details and bou
  twain-dsm ─┼─► scan-device ◄── scan-  scan-cleanup  (image, imageproc,      │         pdf-content-streams,
  windows ───┘   (model, backends,      worker         in-progress)           │         pdf-semantics, pdf-filters
                 fake)                  patch-codes   (image)                 ▼
-                                                                         pdf-images ──► pdf-objects, pdf-filters, pdf-color;
-                                                                                        zune-jpeg, hayro-ccitt,
- scan-fixtures (dev-dependency of any)                                                  hayro-jbig2, hayro-jpeg2000
+                  │                                                      pdf-images ──► pdf-objects, pdf-filters, pdf-color;
+                  ▼                                                                     zune-jpeg, hayro-ccitt,
+                in-progress                                                             hayro-jbig2, hayro-jpeg2000
+
+ scan-fixtures (dev-dependency of any)
  fake-libsane (built and loaded by path by sane-dl's tests; nothing depends on it)
 ```
 

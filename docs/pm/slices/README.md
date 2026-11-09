@@ -12,6 +12,9 @@ and it moves to `archive/slices/` once merged).
 Done on its branch, its code review's findings fixed: [`s0-2-seam-note.md`](s0-2-seam-note.md), S0 slice 2,
 the seam note revised (three steps, docs only; its pull request to be stacked on slice 1's).
 
+Built on its branch, its code review next: [`s0-3-scan-device.md`](s0-3-scan-device.md), S0 slice 3,
+`scan-device` provisional (four steps, each checked; branch `s0-3-scan-device`, from `master` at `3f33be5`).
+
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).
 
