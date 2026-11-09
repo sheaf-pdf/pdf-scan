@@ -35,20 +35,23 @@ S1 back: S1 can start once the Linux slices are done.
    and "For review (security)" (10), above all the code review's API changes before the first publish
    (`Sane::load_from` an `unsafe fn`, `DEFAULT_LIBRARIES` with macOS's absolute paths, the `links` key and its
    empty build script, `LimitExceeded`, `ReloadAfterSet`, `options_generation`, `SetInfo` non-exhaustive,
-   `clear_cancel`); then the push and the pull request, and CI's run on the three systems (TEST-2, TEST-8),
-   which closes the slice.
+   `clear_cancel`); then the merge of its pull request. CI's run on the three systems is green (pull request
+   #2, run 42582929367, 2026-11-09), which closed TEST-2 and TEST-8.
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the
    unknowns TWAIN is to settle kept. Checked: reviewed before slice 3 starts, since it fixes slice 3's API.
-   **Done on the branch** (2026-11-09; `slices/s0-2-seam-note.md`), waiting on review: branch
-   `s0-2-seam-note`, from slice 1's tip `4624760`, docs only, three steps, each checked. The note's SANE rows
-   from slice 1 and the slice's probes, the two SANE unknowns answered (what only slice 6 settles is TEST-9),
-   the raw layout fixed and held beside `scanimage`'s pages, and the model written down for slice 3 ("The
-   model, for slice 3"); the backlog's items for slices 5 and 6. Its code review next, which with the plan's
-   review is the review this entry asks for; then its pull request, stacked on slice 1's, reviewed by the
-   maintainer out of band, and slice 3 starts once it's open. For review: the plan's "Decisions taken alone,
-   for review" (26) and "For review (security)" (6).
+   **Done on the branch** (2026-11-09; `slices/s0-2-seam-note.md`), waiting on review: branch `s0-2-seam-note`,
+   from slice 1's tip `4624760` to its head (the fixes at `6e89de8`, then the record), docs only, three steps,
+   each checked, then its code review's 25 findings fixed (one deferred in part, BUG-7). The note's SANE rows
+   from slice 1 and the slice's probes, the two SANE unknowns answered (what only slice 6 settles is TEST-9), the
+   raw layout fixed and held beside `scanimage`'s pages, and the model written down for slice 3 ("The model, for
+   slice 3"), revised by the review before slice 3 builds it: `open` taking the stored device and a deadline,
+   SANE's fallback listing first and only from a USB connection's name, a bounded event channel, `Stopped` moved
+   to the worker's client, four new `ScanError`s, the growing structs `#[non_exhaustive]`. The plan's review and
+   its code review are the review this entry asks for; then its pull request, stacked on slice 1's, reviewed by
+   the maintainer out of band, and slice 3 starts once it's open. For review: the plan's "Decisions taken alone,
+   for review" (41, of which 27 to 41 the code review's) and "For review (security)" (6).
 3. **scan-device, provisional:** the model as the seam note's "The model, for slice 3" has it (its types, the
    `Backend` and `Device` traits, `RawImage`'s checked constructor, cancel and progress through `in-progress`,
    taken here: vetted in slice 2's plan, and `plan.md`'s graph updated), the constructors of the structs marked

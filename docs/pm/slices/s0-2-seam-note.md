@@ -1,6 +1,7 @@
 # S0 slice 2: the seam note revised
 
-Status: running, on branch `s0-2-seam-note`, from 2026-11-09; its three steps done, its code review next.
+Status: done on branch `s0-2-seam-note` (2026-11-09): its three steps, its code review and the review's fixes;
+waiting on review, the push and its pull request (stacked on slice 1's).
 Milestone: `milestones/s0-devices.md`, slice 2.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -262,6 +263,8 @@ seven changes and this slice's. Plain data, public fields but `RawImage`'s; enum
   `ConfigDir` (decision 18).
 
 ### What follows elsewhere
+
+As step 2 did it; the code review then revised parts, said in "Code review" below.
 
 - **`crates/scan-device.md`:** `RawPage` as the raw layout has it; `Caps` per source; `Settings` with `Format`;
   the two traits; `in-progress` among its dependencies (taken by slice 3); the `fake` backend's scripts as
@@ -1203,3 +1206,135 @@ One commit, the one that carries this account. Docs only: the backlog (`README.m
   lines; the diff and this message scanned. The test list, the core's tracing of each fact and the rest are the
   checking agent's; `just ci` isn't run (no file outside `docs/pm/` changed; Baselines). **What only CI shows:**
   nothing of this slice's (docs only).
+
+### Step 3's check, and the code review (2026-11-09)
+
+- **Step 3's check** (at `9fb3fb5`; `scratch/work/s0-2/flow/checks.md`, "Step 3 at 9fb3fb5"): passed. The test
+  list 245 tests, the same names; `just ci` green on the final tree (33 s, the require variables set); the
+  publish dry run in a fresh target directory; the trial merge against `0f08bb0` and `6ca9a2d`, the six known
+  conflicts alone; the commit messages, the maintainer's name, `docs/pm/` alone, the backlog's format and
+  counts, the cited files. It tried security item 6 (now cited there), confirmed the gap in `Backend::open`
+  for the code review, and left a minor point (the note's head cites sheaf's `research/scanners.md` by its M5
+  path), not taken up: the first version's line, beside slice 8's hunk, and no review finding asked for it.
+- **The code review** (three lenses, `scratch/work/s0-2/flow/review-*.json`): behaviour (each claim against
+  its evidence, with probes), API (the model's types against slices 3, 4, 5 and 9, the crates as published
+  libraries) and hygiene (the repository). 25 findings: one blocker, eight major, sixteen minor; all hold,
+  each verified before it was acted on (below).
+
+## Code review
+
+2026-11-09, on `4624760..9fb3fb5`. Each finding was verified first: the behaviour lens's fallback probe run again
+and a probe of the fix's own (`scratch/work/s0-2/fix/`, `run.sh` and `out/`: a listing made before an open stays
+within the directory's backends, one made after an alias's failed open lists its target's; `pnm`'s options and
+its parameters before the start), the backends' lines read at `a113b257`, `sane.h`, `sane-dl`'s errors and std's
+`mpsc` docs. Fixed in `a174dde` (the model and what follows), `2373f9c` (section 8's lines filled again),
+`6e89de8` (a few of the new wordings tightened) and the last commit (the bookkeeping), docs only. Probe M1
+follows the note's revised block: 23 tests, clippy clean, `check-block.sh` equal (and different against the note
+as it was), each new test made to fail on a broken copy (seven mutations,
+`scratch/work/s0-2/fix/m1/makefail/make-fail.txt`).
+
+**Behaviour:**
+
+1. *Major: the fallback's listing wasn't confined to the directory's backend.* Holds: through a directory
+   naming none, a listing first found 0 devices, and after `Desk scanner` answered `INVAL` the same process
+   listed `test:0`, with the alias's vendor and model; `office:scan` through a directory naming `office` the
+   same (`dll.c`'s `sane_open` adds the backend, `sane_get_devices` lists every one added). The "0 devices
+   listed" came from separate processes. **Fixed** (`a174dde`): the backend lists before it opens (decision
+   28), the fallback compares each listed name's `backend_of` and runs only from a USB connection's name
+   (decision 29); "by construction" dropped from section 1, decisions 18 and 19 (corrected in place) and
+   security item 1; TEST-10 gains the open-then-list case (the bookkeeping).
+2. *Major: `open(&DeviceId)` and `Opened::info` couldn't do SANE's open as described.* Holds: no vendor or
+   model to match, `sane_open` gives a handle and no `SANE_Device` (`sane.h` 1.4.0), and a reused name opened
+   another device with nothing said. **Fixed** (`a174dde`): `open` takes the stored `DeviceInfo` (decision 27);
+   SANE's `info` is the listing's where the stored name is listed with the stored vendor and model, a name
+   listed as another model is taken as gone, an unlisted one opened with the stored info, said unchecked
+   (decision 28); section 1 says a reused name of the same model still opens unremarked. M1 tests both.
+3. *Minor: slice 5's PBM "compared after the inversion" fails on the padding bits.* Holds: L1's PBM `b3 af 00
+   07 ff f8` inverts to `4c 50 ff f8 00 07`, the model's page is `4c 50 ff f8 00 00`. **Fixed** (`a174dde`):
+   the milestone's slice 5 and the plan's line clear the padding bits on both sides, at a width not a multiple
+   of 8, with set padding bits.
+4. *Minor: "as SANE gives its area", and `pnm` gives no area, source or mode.* Holds: the standard's "Scan
+   Area Options" allow millimetres or pixels; `pnm` lists none of the three (`scanimage -A`, and the fix's
+   probe), and its parameters before the start equal the scan's. **Fixed** (`a174dde`, decision 41):
+   `max_area: Option<SizeMm>`, a size clamped to `Auto` without area options, the format from
+   `Handle::parameters` without `mode`, one flatbed without `source`; pixels converted at the resolution.
+5. *Minor: through `net`, "the same backend" spans every host.* Holds, from the name form. **Fixed**
+   (`a174dde`): the fallback runs only from and to USB connections' names, so never to a network scanner
+   (decision 29, security item 1).
+6. *Minor: the table had the `twain` backend flip a DIB always.* Holds: the spike's decoder flips only a
+   positive height, and tests a top-down DIB. **Fixed** (`a174dde`): the Rows row and slice 9's paragraph.
+
+**API:**
+
+7. *Blocker: `Backend::open` got no vendor or model.* As finding 2, and step 3's own find. **Fixed**
+   (`a174dde`): `open(&mut self, device: &DeviceInfo, deadline: Duration)`, the client routing by `driver`,
+   "opaque" narrowed to "compared whole"; sections 1 and 8, the mapping, `crates/scan-device.md` and the
+   milestone's slices 3 to 5 together; M1's fake finds its renamed device by maker and model.
+8. *Major: a repeated `StartInvalid` mapped to `Gone`.* Holds: `escl`, `lexmark`, `pixma` and `hp5590` answer
+   `INVAL` from `sane_start` for what they can't scan (`fujitsu` and `canon_dr` for a transfer unfinished), at
+   the lines cited. **Fixed** (`a174dde`): `ScanError::SettingsRefused` (decision 32, revising 24).
+9. *Major: `&Sender<Event>` is unbounded.* Holds (std's `channel()`: an "infinite buffer"). **Fixed**
+   (`a174dde`): `&SyncSender<Event>`, a full channel holding the backend, a failed `send` ending the batch
+   (decision 30); M1 shows a pull backend held at its first sheet by a bound of 1, and a receiver gone ending
+   the batch with no sheet 2.
+10. *Major: `list` past its deadline had no outcome.* Holds (`sane-dl`'s `DeadlineExceeded`, then
+    `ListingPending` "which may be never"). **Fixed** (`a174dde`): `ScanError::TimedOut`, the mapping rows,
+    the backend dropped with its worker (decision 31).
+11. *Major: `open` took no deadline.* Holds. **Fixed** (`a174dde`): with finding 7.
+12. *Major: `Encoded` couldn't be asked for.* Holds. **Fixed** (`a174dde`): `Settings::encodings`,
+    `SourceCaps::encodings`, `Encoding` (decision 35); whether the app asks stays open.
+13. *Minor: growing structs weren't `#[non_exhaustive]`; wire types would hide missing variants.* Holds.
+    **Fixed** (`a174dde`): the six structs marked, `Settings::new` and `DeviceInfo::new`, section 10's
+    sentence corrected, slice 4 told to lean to a `serde` feature or round-trip every variant (decision 36).
+14. *Minor: most of `sane-dl`'s errors unmapped.* Holds. **Fixed** (`a174dde`): a row for every other error,
+    `Driver { shown: false }`, `LimitExceeded`'s message, `Cancelled` (decision 37).
+15. *Minor: `ACCESS_DENIED` described as authorization only.* Holds (`epson2.c`, `epsonds.c`, `kodakaio.c`,
+    `pixma.c` at the lines cited). **Fixed** (`a174dde`): `ScanError::AccessDenied`, its row naming both
+    causes (decision 33).
+16. *Minor: `ScanError` held the client's `Stopped` and none of its other failures.* Holds. **Fixed**
+    (`a174dde`): `Stopped` moved to the client's own error type, with a crash, a protocol mismatch and a page
+    cut short, in "What slice 4 needs" and the milestone's slice 4 (decision 34).
+17. *Minor: `RawPage.dpi` `f32` against the rule, unchecked.* Holds. **Fixed** (`a174dde`): the exception said
+    (`TW_FIX32`, SANE's `FIXED`), the client refusing a `dpi` not finite and above 0 (decision 38).
+18. *Minor: derived `Debug` prints whole pages.* Holds, `sane-dl`'s `Image` and `Page` too. **Fixed** for the
+    model (`a174dde`, decision 39; M1's test); **deferred** for `sane-dl` as BUG-7, its next alpha's: not a
+    defect the seam can't do without, so no crate's code changes here.
+19. *Minor: `settings_window` took no owner and said no outcome.* Holds. **Fixed** (`a174dde`): `owner:
+    Option<WindowOwner>`, `WindowClosed { Accepted, Dismissed }`, `Unsupported` (decision 40).
+20. *Minor: `Resolutions::Range`'s step undefined at 0 and for a fractional quant.* Holds (`sane.h`'s "0 if
+    none"). **Fixed** (`a174dde`): `NonZeroU32`, SANE's quant converted, a list non-empty and `min` at most
+    `max` checked by the client (decision 38).
+
+**Hygiene:**
+
+21. *Minor: "`twain-spike`'s `image` module" goes stale at slice 8's merge, with no conflict.* Holds (the
+    trial merge's tree keeps it, beside a deleted crate). **Fixed** (`a174dde`): "the spike's `image` module",
+    slice 8's wording, in the note's two places; the plan's design and Risk 3 corrected.
+22. *Minor: `status.md` waited on CI's run, which is green; TEST-2 and TEST-8 open.* Holds (run 42582929367,
+    every job success at `4624760`). **Fixed** (the bookkeeping): both moved to `archive/backlog-done.md`, the
+    table counted again, `status.md` and the milestone's slice 1 no longer waiting on CI, each slice's review
+    counts named.
+23. *Minor: "the 2026-10-29 ruling" cited, recorded nowhere public.* Holds. **Fixed** (`a174dde`): the rule
+    said instead of its date.
+24. *Minor: the gate's devices-layer loop reads `sane-dl` alone.* Holds (`justfile`, `for crate in sane-dl`).
+    **Fixed** (`a174dde`): the milestone's slice 3 adds `scan-device` to the loop, the output naming it, and a
+    make-fail on a copy.
+25. *Minor: lines left unfilled mid-paragraph.* Holds. **Fixed**: the seam note's (`a174dde`, `2373f9c`, the
+    latter the section 8 lines the revision left short beside slice 7's untouched line), `crates/scan-device.md`'s,
+    the milestone's and the plan's (`a174dde`), `status.md`'s (the bookkeeping), each refilled without a word
+    changed, off slice 8's lines.
+
+**Refuted:** none. **Deferred:** `sane-dl`'s `Debug` (finding 18), BUG-7.
+
+**Checks after the fixes** (on the committed tree): `just ci` on `a174dde`, clean, the require variables set (the
+commits after it touch `docs/pm/` alone, which no build, test or gate reads): green in 32 s (fmt, clippy, test,
+doc, the gates holding with 15 binaries read, `sane-dl-package` 16 files, `sane-dl-msrv` on 1.89); the test list
+245 tests, the same names as step 3's (`scratch/work/s0-2/tests-fix.txt`); M1 as above; the trial merge of the
+final tree with `origin/s0-8-twain-dsm` at `0f08bb0` and at the remote's `6ca9a2d`, the six known conflicts
+alone, the seam note merging cleanly with "the spike's `image` module" in it; slice 7's 64 lines of the note at
+`4624760` all present but the ten planned shared ones; lines at most 115 characters outside tables and backlog
+lines; every commit message and added line scanned. Left out, and why: the gates' make-fails (no gate changed),
+`cargo publish --dry-run` beyond `just ci`'s package recipe, the MSRV probe and `cargo tree` (no manifest or lock
+changed), `cargo check` for other targets (no code), the harness (nothing cut from sheaf), probes N1, S1, L1 and
+L2 (no claim of theirs changed; the fallback's and `pnm`'s were probed afresh), and M1's 32-bit run (its layout
+tests unchanged). **What only CI shows:** nothing of this slice's (docs only).

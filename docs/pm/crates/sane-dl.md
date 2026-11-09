@@ -104,9 +104,8 @@ MSRV 1.89 (`decisions.md`). Its tests drive SANE's own `test` and `pnm` backends
   - Here and in CI on Ubuntu with `SANE_DL_REQUIRE_LIBSANE=1` and `SANE_DL_REQUIRE_HEADER=1`, so nothing
     skips; on Windows and macOS the tests that need libsane or the header say they skipped.
 - **Open:**
-  - CI's run of this code, which waits on the push: Windows and macOS (the fake as a DLL and a dylib, the
-    build script and `links`; TEST-8), and the tests and the header contract against Ubuntu's `libsane1` and
-    `sane.h`, 1.4.0 as here (TEST-2).
+  - `Image` (and `Page`, which holds one) derives `Debug` over its bytes, so `{:?}` of a page prints every
+    byte (BUG-7, from S0 slice 2's code review): written by hand for the next alpha, with a changelog entry.
   - macOS against Homebrew's sane-backends (TEST-7): whether `load()`'s absolute paths find it.
   - No authorization callback (FEAT-11), until a networked backend needs one.
   - Defects found in SANE 1.4.0's `test` backend, `scanimage` and several backends' `sane_set_io_mode`,
