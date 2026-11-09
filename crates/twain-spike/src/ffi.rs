@@ -87,6 +87,7 @@ pub const DAT_IMAGENATIVEXFER: u16 = 0x104;
 pub const DAT_EXTIMAGEINFO: u16 = 0x10b;
 
 // Messages.
+pub const MSG_NULL: u16 = 0;
 pub const MSG_GET: u16 = 1;
 pub const MSG_GETCURRENT: u16 = 2;
 pub const MSG_GETDEFAULT: u16 = 3;
@@ -189,6 +190,9 @@ pub const TWSX_MEMORY: u16 = 2;
 pub const TWPT_BW: u16 = 0;
 pub const TWPT_GRAY: u16 = 1;
 pub const TWPT_RGB: u16 = 2;
+
+// Compression.
+pub const TWCP_NONE: u16 = 0;
 
 // Pixel flavors.
 pub const TWPF_CHOCOLATE: u16 = 0;

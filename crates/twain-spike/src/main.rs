@@ -20,11 +20,17 @@
 // Only the modules that call Windows or the DSM may hold unsafe code.
 #![deny(unsafe_code)]
 
+// Pure: compiled and tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod container;
+// Its own `allow(dead_code)`: a bindings module declares more than it uses.
+mod ffi;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod image;
+
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod dsm;
-#[cfg(windows)]
-mod ffi;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod run;

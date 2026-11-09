@@ -1,6 +1,6 @@
 # S0 slice 7: the TWAIN spike, end to end
 
-Status: planned and reviewed, on branch `s0-7-twain-spike`, from 2026-11-08. Milestone:
+Status: running, on branch `s0-7-twain-spike` (a draft pull request), from 2026-11-08; steps 1 and 2 done. Milestone:
 `milestones/s0-devices.md`, slice 7. Run on the Windows machine, while slice 1 runs on Linux.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -482,4 +482,53 @@ the feature named; the script is ASCII with LF endings and passes the name gate.
   - *`just twain-spike` takes the scenario as an optional second argument*, `all` by default, so the CI job
     runs `all` from now on (just `list` so far) and doesn't change in step 3.
   - *`TWLG_USA`*, not `TWLG_ENGLISH_USA`, which both sources define as an alias of it.
-- **Waiting on Greg:** the push and the draft pull request, so CI's `twain-spike` job reports before step 2.
+- **CI:** pushed, and the draft pull request opened (Greg, 2026-11-08); every job passed (Greg: "ci passed
+  on GH"): the check job on Ubuntu, Windows and macOS, so the spike's split for other systems holds; and the
+  `twain-spike` job, so **the sample source installs silently on `windows-latest`** (`msiexec /qn`, the runner
+  elevated) and the DSM loads, opens with the hidden window and lists it in both bitnesses there. TEST-3's
+  install question is answered; its scanning one waits on step 2's push.
+
+### Step 2: states 4 to 7, transfers, the two delivery modes, the comparison (2026-11-08)
+
+- **What it does:** `container` (capability containers as bytes: a `TW_ONEVALUE` built, a one-value or an
+  enumeration decoded, every length checked) and `image` (a DIB decoded, memory tiles assembled, both into one
+  comparable form; the checks against a block's size, the image's bounds, the buffer, overlaps and gaps; the
+  1 GiB and 2^28-pixel caps), both compiled and tested on every system, as `ffi` now is; `MSG_NULL` and
+  `TWCP_NONE` added to the checked constants (138, `scratch/work/s0-7/step-2/consts-check.txt`). `session`:
+  the source opened and closed, the callback (atomics only, never the DSM, `TWRC_SUCCESS` always),
+  capabilities set and read through containers from the DSM's allocator, enable and disable, the wait for the
+  source's message (callback, or `MSG_PROCESSEVENT`, a 20-second timer under the watchdog), image info,
+  native and memory transfers, extended image info, `MSG_ENDXFER`, `MSG_RESET`, and `walk_down`, a step at a
+  time from any state. The scenarios `native-event`, `memory-event`, `native-callback`, `memory-callback` and
+  `compare`; the table's answers enforced.
+- **Checked here:** the core on all three targets without a warning; 17 unit tests (`container` 5, `image`
+  12: a padded and a top-down DIB, both 1-bit palettes, the gray ramp and an inverted one, odd widths, strips
+  and two-dimensional tiles out of order, polarity, and each refusal the plan names); `all` passing in both
+  bitnesses with `CAP_XFERCOUNT=3` (three pages a batch) and unset (two), and `CAP_XFERCOUNT=0` giving a
+  random count (six, here), not judged (`scratch/work/s0-7/step-2/all-*.txt`); `compare` equal pixel for pixel
+  for RGB, gray and black and white in both; a callback made to return `TWRC_FAILURE` failing the enable with
+  `TWCC_SEQERROR` and the session walking down cleanly (`make-fail-callback.txt`), the file restored; the
+  test list from 0 to 17, none lost; `~/.cargo` unchanged; the graph and the name gate as before.
+- **Found** (on the sample source, both bitnesses alike):
+  - **Every answer is as the table has it.** The pending count is 0xFFFF, "unknown", after every page but the
+    last, then 0, with `CAP_XFERCOUNT = -1`.
+  - **Memory transfers come as strips of full rows, in order, rows padded to four bytes** as a DIB's are:
+    RGB in 184 strips of 12 rows (5100 bytes a row), gray in 58 of 38 (1700), black and white in 8 of 303
+    (216 bytes for 1700 bits); a strip is as many rows as fit the preferred 64 KiB.
+  - **Native and memory are equal pixel for pixel** in all three types: the DIBs bottom up, RGB with no
+    palette, gray with an identity ramp, 1-bit black then white; memory's 0 is black, as `TWPF_CHOCOLATE`
+    says.
+  - **Callback mode:** `MSG_XFERREADY` arrives in the callback inside `MSG_ENABLEDS`, on the TWAIN thread;
+    a failing return fails the enable. Synchronous signalling only, as the plan scopes it.
+  - **Event mode:** `MSG_XFERREADY` comes back from the first message forwarded through `MSG_PROCESSEVENT`,
+    whatever it is: `0x031F` (`WM_DWMNCRENDERINGCHANGED`, the desktop window manager's, to a new window) on a
+    window's first batch, the DSM's own `WM_NULL` on later ones.
+  - **`MSG_GETCURRENT` gives one-values**, booleans included; the enumeration the review found in the code is
+    `MSG_GET`'s.
+- **Departures from the plan, and why:**
+  - *Containers are parsed from byte slices with `from_le_bytes`*, not read with `read_unaligned`: nothing
+    misaligned is ever dereferenced, and the offset-by-2 test is a slice two bytes in.
+  - *`walk_down`*, found by the callback make-fail: the scenarios' own ending unloaded the DSM from state 4;
+    every scenario now ends with the same walk the session's drop does.
+  - *`as_chunks::<3>()`*, which clippy 1.99 asks for over `chunks_exact(3)` (stable since 1.88).
+  - *The posted-request reader waits for step 3*, its first user.

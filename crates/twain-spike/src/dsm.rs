@@ -11,7 +11,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
-use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
 
 use crate::ffi::{
     DsmEntryProc, DsmMemAllocate, DsmMemFree, DsmMemLock, DsmMemUnlock, TW_ENTRYPOINT, TW_IDENTITY,
@@ -21,7 +21,7 @@ use crate::ffi::{
 pub struct Dsm {
     module: HMODULE,
     entry: DsmEntryProc,
-    memory: Option<MemoryFunctions>,
+    allocator: Allocator,
 }
 
 #[derive(Clone, Copy)]
@@ -30,6 +30,95 @@ struct MemoryFunctions {
     free: DsmMemFree,
     lock: DsmMemLock,
     unlock: DsmMemUnlock,
+}
+
+/// How containers are allocated: through the DSM's memory functions once
+/// `DAT_ENTRYPOINT` has given them, else `GlobalAlloc` and its kin. Windows'
+/// DSM allocates with `GlobalAlloc` underneath, so `GlobalSize` measures
+/// either kind of block. `Copy`, so a session can hold it across a call to the
+/// DSM.
+#[derive(Clone, Copy)]
+pub struct Allocator(Option<MemoryFunctions>);
+
+impl Allocator {
+    /// `GlobalAlloc` and its kin, which is also what a native transfer's DIB
+    /// is on Windows: the application frees it with `GlobalFree`.
+    pub const GLOBAL: Allocator = Allocator(None);
+
+    /// Whether these are the DSM's own memory functions.
+    pub fn is_dsms(self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Allocates `size` bytes. Null if it couldn't.
+    pub fn alloc(self, size: u32) -> *mut c_void {
+        match self.0 {
+            // SAFETY: the DSM's allocator, as `DAT_ENTRYPOINT` gave it, takes a
+            // size and returns a handle or null.
+            Some(m) => unsafe { (m.allocate)(size) },
+            // SAFETY: GlobalAlloc takes flags and a size and returns a handle or
+            // null.
+            None => unsafe { GlobalAlloc(GHND, size as usize) },
+        }
+    }
+
+    /// Locks a handle, giving a pointer to its memory, or null.
+    ///
+    /// # Safety
+    ///
+    /// `handle` must be a live handle from this allocator.
+    pub unsafe fn lock(self, handle: *mut c_void) -> *mut c_void {
+        match self.0 {
+            // SAFETY: the caller passes a live handle.
+            Some(m) => unsafe { (m.lock)(handle) },
+            // SAFETY: the caller passes a live handle.
+            None => unsafe { GlobalLock(handle) },
+        }
+    }
+
+    /// Unlocks a handle locked with [`Allocator::lock`].
+    ///
+    /// # Safety
+    ///
+    /// `handle` must be a live, locked handle from this allocator.
+    pub unsafe fn unlock(self, handle: *mut c_void) {
+        match self.0 {
+            // SAFETY: the caller passes a live, locked handle.
+            Some(m) => unsafe { (m.unlock)(handle) },
+            // SAFETY: the caller passes a live, locked handle.
+            None => unsafe {
+                GlobalUnlock(handle);
+            },
+        }
+    }
+
+    /// Frees a handle.
+    ///
+    /// # Safety
+    ///
+    /// `handle` must be a live, unlocked handle from this allocator, never used
+    /// again.
+    pub unsafe fn free(self, handle: *mut c_void) {
+        match self.0 {
+            // SAFETY: the caller passes a live handle and drops it.
+            Some(m) => unsafe { (m.free)(handle) },
+            // SAFETY: the caller passes a live handle and drops it.
+            None => unsafe {
+                GlobalFree(handle);
+            },
+        }
+    }
+
+    /// A block's size in bytes, 0 if it can't be told.
+    ///
+    /// # Safety
+    ///
+    /// `handle` must be a live handle from this allocator.
+    pub unsafe fn size(self, handle: *mut c_void) -> usize {
+        // SAFETY: the caller passes a live handle; both kinds of block are
+        // GlobalAlloc's.
+        unsafe { GlobalSize(handle) }
+    }
 }
 
 /// What the loaded module is.
@@ -77,7 +166,7 @@ impl Dsm {
         Ok(Dsm {
             module,
             entry,
-            memory: None,
+            allocator: Allocator::GLOBAL,
         })
     }
 
@@ -104,8 +193,8 @@ impl Dsm {
     }
 
     /// Takes the memory functions from `DAT_ENTRYPOINT`'s answer, if it gives
-    /// all four; otherwise containers use `GlobalAlloc` and its kin, which is
-    /// what Windows' DSM does underneath. Returns whether the DSM's are used.
+    /// all four; otherwise containers stay with `GlobalAlloc`. Returns whether
+    /// the DSM's are used.
     pub fn take_entry_points(&mut self, ep: &TW_ENTRYPOINT) -> bool {
         let (allocate, free, lock, unlock) = (
             ep.DSM_MemAllocate,
@@ -113,77 +202,23 @@ impl Dsm {
             ep.DSM_MemLock,
             ep.DSM_MemUnlock,
         );
-        self.memory = match (allocate, free, lock, unlock) {
-            (Some(allocate), Some(free), Some(lock), Some(unlock)) => Some(MemoryFunctions {
-                allocate,
-                free,
-                lock,
-                unlock,
-            }),
-            _ => None,
+        self.allocator = match (allocate, free, lock, unlock) {
+            (Some(allocate), Some(free), Some(lock), Some(unlock)) => {
+                Allocator(Some(MemoryFunctions {
+                    allocate,
+                    free,
+                    lock,
+                    unlock,
+                }))
+            }
+            _ => Allocator::GLOBAL,
         };
-        self.memory.is_some()
+        self.allocator.is_dsms()
     }
 
-    /// Allocates `size` bytes for a container, through the DSM's allocator or
-    /// `GlobalAlloc`. Null if it couldn't.
-    pub fn alloc(&self, size: u32) -> *mut c_void {
-        match self.memory {
-            // SAFETY: the DSM's allocator, as `DAT_ENTRYPOINT` gave it, takes a
-            // size and returns a handle or null.
-            Some(m) => unsafe { (m.allocate)(size) },
-            // SAFETY: GlobalAlloc takes flags and a size and returns a handle or
-            // null.
-            None => unsafe { GlobalAlloc(GHND, size as usize) },
-        }
-    }
-
-    /// Locks a handle from [`Dsm::alloc`] or from the source, giving a pointer
-    /// to its memory, or null.
-    ///
-    /// # Safety
-    ///
-    /// `handle` must be a live handle from this allocator.
-    pub unsafe fn lock(&self, handle: *mut c_void) -> *mut c_void {
-        match self.memory {
-            // SAFETY: the caller passes a live handle.
-            Some(m) => unsafe { (m.lock)(handle) },
-            // SAFETY: the caller passes a live handle.
-            None => unsafe { GlobalLock(handle) },
-        }
-    }
-
-    /// Unlocks a handle locked with [`Dsm::lock`].
-    ///
-    /// # Safety
-    ///
-    /// `handle` must be a live, locked handle from this allocator.
-    pub unsafe fn unlock(&self, handle: *mut c_void) {
-        match self.memory {
-            // SAFETY: the caller passes a live, locked handle.
-            Some(m) => unsafe { (m.unlock)(handle) },
-            // SAFETY: the caller passes a live, locked handle.
-            None => unsafe {
-                GlobalUnlock(handle);
-            },
-        }
-    }
-
-    /// Frees a handle from [`Dsm::alloc`], or one the source handed over.
-    ///
-    /// # Safety
-    ///
-    /// `handle` must be a live, unlocked handle from this allocator, never used
-    /// again.
-    pub unsafe fn free(&self, handle: *mut c_void) {
-        match self.memory {
-            // SAFETY: the caller passes a live handle and drops it.
-            Some(m) => unsafe { (m.free)(handle) },
-            // SAFETY: the caller passes a live handle and drops it.
-            None => unsafe {
-                GlobalFree(handle);
-            },
-        }
+    /// How containers are allocated.
+    pub fn allocator(&self) -> Allocator {
+        self.allocator
     }
 
     /// What the loaded module is: its path, version and machine.

@@ -9,16 +9,26 @@
 use core::marker::PhantomData;
 use core::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND};
+use windows_sys::Win32::Foundation::{
+    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, POINT,
+};
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW,
-    UnregisterClassW, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    KillTimer, MSG, PostMessageW, RegisterClassExW, SetTimer, TranslateMessage, UnregisterClassW,
+    WM_APP, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::dsm::wide;
+
+/// Posted by the spike's callback: a message from the source, in `wParam`.
+pub const WM_SOURCE: u32 = WM_APP + 1;
+/// Posted by the main thread: a request, in `wParam`.
+pub const WM_REQUEST: u32 = WM_APP + 2;
+/// The spike's own messages, never forwarded to the DSM.
+pub const SPIKE_MESSAGES: core::ops::RangeInclusive<u32> = WM_SOURCE..=WM_REQUEST;
 
 /// The calling thread made a single-threaded apartment, until dropped. Not
 /// `Send`: it belongs to the thread that entered it.
@@ -136,4 +146,54 @@ impl Drop for Window {
 pub fn thread_id() -> u32 {
     // SAFETY: no arguments; always succeeds.
     unsafe { GetCurrentThreadId() }
+}
+
+fn empty_message() -> MSG {
+    MSG {
+        hwnd: null_mut(),
+        message: 0,
+        wParam: 0,
+        lParam: 0,
+        time: 0,
+        pt: POINT { x: 0, y: 0 },
+    }
+}
+
+/// The calling thread's next message, waiting for one; `None` at `WM_QUIT` or
+/// an error.
+pub fn next_message() -> Option<MSG> {
+    let mut msg = empty_message();
+    // SAFETY: `msg` is writable; a null window takes any of this thread's
+    // messages.
+    let got = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
+    (got > 0).then_some(msg)
+}
+
+/// A message translated and sent to its window's procedure.
+pub fn dispatch(msg: &MSG) {
+    // SAFETY: `msg` came from GetMessageW or PeekMessageW on this thread.
+    unsafe {
+        TranslateMessage(msg);
+        DispatchMessageW(msg);
+    }
+}
+
+/// Posts a message to a window, from any thread. False if it couldn't.
+pub fn post(window: usize, message: u32, wparam: usize, lparam: isize) -> bool {
+    // SAFETY: posting copies the arguments into the window's queue; a window
+    // that's gone makes the call fail, not misbehave.
+    unsafe { PostMessageW(window as HWND, message, wparam, lparam) != 0 }
+}
+
+/// A timer on the window: `WM_TIMER` with `id` in `wParam` every `ms`.
+pub fn set_timer(window: HWND, id: usize, ms: u32) -> bool {
+    // SAFETY: the window belongs to this thread; no callback, so WM_TIMER is
+    // posted.
+    unsafe { SetTimer(window, id, ms, None) != 0 }
+}
+
+pub fn kill_timer(window: HWND, id: usize) {
+    // SAFETY: the window belongs to this thread; a timer that's gone is no
+    // harm.
+    unsafe { KillTimer(window, id) };
 }
