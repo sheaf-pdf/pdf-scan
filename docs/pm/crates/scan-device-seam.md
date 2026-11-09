@@ -36,7 +36,7 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 **Revised 2026-11-08 by S0 slice 7, the TWAIN spike, before slice 2** (slice 7 ran first, on the Windows
 machine): its TWAIN rows in sections 1 and 3 to 8 and its TWAIN unknowns, from `twain-spike`'s runs against
 the TWAIN Working Group's sample data source in both bitnesses, here and on `windows-latest`
-(`slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which signals
+(`archive/slices/s0-7-twain-spike.md`, "So far"). What it settled is settled **on the sample source**, which signals
 synchronously, has one image, and can't jam, feed two sides or report extended image info; the hand checks
 (S0 slice 12) settle the rest. SANE's rows are as they were, for slice 2.
 

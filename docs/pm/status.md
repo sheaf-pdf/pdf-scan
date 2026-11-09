@@ -44,10 +44,11 @@ next, once that's open.
     twelve slices, Linux then Windows; S1 and S2 follow. The workspace S1 slice 1 had built (stashed; copied
     into `scratch/stash-s1-1/`) moves into S0 slice 1, reshaped around `sane-dl`. Asks 3 and 4 answered by it;
     6 and 7 taken as S0 slice 1 starts.
-- **Done: S0 slice 7, the TWAIN spike** (`slices/s0-7-twain-spike.md`), on the Windows machine, merged
-  with pull request #1: the sample source installed silently (there and on `windows-latest`), TWAIN walked
-  from state 1 to 7 and back in both bitnesses, native and memory transfers equal pixel for pixel, a cancel
-  from another thread; the seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
+- **Done: S0 slice 7, the TWAIN spike** (merged 2026-11-08 as pull request #1, CI green;
+  `archive/slices/s0-7-twain-spike.md`), on the Windows machine: the sample source installed silently, there
+  and on `windows-latest`; TWAIN walked from state 1 to 7 and back in both bitnesses; native and memory
+  transfers equal pixel for pixel; cancels from another thread; four code reviewers, every finding fixed; the
+  seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
 - **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
   `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
   (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
@@ -61,4 +62,5 @@ next, once that's open.
   `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK;
   PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
 - **Next:** S0 slice 3, `scan-device` provisional, once slice 2's pull request is open; then slice 4 on
-  Linux. Slice 8 (`twain-dsm`) can follow slice 7 on Windows.
+  Linux. On Windows, S0 slice 8, `twain-dsm`, on branch `s0-8-twain-dsm`: safe by construction
+  (`decisions.md`; `crates/twain-dsm.md`, "Safe by construction").

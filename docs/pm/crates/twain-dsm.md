@@ -32,6 +32,27 @@ Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
   - **TWAIN's seven states as types** (from 1, before the DSM is loaded, to 7, transferring): each state a
     struct that consumes `self` to step and steps down on `Drop`, RSWebTWAIN's design (MIT OR Apache-2.0),
     taken as a design, not its code.
+  - **Safe by construction** (`decisions.md`, 2026-11-08): the public API has no `unsafe fn`; each contract the
+    spike left to its caller is bound by the compiler instead. The levers, for slice 8's plan to weigh:
+    - *The DSM never unloaded*, as `sane-dl` never unloads libsane: its entry point and memory functions then
+      live as long as the process, so nothing that holds them can outlive them (the spike's `Copy`
+      allocator, which could, becomes harmless); `FreeLibrary` buys nothing an application needs.
+    - *The states as owned types*: each owns the one beneath, steps up by consuming `self` and hands `self`
+      back with the error when a step fails, so nothing is lost; `Drop` steps down, rolling back on
+      `TWCC_SEQERROR`, and a state that can't step down keeps what's beneath it alive.
+    - *Borrows and owners for what's short-lived*: a capability container, a locked block or a native
+      transfer's DIB as a value that borrows the open source or owns its handle and frees it on `Drop`, so none
+      outlives what it came from; a lock as a guard giving a slice of the block's measured length.
+    - *One thread, by type*: the states are `!Send`, tied to the TWAIN thread; other threads hold a `Send +
+      Sync` handle (cancel, requests) whose posts can't reach a reused window handle (the handle kept behind
+      a lock that the window's `Drop` clears).
+    - *What stays `unsafe`, inside*: the FFI calls, the callback trampoline, `GetProcAddress`'s cast, reading a
+      driver's blocks (each length checked first). Safe assumes a DSM and drivers that keep TWAIN's calling
+      rules, as any FFI does; their data stays untrusted.
+    - *Open for the plan*: one source at a time (an owned chain) or several (borrows of the open DSM); whether
+      loading a DSM by path is `unsafe` (libloading's choice) or safe and documented (`sane-dl`'s
+      `load_from`); how the callback finds its session (`RefCon`, if the DSM hands it back, or a
+      thread-local).
   - **The window:** an STA thread of its own, every DSM call on it (the specification asks one thread); a
     real hidden top-level window as the parent, not a message-only one (`HWND_MESSAGE`), and a child or
     owner window for the driver's dialogs; each message through `MSG_PROCESSEVENT`, or a `DAT_CALLBACK2`
