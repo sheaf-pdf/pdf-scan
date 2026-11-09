@@ -4,10 +4,11 @@
 //!
 //! Its first argument names a scenario, a second a count of sheets where one takes it (3 if
 //! none). Through `serve`: those of `scenarios.rs`; `env`, a backend reporting where it was
-//! started; `slow-listing`, whose listing takes a minute and whose exit is held. By hand, the
-//! protocol written as literal lines: `version`, `not-json`, `no-hello`, `silent`, `deaf`,
-//! `long-line`, `out-of-place`, `refuses`, `no-source`, `big-page`, `page-length`, `padding`,
-//! `zero-dpi` and `cut-short`.
+//! started; `slow-listing`, whose listing takes a minute and whose exit is held; `slow-exit`,
+//! whose device opens at once and whose exit is held. By hand, the protocol written as literal
+//! lines: `version`, `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`,
+//! `refuses`, `no-source`, `big-page`, `page-length`, `padding`, `zero-dpi`, `cut-short` and
+//! `page-then-end`.
 
 #![forbid(unsafe_code)]
 
@@ -45,6 +46,10 @@ fn main() -> ExitCode {
             let backend = FakeBackend::new()
                 .with(scenarios::desk())
                 .listing_takes(Duration::from_secs(60));
+            scan_worker::serve(vec![Box::new(HeldExit(backend))])
+        }
+        "slow-exit" => {
+            let backend = FakeBackend::new().with(scenarios::desk());
             scan_worker::serve(vec![Box::new(HeldExit(backend))])
         }
         _ => by_hand(name),
@@ -155,7 +160,7 @@ fn by_hand(name: &str) -> ExitCode {
         // Its hello, and never an answer.
         "deaf" => say(HELLO, &[]),
         "long-line" | "out-of-place" | "refuses" | "no-source" | "big-page" | "page-length"
-        | "padding" | "zero-dpi" | "cut-short" => {
+        | "padding" | "zero-dpi" | "cut-short" | "page-then-end" => {
             say(HELLO, &[]);
             let Some(open) = request(&mut input) else {
                 return ExitCode::SUCCESS;
@@ -215,6 +220,14 @@ fn by_hand(name: &str) -> ExitCode {
                         // Half its bytes, then the end.
                         "cut-short" => {
                             say(&page(&gray(100, 100), "[300.0,300.0]", 10_000), &[0; 5000]);
+                            return ExitCode::SUCCESS;
+                        }
+                        // A whole page, then the end, with no `done`.
+                        "page-then-end" => {
+                            say(
+                                &page(&gray(100, 100), "[300.0,300.0]", 10_000),
+                                &[7; 10_000],
+                            );
                             return ExitCode::SUCCESS;
                         }
                         _ => unreachable!("every scenario above is matched"),

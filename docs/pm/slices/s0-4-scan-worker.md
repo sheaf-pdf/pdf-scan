@@ -1219,3 +1219,87 @@ and the shared-deadline test's 1.8 s bound, for CI's slower runners.
   and waiting; `Limits`' and `Timeouts`' defaults live with the client, the worker's own
   request cap staying in `wire`; a page of 0 width or height is `Layout(Empty)`, said by `data_len` before the
   length is compared.
+
+**Step 4, when a worker fails: the watchdog, cancel, crashes, and the throughput gate** (2026-11-09; one
+commit, "Test scan-worker when a worker fails: the watchdog, cancel, crashes, and its throughput", on
+`c42069c`). The checks before it: step 3's check of `c42069c` passed (`scratch/work/s0-4/flow/checks.md`): `just
+ci` green with both `SANE_DL_REQUIRE_*` set (857 tests, the four MSRV recipes on 1.89, `sane-dl-package` run);
+the test list 398 to 450, none lost; the gates holding, `scan-worker`'s graph 31 packages, 31 binaries read for
+libsane, `scan-worker-fake` among them; the libsane gate's make-fail on a worktree, the build script linking
+libsane into the binaries alone failing the new gate naming `scan-worker-fake` and passing `ee4ef2f`'s; the
+plan's three mutations failing; `x86_64-pc-windows-gnu` and `x86_64-apple-darwin` clippy clean; 1.89 standing
+(31 packages). No remark beyond step 2's.
+
+- **The tests,** 15, through the test worker, in five integration binaries, each wait bounded:
+  `tests/watchdog.rs` (a driver hung midway through sheet 3's front, `silence` 500 ms: `Stopped` with its
+  silence between 500 ms and 5 s, sheets 1 and 2 whole and `pattern`'s, sheet 3's `Sheet` and no page of it, the
+  known line in its standard error, every call after `Ended`; a silent worker `Stopped` at `start`, 300 ms,
+  for a listing and an open; a caller taking each event 500 ms late on a rendezvous channel with `silence` at
+  250 ms, the batch whole); `tests/cancel.rs` (cancelled once the caller's tracker stands at half sheet 2's
+  front: sheet 2's front and back after it, no sheet 3, `Done::Cancelled`, and the next batch from sheet 3
+  giving sheets 3 and 4, the feeder's rest; cancelled once sheet 2's front is in the caller's hands: its back
+  alone after, the same next batch; a receiver that takes the first page and goes: `Done::Cancelled`, and the
+  next batch giving what's left, between 1 and 7 of the 8 sheets, every page `pattern`'s); `tests/ends.rs`
+  (a crash and an exit at sheet 3's front midway: sheets 1 and 2 whole, sheet 3's `Sheet` written or not as
+  the process ended, as `scan-device`'s own test has it, `Crashed` with the status, `SIGABRT` on Unix and
+  `0xC0000409` on Windows for the abort, 42 for the exit, not cut short, the known line in its standard error;
+  a page cut short dropped, `page_cut_short`, the worker's success its status; a whole page just before the
+  output's end kept, not cut short; `close` and drop reaping a worker that exits when asked, and killing one
+  that won't within a 300 ms grace (`Stopped`, its silence the grace), each within its bound, its directory
+  gone and, on Linux, its `/proc` entry too, so it was reaped); `tests/orphaned.rs` (the worker spoken to
+  directly, its requests written as JSON from the model's serde form and its output read with each page's bytes
+  skipped: its input ended idle, with no device and with one open, exiting 0; ended while its driver hangs
+  midway through sheet 3's front, aborting no sooner than the 10 s grace and within 10 s more); and
+  `tests/throughput.rs`, below. The shared helpers (`outline`, `soon`, `entries`, `reaped`, `aborted`, the
+  abort's statuses behind `cfg`) are in `tests/support/`.
+- **The test worker:** two scenarios more, `slow-exit` (the device opens at once, and the worker's exit, once
+  asked, takes a minute: `slow-listing`'s held exit without its listing, which an open waits on too) and
+  `page-then-end` (by hand: a whole page, then the end, no `done`).
+- **The throughput gate** (`tests/throughput.rs`, one test, a binary of its own): one worker (`scan-more`, 24
+  new sheets at each batch), 24 duplex sheets of 300 dpi Letter in `Rgb8` then in `Bw1`, each page timed as the
+  caller takes it from a channel of 2; the rate over the 40 pages after the first 8, in pages and MB a second,
+  written on standard error past the harness's capture on every run, and asserted at 2.3 pages a second. Here
+  (`scratch/work/s0-4/step-4/throughput.txt`): in the debug build `Rgb8` at 29.7, 29.2 and 30.1 pages a second
+  (738 to 760 MB a second), the first, cold run 22.4; `Bw1` at 377 to 730; in release `Rgb8` 30.2 and `Bw1`
+  965. So the lowest seen is 9.7 times the gate and the usual 13 times. The pipe is the bound, at about 750 MB
+  a second in either build: the same batch in process (a probe, not kept) runs `Rgb8` at 151 to 362 pages a
+  second. **Decision 33's rule applied:** over four times the gate in the debug build here, so the assertion
+  stays in the debug run everywhere, `just test` on CI's three systems among them; the fallback isn't taken
+  (no `throughput` recipe, no CI line, no variable).
+- **The docs:** the crate docs' "When a worker fails" says how a crash's status reads (its code, or on Unix
+  its signal, `SIGABRT` for an abort; `0xC0000409` for an abort on Windows); the test worker's docs list the two
+  scenarios. The README and the root README's row say it already. No CHANGELOG (unpublished).
+- **Make-fails** (`scratch/work/s0-4/step-4/make-fail.md`, its script beside it), on a worktree there at a local
+  commit of the step, its own target directory, removed after, the branch unchanged; 14 cases, each failing as
+  it should, the base passing after: the plan's three (the watchdog counting the time spent handing an event
+  to the caller, failing the slow caller's test; the cancel never sent, failing the three cancel tests; the
+  reader dropping a whole page read just before the output's end, failing `page-then-end`'s test, and the
+  cancel at a back's start and the reader's unit test with it, since its peek blocks), and `Stopped` keeping no
+  standard error; the `hello` given the grace too; a crashed worker killed at once, its status lost; a page cut
+  short not said; the cancel read only at a line; a failed `send` not a cancel; the end of input exiting 1; the
+  orphan's backstop an exit, not an abort; a worker past the grace never killed; a device dropped without
+  closing its worker (never reaped); a slow pipe (the reader held 500 ms a page: 1.9 pages a second, failing
+  the gate).
+- **The timing tests 30 times** (`scratch/work/s0-4/step-4/loop.txt`): each round the four binaries
+  `watchdog`, `cancel`, `orphaned` and `ends` at once, each under the memory scope: 30 of 30, none failing (341
+  s). And under load (`load.txt`): 10 rounds of six copies of each at once, 24 test processes and their
+  workers: 240 runs, none failing.
+- **Quick checks:** `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets` with and
+  without `--all-features`, `-D warnings`; `cargo clippy --locked -p scan-worker --all-targets --all-features
+  -D warnings` for `x86_64-pc-windows-gnu` and `x86_64-apple-darwin`, clean (the abort's statuses behind
+  `cfg`); `cargo +1.89 check --locked -p scan-worker --all-targets`; `cargo doc -p scan-worker` with `-D
+  warnings`; `cargo test --locked -p scan-worker` (39 units, 54 integration tests, 3 doctests: 96, step 3's 81
+  and these 15). The core (`just ci`, the test list, the scans) is the step's check's. Left out, as the plan
+  says: the MSRV probe and `cargo tree` (no package added), the gates' make-fails (no gate changed).
+- **Departures from the plan:** two scenarios more (above), `slow-exit` because `slow-listing`'s open lists
+  first and so takes its minute too, `page-then-end` because no other worker ends right after a whole page,
+  which the plan's third mutation needs; the tests in five files by what they test, not named by the plan; a
+  run under load beside the 30-round loop; the reaping checked through the process's `/proc` entry on Linux,
+  beside the directory everywhere.
+- **Decisions, for review with the plan's:** the timing tests set only the limit they test, short, and leave
+  the others at their defaults, so a missed cancel fails at the cancel's 10 s or the silence's 60 s rather
+  than holding a test for good; the crash's and exit's sheet 3 `Sheet` taken either way, the process ending
+  as the batch goes on; the receiver-gone test asserts the next batch gives between 1 and 7 of 8 sheets, since
+  how far the worker ran ahead of the failed `send` before the cancel landed is timing (the sheet in flight, in
+  practice); the orphan's abort asserted no sooner than its grace, since a call might yet return; the
+  throughput timed from the caller's side, as an app sees it, over one worker for both formats.

@@ -7,7 +7,14 @@
 #[path = "../../src/bin/scan-worker-fake/scenarios.rs"]
 pub mod scenarios;
 
-use std::{fs, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitStatus,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use scan_worker::scan_device::fake::pattern;
 use scan_worker::scan_device::in_progress::Tracker;
@@ -131,4 +138,79 @@ pub fn resolved(path: impl Into<PathBuf>) -> PathBuf {
 /// Whether `ended` is the device's `error`.
 pub fn is_scan(ended: &Result<Done, Error>, error: &ScanError) -> bool {
     matches!(ended, Err(Error::Scan(got)) if got == error)
+}
+
+/// Each event in `events` in short: `applied`, `status`, `sheet 2`, `page 2 front`.
+pub fn outline(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event {
+            Event::Applied(_) => "applied".to_owned(),
+            Event::Status(_) => "status".to_owned(),
+            Event::Sheet(sheet) => format!("sheet {sheet}"),
+            Event::Page(page) => format!(
+                "page {} {}",
+                page.sheet,
+                match page.side {
+                    scan_worker::scan_device::Side::Front => "front",
+                    scan_worker::scan_device::Side::Back => "back",
+                }
+            ),
+            _ => "unknown".to_owned(),
+        })
+        .collect()
+}
+
+/// Whether `test` holds within [`AT_MOST`], asked every 5 ms.
+pub fn soon(mut test: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < AT_MOST {
+        if test() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    test()
+}
+
+/// The entries in `dir`: a worker's directory each, while it lives.
+pub fn entries(dir: &Path) -> usize {
+    fs::read_dir(dir).expect("the work directory").count()
+}
+
+/// Whether the process `id` has been reaped: on Linux, once it has, its entry under `/proc` is
+/// gone (a process exited and not yet reaped keeps its own); elsewhere, not seen, so taken as
+/// reaped.
+pub fn reaped(id: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        !Path::new(&format!("/proc/{id}")).exists()
+    } else {
+        true
+    }
+}
+
+/// Signal 6, which an abort raises on Unix, Linux and macOS alike.
+#[cfg(unix)]
+const SIGABRT: i32 = 6;
+
+/// The exit code of a process that aborts on Windows: an abort is a fast fail there,
+/// `STATUS_STACK_BUFFER_OVERRUN`.
+#[cfg(windows)]
+const ABORTED: i32 = 0xC000_0409_u32 as i32;
+
+/// Whether `status` is an abort's: by `SIGABRT` on Unix, by its exit code on Windows.
+pub fn aborted(status: &ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(SIGABRT)
+    }
+    #[cfg(windows)]
+    {
+        status.code() == Some(ABORTED)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        !status.success()
+    }
 }

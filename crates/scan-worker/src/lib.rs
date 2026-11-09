@@ -114,8 +114,10 @@
 //! ## When a worker fails
 //!
 //! Every page a worker sent whole before it failed is the caller's already, sent on as it came.
-//! A worker whose output ends unasked is [`Error::Crashed`], with how it exited, and with a page
-//! its output ended within dropped and said; one killed for its silence is [`Error::Stopped`].
+//! A worker whose output ends unasked is [`Error::Crashed`], with how it exited (its exit code,
+//! or on Unix the signal that ended it: an abort's is `SIGABRT`, where on Windows an abort exits
+//! with `0xC0000409`), and with a page its output ended within dropped and said; one killed for
+//! its silence is [`Error::Stopped`].
 //! Both keep the last 8 KiB of what the worker wrote to its standard error, which a thread drains
 //! as it comes, for the app's log. A worker that ended is closed: every later call on its device
 //! answers [`Error::Ended`]. A worker's end never holds the caller long: asked to quit, it's
