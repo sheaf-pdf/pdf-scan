@@ -159,3 +159,40 @@ impl Default for Limits {
         }
     }
 }
+
+/// The README's example, compiled as a doctest.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+#[cfg(test)]
+mod tests {
+    /// The README's licence links are the repository's URLs, which reach
+    /// the files from crates.io and docs.rs: the package holds no licence
+    /// file, and a relative link would climb out of it.
+    #[test]
+    fn the_readmes_licence_links_reach_the_files() {
+        let readme = include_str!("../README.md");
+        let repository = env!("CARGO_PKG_REPOSITORY");
+        for file in ["LICENSE-APACHE", "LICENSE-MIT"] {
+            let link = format!("[{file}]({repository}/blob/master/{file})");
+            assert!(
+                readme.contains(&link),
+                "{file}'s link isn't the repository's URL"
+            );
+        }
+        assert!(!readme.contains("](../"), "a link climbs out of the crate");
+    }
+
+    /// The changelog has an entry for the version the manifest gives, so a
+    /// version is never packaged unsaid.
+    #[test]
+    fn the_changelog_has_an_entry_for_this_version() {
+        let changelog = include_str!("../CHANGELOG.md");
+        let heading = format!("## {} (", env!("CARGO_PKG_VERSION"));
+        assert!(
+            changelog.lines().any(|line| line.starts_with(&heading)),
+            "the changelog has no entry headed {heading}…)"
+        );
+    }
+}

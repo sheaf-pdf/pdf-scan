@@ -7,9 +7,11 @@ sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' 
 default:
     @just --list --unsorted
 
-# Everything CI runs. `msrv` needs each crate's oldest Rust installed
-# (`rustup toolchain install <version>`); `gates` needs jq and readelf.
-ci: fmt clippy test doc gates msrv
+# What they need: `msrv` each crate's oldest Rust installed (`rustup
+# toolchain install <version>`), `gates` jq and readelf, `sane-dl-package`
+# the network.
+# Everything CI runs.
+ci: fmt clippy test doc gates sane-dl-package msrv
 
 # Check formatting; `cargo fmt --all` fixes it.
 fmt:
@@ -32,6 +34,32 @@ msrv: sane-dl-msrv
 
 sane-dl-msrv:
     cargo +{{ sane_dl_msrv }} test --locked -p sane-dl
+
+# Package sane-dl as a publish would, in a target directory of its own made
+# fresh each time (a stale one passes or fails falsely): sane-dl-package
+# under target/, or under CARGO_TARGET_DIR where that names another, so the
+# recipe never removes more than its own directory. Then check what the
+# package holds: its sources, README, CHANGELOG, manifest and lock, those
+# four there and nothing else. The tests are outside `include`, so cargo
+# says it leaves each of them out of the packaged manifest, which is
+# expected. The dry run asks the registry, so it needs the network, and it
+# never publishes.
+# sane-dl packaged as a publish would, and what the package holds checked.
+sane-dl-package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=${CARGO_TARGET_DIR:-$PWD/target}/sane-dl-package
+    rm -rf "$dir"
+    CARGO_TARGET_DIR="$dir" cargo publish --dry-run --locked -p sane-dl
+    CARGO_TARGET_DIR="$dir" cargo package --list --locked -p sane-dl > "$dir/files.txt"
+    if grep -v -E '^(src/.*\.rs|README\.md|CHANGELOG\.md|Cargo\.toml|Cargo\.toml\.orig|Cargo\.lock|\.cargo_vcs_info\.json)$' "$dir/files.txt"; then
+        echo "the package holds more than its sources, README, CHANGELOG, manifest and lock (above)" >&2
+        exit 1
+    fi
+    for file in src/lib.rs README.md CHANGELOG.md Cargo.toml Cargo.lock; do
+        grep -qxF -- "$file" "$dir/files.txt" || { echo "the package lacks $file" >&2; exit 1; }
+    done
+    echo "sane-dl-package: $(wc -l < "$dir/files.txt") files, each a source, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
 
 # The boundaries of the layers, checked over every target's dependency
 # graph; that nothing links libsane; and what files may name.
