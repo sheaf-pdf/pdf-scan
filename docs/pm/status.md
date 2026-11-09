@@ -2,18 +2,21 @@
 
 As of 2026-11-09.
 
-**S0 slice 1 is done on its branch, `s0-1-sane-dl`, pushed, in pull request #2,** waiting on review, CI green on
-it. The workspace, then `sane-dl` 0.1.0-alpha.1 (SANE loaded at run time, its bindings checked against `sane.h`,
-devices under a deadline, typed options, frames assembled into pages, batches, a cancel token any thread can
-use), ready to publish and not published, with `fake-libsane` for its tests; its code review's 22 findings all
-fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged (pull request #1). It's a git
-repository at github.com/sheaf-pdf/pdf-scan (public; `master`). **S0 slice 2, the seam note revised, is done on
-`s0-2-seam-note`,** stacked on slice 1's branch, waiting on review, the push and its pull request; S0 slice 3
-next, once that's open. **S0 slice 8, `twain-dsm`, is done on its branch, `s0-8-twain-dsm`,** on the Windows
-machine, code-reviewed and fixed, in pull request #4, rebased onto `master` after #2 and #3. **S0 slice 1a,
-`sane-dl`'s public API made safe, is done on `s0-1a-sane-dl-safe-api`,** code-reviewed and fixed, waiting on
-review, the push and its pull request (below).
+**S0 slice 1a, `sane-dl`'s public API made safe, is done on its branch, `s0-1a-sane-dl-safe-api`** (from
+`master` at `3f33be5`, `master` merged in after #6), pushed, in pull request #7, waiting on review and CI
+("Running", below). **S0 slices 1, 2, 3 and 8 are merged** (pull requests #2, #3, #6 and #4, squashed; #5
+recorded slice 8's close), as **S0 slice 7, the TWAIN spike,** is (#1); slices 7 and 8 from the Windows machine.
+S0 slice 4, `scan-worker`, is under way from `master` at `5a4bff2`. It's a git repository at
+github.com/sheaf-pdf/pdf-scan (public; `master`).
 
+- **Running: S0 slice 1a, `sane-dl`'s public API made safe, done on its branch**
+  (`slices/s0-1a-sane-dl-safe-api.md`; `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`), through the `scan-slice` workflow (local):
+  four steps, each checked, and the code review's 22 findings all fixed. No public item of `sane-dl` is
+  `unsafe`: `Sane::load_from` gone, the library the system loader's choice; on Linux one SANE per process across
+  copies of the crate, a spawned child's moment waited out; `just public-api` over every public item; BUG-7
+  done. `Sane::load`'s safety rests on two rules of the environment, now in its docs (decision 33). **Waits
+  on:** review (40 decisions, 11 security items; Q-7, UP-14) and CI's run of pull request #7 on Ubuntu, Windows
+  and macOS (TEST-15, TEST-7). Its TEST-12 is TEST-14 (slice 3 merged first).
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
@@ -52,36 +55,33 @@ review, the push and its pull request (below).
   and on `windows-latest`; TWAIN walked from state 1 to 7 and back in both bitnesses; native and memory
   transfers equal pixel for pixel; cancels from another thread; four code reviewers, every finding fixed; the
   seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
-- **Done on its branch: S0 slice 8, `twain-dsm`** (on the Windows machine, branch `s0-8-twain-dsm`;
-  `slices/s0-8-twain-dsm.md`): planned, reviewed (24 findings, all taken), its six steps built and pushed
-  2026-11-08: the crate safe by construction (`decisions.md`; `crates/twain-dsm.md`), tested through the sample
-  source in both bitnesses; the spike deleted. Three things the plan had wrong, found by its tests: the DSM
-  doesn't close a source left open alone, its global condition code must be read first, and a catalog-signed
-  Windows file can verify, as Microsoft's (refused either way). Code-reviewed by four reviewers in parallel and
-  fixed, 2026-11-09 (the high findings: two copies of the crate in one process racing in the DSM, a source's
-  message lost to another message loop on the thread, extended image info misread on 64-bit, a driver's large
-  container panicking a 32-bit worker, tests that passed with the thing broken). Pull request #4, rebased onto
-  `master` after #2 and #3 (its TEST-7 renumbered TEST-11, since `master` holds a TEST-7); CI on it and approval
-  close it.
-- **Done on its branch: S0 slice 1, `sane-dl` and the workspace it starts** (`slices/s0-1-sane-dl.md`;
-  `137be1a` to the branch's head, `master` merged in after slice 7), through the `scan-slice` workflow
-  (local): five steps, each checked, and the code review's fixes. Pushed, pull request #2.
-- **Done on its branch: S0 slice 2, the seam note revised** (`slices/s0-2-seam-note.md`; `s0-2-seam-note`,
-  from slice 1's tip, docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns answered, the
-  raw layout fixed, and the model written down for slice 3, then revised by its code review (25 findings
-  fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
-  1's; CI's run on the three systems then shows nothing of its own (docs only).
-- **Done on its branch: S0 slice 1a, `sane-dl`'s public API made safe** (`slices/s0-1a-sane-dl-safe-api.md`;
-  `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`), through the `scan-slice` workflow (local):
-  four steps, each checked, and the code review's 22 findings all fixed. No public item of `sane-dl` is
-  `unsafe`: `Sane::load_from` gone, the library the system loader's choice; on Linux one SANE per process across
-  copies of the crate, a spawned child's moment waited out; `just public-api` over every public item; BUG-7
-  done. `Sane::load`'s safety rests on two rules of the environment, now in its docs (decision 33). **Waits
-  on:** review (40 decisions, 11 security items; Q-7, UP-14), then the push, its pull request against `master`
-  and CI's run on Ubuntu, Windows and macOS (TEST-15, TEST-7). Its TEST-12 is TEST-14 (slice 3 merged first).
+- **Done: S0 slice 3, `scan-device` provisional** (merged 2026-11-09 as pull request #6, squashed `5a4bff2`;
+  CI green on every job of `master`'s run of it, 42644985306; `slices/s0-3-scan-device.md`): four steps, each
+  checked, then its code review's 18 findings all fixed: `scan-device` 0.0.0, unpublished, MSRV 1.89, the seam
+  note's model as written (`Paper` now `#[non_exhaustive]`) and the `fake` backend, every script of proposal 22
+  tested; `RawImage`'s sizes held to `isize::MAX` (the review's major finding). Later: TEST-12, Q-5, Q-6.
+- **Done: S0 slice 8, `twain-dsm`** (merged 2026-11-09 as pull request #4, CI green on every job, run
+  42617750221; `archive/slices/s0-8-twain-dsm.md`), on the Windows machine: planned, reviewed (24 findings, all
+  taken), its six steps built and pushed 2026-11-08: the crate safe by construction (`decisions.md`;
+  `crates/twain-dsm.md`), tested through the sample source in both bitnesses; the spike deleted. Three things
+  the plan had wrong, found by its tests: the DSM doesn't close a source left open alone, its global condition
+  code must be read first, and a catalog-signed Windows file can verify, as Microsoft's (refused either way).
+  Code-reviewed by four reviewers in parallel and fixed, 2026-11-09 (the high findings: two copies of the crate
+  in one process racing in the DSM, a source's message lost to another message loop on the thread, extended
+  image info misread on 64-bit, a driver's large container panicking a 32-bit worker, tests that passed with the
+  thing broken). Rebased onto `master` after #2 and #3 (its TEST-7 renumbered TEST-11, since `master` holds a
+  TEST-7).
+- **Done: S0 slice 1, `sane-dl` and the workspace it starts** (merged 2026-11-09 as pull request #2, squashed
+  `3ebea15`, CI green; `archive/slices/s0-1-sane-dl.md`): `sane-dl` 0.1.0-alpha.1, ready to publish and not
+  published, with `fake-libsane` for its tests; five steps, each checked, and its code review's 22 findings fixed.
+- **Done: S0 slice 2, the seam note revised** (merged 2026-11-09 as pull request #3, squashed `70d7b20`;
+  `archive/slices/s0-2-seam-note.md`; docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns
+  answered, the raw layout fixed, and the model written down for slice 3, then revised by its code review (25
+  findings fixed, BUG-7 deferred).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
-  8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the
-  maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 4, `scan-worker`, on Linux, on slice 3's model and fake (slice 3 merged on `master`, pull
-  request #6). On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 1a (40 and 11); S0
+  slice 2 (41 and 6); S0 slice 3 (50 and 6); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13,
+  upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK; PL-4, which first needs the
+  maintainer's call on pdf-lint's "the interpreter stays out" line.
+- **Next:** S0 slice 4, `scan-worker`, under way on Linux from `master` at `5a4bff2`, on slice 3's model and
+  fake. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

@@ -2,7 +2,8 @@
 
 Status: done on branch `s0-1a-sane-dl-safe-api` (from `master` at `3f33be5`; the code to `1a94bee`), 2026-11-09:
 four steps, each checked, and the code review's 22 findings fixed. Waits on review ("Decisions taken alone, for
-review", "For review (security)"), then the push, its pull request and CI's run on the three systems.
+review", "For review (security)") and CI's run of pull request #7 on the three systems (pushed, `master` merged
+in after #6).
 Milestone: `milestones/s0-devices.md`, slice 1a (added there by step 1, after slice 1).
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
@@ -10,7 +11,7 @@ with a leading `/` (`/crates/sane-dl/`, `/justfile`); `scratch/` from the root, 
 
 ## What it builds
 
-A follow-up to slice 1 (`slices/s0-1-sane-dl.md`), asked for on 2026-11-09: "i think that we should try to
+A follow-up to slice 1 (`archive/slices/s0-1-sane-dl.md`), asked for on 2026-11-09: "i think that we should try to
 define safe apis where possible". That confirms `decisions.md`'s ruling of 2026-11-08 ("Public APIs are safe
 Rust; `unsafe` contracts stay inside a crate"), which slice 8 recorded after slice 1's code review had made
 `Sane::load_from` a `pub unsafe fn` (slice 1's decision 62, its security items 1 and 9). `sane-dl` is

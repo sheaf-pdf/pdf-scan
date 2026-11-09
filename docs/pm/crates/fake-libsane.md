@@ -2,7 +2,7 @@
 
 Layer: Tests (`crates/README.md`). Paths are from `docs/pm/`.
 
-**Built** in S0 slice 1 (`slices/s0-1-sane-dl.md`): `/crates/fake-libsane/`, a `cdylib`, `publish = false`,
+**Built** in S0 slice 1 (`archive/slices/s0-1-sane-dl.md`): `/crates/fake-libsane/`, a `cdylib`, `publish = false`,
 MIT OR Apache-2.0, no dependencies, MSRV 1.89. A crate of its own for good, not part of `scan-fixtures`
 (`decisions.md`, "Made here"): `scan-fixtures` will be a library of pages that crates take as a
 dev-dependency, with image codecs behind it, while the fake is a shared object loaded as SANE, and must carry

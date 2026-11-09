@@ -14,9 +14,9 @@ model lacking, each change said. The model it describes is provisional until S0 
 (`milestones/s0-devices.md`).
 
 **Revised 2026-11-09 by S0 slice 2, after slice 7's revision below** (slice 7 ran first): its SANE rows in
-sections 1 to 3 and 5 to 8, from `sane-dl` as S0 slice 1 built it (`slices/s0-1-sane-dl.md`, "So far" and
+sections 1 to 3 and 5 to 8, from `sane-dl` as S0 slice 1 built it (`archive/slices/s0-1-sane-dl.md`, "So far" and
 "Code review") and the slice's probes through it, against SANE's `test` and `pnm` backends, the installed
-backends with nothing attached, and `fake-libsane` (`slices/s0-2-seam-note.md`, "So far"); a table of SANE's
+backends with nothing attached, and `fake-libsane` (`archive/slices/s0-2-seam-note.md`, "So far"); a table of SANE's
 names per backend (section 1); the two SANE unknowns answered, names that change on replugging (section 1)
 and stopping after the page in flight (section 7), each with what only the fi-6130 settles (S0 slice 6); the
 raw layout fixed (section 3) and held beside `scanimage`'s pages; and the model written down for slice 3 to
@@ -34,7 +34,7 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 `ScanError` gains `SettingsRefused`, `AccessDenied`, `TimedOut` and `Unsupported`.
 
 **Revised 2026-11-08 and 09 by S0 slice 8, `twain-dsm`, on the Windows machine beside slice 2, merged after it**
-(`slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
+(`archive/slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
 these changes), in sections 3, 8 and the unknowns, where building the crate changed what the spike had:
 `twain-dsm` serves requests in every state (another thread's `Remote<T>`, the caller's own request type;
 `Twain::wait`, `Enabled::next_event`, `take_request` between buffers), and hands the source's messages over
@@ -267,7 +267,7 @@ with section 4's `side_known`), with `pixels` one of two:
 
 **A page is delivered whole**, once complete; a 600 dpi color Letter page is about 100 MB raw, and one at a time is
 fine, which the bounded channel holds a backend to (section 8): its `send` waits while the channel is full, so a
-pull backend starts no next sheet before its pages are taken. Progress goes through `in-progress` (section 7): each
+pull backend holds at its next `send`, starting nothing more, once the bound's events wait untaken. Progress goes through `in-progress` (section 7): each
 page's bytes as it's read, against its size where known, as proposal 10's progress bar wants. A page cut short (a
 jam mid-page) is never delivered.
 
@@ -287,7 +287,7 @@ WIA's and ICA's columns are to confirm (slice 10, and the `ica` slice). The layo
 (the spike's `image` module, its module doc: rows top down, packed, RGB, gray and 1-bit with 0 black, the first
 pixel in the high bit, the bits past a row's last pixel zero), with 16-bit little-endian added, so the TWAIN side's
 conversion exists already and SANE's 1-bit gray is the one format a backend inverts. **Held beside a third party**
-(probe L2, `slices/s0-2-seam-note.md`, "So far"): `sane-dl`'s pages from the `test` backend at 157 pixels a row
+(probe L2, `archive/slices/s0-2-seam-note.md`, "So far"): `sane-dl`'s pages from the `test` backend at 157 pixels a row
 (not a multiple of 8), converted as the table says, equal the raster of `scanimage --format=png` of the same scan
 pixel for pixel at gray 1 (two pictures), 8 and 16 and color 8 and 16, PNG's big-endian 16-bit swapped first
 (unswapped, the bytes differ); PNG's 1-bit gray is 0 black, the high bit first, and SANE's bits as they came differ
@@ -300,8 +300,9 @@ SANE row above).
 **`RawImage::new(format, width, height, data)` is the one way to make one** (its fields are private): `width` and
 `height` at least 1, `data` exactly `height` rows of the format's packed bytes, and a `Bw1` row's bits past its
 last pixel 0, so every `RawImage` holds the layout wherever it's made, the worker's client included. The length is
-worked out in `u64` with checked arithmetic, and a size past what `u64` or the platform's `usize` holds is refused,
-never wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize` (65,536 by 65,536 in `Rgb16` is 6 × 2^32
+worked out in `u64` with checked arithmetic, and a size past what `u64` counts or one buffer can hold on the
+platform (`isize::MAX`, the most any allocation can be; S0 slice 3's code review, where the platform's `usize`
+had been) is refused, never wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize` (65,536 by 65,536 in `Rgb16` is 6 × 2^32
 bytes, 0 once wrapped, which an empty buffer would match), and at `u32::MAX` by `u32::MAX` a format of two bytes a
 pixel or more overflows `u64` too (the spike's `image` module works its sizes out in `u64` for the same reason).
 Probe M1 tests each, the 32-bit cases on a 32-bit target too.
@@ -436,7 +437,7 @@ sheet inside `MSG_ENDXFER`, which the application can't see, so the hand checks 
 feeders do, and whether `MSG_STOPFEEDER` helps where a driver has it.
 
 **Stopping after the page in flight (SANE): answered by S0 slice 2**, on the `test` backend's feeder and the
-fake's (`sheets 10`), through `sane-dl` (probe S1; `slices/s0-2-seam-note.md`, "So far"). SANE lets a frontend
+fake's (`sheets 10`), through `sane-dl` (probe S1; `archive/slices/s0-2-seam-note.md`, "So far"). SANE lets a frontend
 finish the page in flight and feed no more: read the page to its `EOF`, start no next page, and end the batch
 with `sane_cancel`, which `sane-dl`'s `Batch` calls as it's dropped. A batch dropped after its third page left
 the rest in the feeder, on both: the next batch gave 7 pages, then `NO_DOCS`. Step by step, `sane_cancel` after
@@ -538,7 +539,14 @@ no caller (S0 slice 2's code review).
 
 ## The model, for slice 3
 
-**Written by S0 slice 2, for review** (its decisions in `slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
+**Built as written by S0 slice 3** (2026-11-09, `slices/s0-3-scan-device.md`), every name kept: what
+`scan-device` adds to the block (a constructor for each `#[non_exhaustive]` struct, `RawImage::data_len`,
+`Debug` by hand for `Opened`, the `fake` backend) is said in `crates/scan-device.md`. Its code review changed
+the block in two places, written into it below: `Paper` `#[non_exhaustive]`, since paper may yet grow (section
+2's "To settle"), and `RawPage`'s doc saying who keeps its `dpi` (a backend) and who checks it (whoever decodes
+a page from outside the process).
+
+**Written by S0 slice 2, for review** (its decisions in `archive/slices/s0-2-seam-note.md`): what `scan-device` 0.0.x
 builds, proposal 9's model with this note's changes ("Changes from proposal 9's model"). Names are the
 design's: slice 3 may rename and says so, and the model stays provisional until slice 11 freezes it. Plain
 data, every field public but `RawImage`'s; an enum or a struct that may grow is `#[non_exhaustive]`; pixel
@@ -598,6 +606,7 @@ pub struct Settings {
     pub encodings: Vec<Encoding>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Paper { Auto, Size(SizeMm) }
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -630,7 +639,8 @@ pub enum LayoutError {
 }
 
 // Pages (sections 3 and 4).
-/// `dpi` finite and above 0: the worker's client refuses others as it decodes.
+/// `dpi` finite and above 0: a backend keeps it so, and code that decodes a page from outside the
+/// process (from a pipe, say) refuses others.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct RawPage {
@@ -737,8 +747,9 @@ pub trait Device: Send {
   and never the bytes (decision 39): a page is up to about 100 MB, and `{:?}` of an event, a log line or an
   `assert_eq!` that fails would print it all.
 - **A batch** (`Device::scan`, sections 4 to 8): events on a bounded channel (a `SyncSender<Event>`, the caller
-  choosing the bound with `sync_channel(n)`; decision 30): a `send` waits while it's full, so a pull backend
-  starts no next sheet before its pages are taken, and a push backend's thread waits the same, holding its
+  choosing the bound with `sync_channel(n)`; decision 30): a `send` waits while it's full, so once `n` events
+  wait untaken a pull backend holds at its next `send`, starting nothing more (on a rendezvous channel,
+  `sync_channel(0)`, until each event is taken), and a push backend's thread waits the same, holding its
   driver back, where an unbounded `Sender` would grow by a page for each the consumer fell behind; a `send`
   that fails (the receiver gone) ends the batch, no sheet started after it, as `Done::Cancelled`.
   `Event::Applied` once the settings are set, before the first sheet; `Event::Sheet(n)` as sheet `n` begins,
@@ -786,8 +797,10 @@ this):
   of every enum, since an enum's `#[non_exhaustive]` lets the client's conversions compile without a variant
   added here (slice 4's choice, said); either way a `RawImage` decoded on the client is made by
   `RawImage::new` (a `try_from`, never a derive that fills its private fields), so its checks hold there too,
-  and the client refuses a `RawPage`'s `dpi` that isn't finite and above 0, an empty `Resolutions::List`, and a
-  `Range` whose `min` is past its `max`, as it refuses a wrong length;
+  and the client refuses a `RawPage`'s `dpi` that isn't finite and above 0, an empty `Caps::sources`, a
+  `SourceCaps` with no format, an empty `Resolutions::List`, and a `Range` whose `min` is past its `max`, as it
+  refuses a wrong length (each a rule a backend keeps, which `scan-device`'s docs give and its constructors
+  don't check; S0 slice 3's code review);
 - a page's format, width and height before its bytes, so the client caps them before it reads them
   (`plan.md`'s hostile-input rule), and `RawImage::new` refusing a length that doesn't match: a crashed
   worker's half page is never a page;
@@ -810,7 +823,12 @@ this):
   the backend `backend_of` gives, or none where it gives none: section 1), passed at the spawn, in a directory
   it trusts: `BeforeSystem` has SANE read the process's current directory after the `ConfigDir` and before the
   system's, so a `dll.aliases` or a backend's `.conf` there would be read (`sane-dl`'s `Search`; S0 slice 1's
-  security item 4).
+  security item 4);
+- its tests taking `scan-device` with `features = ["fake"]` in `scan-worker`'s own dev-dependencies, and run
+  with `-p scan-worker` as well as in the workspace: `scan-device`'s tests turn `fake` on through a
+  dev-dependency on the crate itself, and `cargo test --workspace` unifies that feature across the members it
+  builds, so a member that forgot to ask for it still builds there and fails alone (S0 slice 3's code review,
+  shown on a two-crate workspace).
 
 **What slice 9's `twain` backend meets** (slice 7's rows, as they are): its tiles and DIB assembled into a
 `RawImage` (section 3's table: a DIB's rows flipped where it's bottom up, padding dropped, tiles placed, the

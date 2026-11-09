@@ -18,7 +18,8 @@ in the app's process unless the app asks: `scan-worker` is how sheaf uses them (
 
 - [`scan-device`](scan-device.md): the device model (DeviceInfo, Caps, Settings, RawPage, ScanError) and its
   backends: fake, sane, twain, wia, ica. Its design note, how each driver API meets the model:
-  [`scan-device-seam.md`](scan-device-seam.md).
+  [`scan-device-seam.md`](scan-device-seam.md). Built in S0 slice 3, the model and its `fake`: 0.0.0,
+  provisional, not published.
 - [`sane-dl`](sane-dl.md): SANE loaded at run time, with its own bindings, typed options and frame assembly.
   Built in S0 slice 1: 0.1.0-alpha.1, ready to publish, not published.
 - [`twain-dsm`](twain-dsm.md): TWAIN through the system's DSM, its seven states as types, in both bitnesses.

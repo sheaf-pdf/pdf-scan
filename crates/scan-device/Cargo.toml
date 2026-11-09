@@ -1,0 +1,35 @@
+[package]
+name = "scan-device"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "A device model for document scanners, one shape whatever driver API reaches them: devices listed and opened, what each can do, batches of pages in a checked raw layout, cancel and progress"
+repository = "https://github.com/sheaf-pdf/pdf-scan"
+# Provisional: the model may change until a second driver API has been
+# through it, and then it's made ready to publish (keywords, categories,
+# the package's contents and a changelog come then).
+publish = false
+
+[dependencies]
+# Its `Progress` is in this crate's API, which re-exports the crate, so an
+# app names the version the trait does.
+in-progress = "0.1.0"
+thiserror.workspace = true
+
+[features]
+# The scripted backend, `scan_device::fake`, for tests: never for a shipped
+# build, since its scripts can hang, abort or end the process.
+fake = []
+
+[dev-dependencies]
+# The crate's own tests, doctests included, take the fake backend: a
+# dev-dependency on the crate itself turns the feature on for them alone, so
+# a plain `cargo test` runs them, while a build without the feature has no
+# fake in it.
+scan-device = { path = ".", features = ["fake"] }
+# A child process for each test of a fault that ends the process it runs in.
+rusty-fork.workspace = true
+
+[lints]
+workspace = true

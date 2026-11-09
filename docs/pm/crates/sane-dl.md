@@ -2,7 +2,7 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 1 (`slices/s0-1-sane-dl.md`, which has the design, its decisions, what each step
+**As built** in S0 slice 1 (`archive/slices/s0-1-sane-dl.md`, which has the design, its decisions, what each step
 checked and the code review's fixes), its public API made safe in S0 slice 1a
 (`slices/s0-1a-sane-dl-safe-api.md`: the shapes of loading weighed, the process's slot, the gate over the
 public API): `/crates/sane-dl/`, 0.1.0-alpha.1, ready to publish and not published; MSRV 1.89

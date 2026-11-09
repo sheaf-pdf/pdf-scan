@@ -11,6 +11,7 @@
 # The oldest Rust each library supports, from its Cargo.toml.
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
 twain_dsm_msrv := `grep -m1 '^rust-version' crates/twain-dsm/Cargo.toml | cut -d'"' -f2`
+scan_device_msrv := `grep -m1 '^rust-version' crates/scan-device/Cargo.toml | cut -d'"' -f2`
 
 # The nightly whose rustdoc writes the JSON `public-api` reads. The JSON's
 # format moves between nightlies, so this moves only on purpose, with the
@@ -32,20 +33,30 @@ ci: fmt clippy test doc gates sane-dl-package public-api msrv
 fmt:
     cargo fmt --all -- --check
 
-# Lint every crate, with its tests.
+# Every feature on, so a backend behind one (scan-device's fake) is linted
+# as a user who turns it on meets it; then each library alone, its default
+# features alone, as an app's build has it, which the first line never
+# builds where a crate's tests turn a feature on (scan-device's fake,
+# through its dev-dependency on itself).
+# Lint every crate, with its tests and every feature, and each library as shipped.
 clippy:
-    cargo clippy --locked --workspace --all-targets -- -D warnings
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --locked --workspace --lib -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
     cargo test --locked --workspace
 
-# Build the API docs, failing on warnings.
+# Default features first, as docs.rs and an app's build have them, so a
+# link to an item behind a feature fails here; then every feature on, as a
+# user who turns one on meets them, which is what's left in target/doc.
+# Build the API docs, with default features and with every one, failing on warnings.
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 # Each library tested on its oldest supported Rust.
-msrv: sane-dl-msrv twain-dsm-msrv
+msrv: sane-dl-msrv twain-dsm-msrv scan-device-msrv
 
 # sane-dl's tests on its oldest supported Rust.
 sane-dl-msrv:
@@ -55,6 +66,10 @@ sane-dl-msrv:
 # twain-dsm's tests on its oldest supported Rust.
 twain-dsm-msrv:
     cargo +{{ twain_dsm_msrv }} test --locked -p twain-dsm
+
+# scan-device's tests on its oldest supported Rust.
+scan-device-msrv:
+    cargo +{{ scan_device_msrv }} test --locked -p scan-device
 
 # Package sane-dl as a publish would, in a target directory of its own made
 # fresh each time (a stale one passes or fails falsely): sane-dl-package
@@ -183,9 +198,10 @@ twain-dsm-doc-codes:
 twain-bindings *args:
     python -I scripts/twain-bindings.py {{ args }}
 
-# Over every target's dependency graph, the layers' boundaries, and that
-# fake-libsane takes no dependency; that nothing links libsane; that
-# fake-libsane is never published or depended on; and what files may name.
+# Over every target's dependency graph, every feature on, the layers'
+# boundaries, and that fake-libsane takes no dependency; that nothing built
+# with every feature on links libsane; that fake-libsane is never published
+# or depended on; and what files may name.
 # The layers' boundaries, nothing linking libsane, fake-libsane, and names.
 gates:
     #!/usr/bin/env bash
@@ -195,15 +211,16 @@ gates:
     for tool in jq readelf; do
         command -v "$tool" >/dev/null || { echo "gate: $tool is missing, and the gates need it" >&2; exit 1; }
     done
-    # A crate's dependencies, normal and build, on every target: one name a line.
-    deps() { cargo tree --locked -p "$1" -e normal,build --target all --prefix none -f '{p}' | awk '{print $1}' | sort -u; }
+    # A crate's dependencies, normal and build, on every target and with
+    # every feature on, so what a feature brings is read too: one name a line.
+    deps() { cargo tree --locked -p "$1" -e normal,build --target all --all-features --prefix none -f '{p}' | awk '{print $1}' | sort -u; }
     codec='^(image|tiff|png|zune-.*|jpeg-.*|fax|hayro-.*)$'
     pdf='^(pdf-.*|lopdf|pdfium-render|mupdf.*|hayro-syntax|hayro-interpret|krilla|pdf-writer|printpdf)$'
     ocr='^(ort|ort-sys|onnxruntime.*|tract-.*|candle-.*|rten|burn|tesseract.*|leptess|leptonica-sys)$'
     gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint)$'
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
-    for crate in sane-dl twain-dsm; do
+    for crate in sane-dl twain-dsm scan-device; do
         # The list first, so a `cargo tree` that fails (a crate named here
         # that isn't a member) fails the gate, rather than leaving the loop
         # nothing to read; and the crate itself must be in its own list.
@@ -238,10 +255,12 @@ gates:
     [[ -z $linkers ]] || fail "these declare links = \"sane\": $linkers"
     # ...and no binary built needs it: neither a test binary nor a shared
     # library (the fake's cdylib, which only `cargo build` builds), each read
-    # for libsane among the NEEDED entries of its dynamic section.
+    # for libsane among the NEEDED entries of its dynamic section. Built with
+    # every feature on, as the graphs are read, so a backend's feature that
+    # links it is caught.
     binaries=$({
-        cargo test --locked --workspace --no-run --message-format=json
-        cargo build --locked --workspace --message-format=json
+        cargo test --locked --workspace --all-features --no-run --message-format=json
+        cargo build --locked --workspace --all-features --message-format=json
     } | jq -r 'select(.reason == "compiler-artifact")
         | if .profile.test then .executable
           elif (.target.kind | index("cdylib")) then (.filenames[] | select(test("\\.so$")))
