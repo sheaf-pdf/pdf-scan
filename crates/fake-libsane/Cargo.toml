@@ -7,7 +7,8 @@ license = "MIT OR Apache-2.0"
 description = "A stand-in for libsane that sane-dl's tests load: scripted devices, hostile values, and SANE's calling rules checked"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
 # Never published, and no crate depends on it, of any kind: tests build it
-# and load the shared object by its path (`just gates` checks both).
+# and load the shared object as SANE, through the system loader's search
+# path (`just gates` checks both).
 publish = false
 
 [lib]

@@ -10,19 +10,23 @@ settles, and its upstream contributions.
 
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
-| bug (BUG) | `bugs.md` | 1 | 5 | 1 | | 7 | |
-| feature (FEAT) | `features.md` | 2 | 2 | 2 | 6 | 12 | |
+| bug (BUG) | `bugs.md` | | 5 | 1 | 1 | 7 | |
+| feature (FEAT) | `features.md` | 2 | 2 | 2 | 7 | 13 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 6 | 2 | 1 | 1 | 10 | |
-| question (Q) | `questions.md` | 3 | 1 | 2 | | 6 | |
-| upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
-| **all** | | **19** | **15** | **7** | **8** | **49** | **12** |
+| test (TEST) | `tests.md` | 8 | 2 | 1 | 1 | 12 | |
+| question (Q) | `questions.md` | 4 | 1 | 2 | | 7 | 1 |
+| upstream (UP) | `upstream.md` | 8 | 4 | 1 | 1 | 14 | 13 |
+| **all** | | **22** | **15** | **7** | **10** | **54** | **14** |
 
 ## Where to start
 
-- **S0:** TEST-7 (Homebrew's SANE on macOS) when a slice next touches `sane-dl`'s CI (TEST-2 and TEST-8, slice
-  1's, closed by CI's run of its pull request: `archive/backlog-done.md`); BUG-7 (`sane-dl`'s `Image` printing
-  its bytes in `Debug`) with its next alpha; FEAT-5 (patch codes the driver reports) with the Windows backends;
+- **S0:** TEST-7 (Homebrew's SANE on macOS, and since slice 1a the fake's tests there through
+  `DYLD_LIBRARY_PATH`) when a slice next touches `sane-dl`'s CI (TEST-2 and TEST-8, slice 1's, closed by CI's
+  run of its pull request: `archive/backlog-done.md`); TEST-15 (slice 1a's code on CI's three systems), closed
+  by CI's run of its pull request; Q-7 (whether `Sane::load` refuses an empty or relative entry of the loader's
+  search path) and UP-14 (SANE's `dll` and the library path in a set-id process), slice 1a's code review's,
+  wait on review; TEST-14 (`twain-dsm`'s public API through the gate, on Windows) when a slice next touches `twain-dsm`'s CI; FEAT-5 (patch codes the driver reports) with the Windows
+  backends;
   UP-7 to UP-11, defects slice 1 found in SANE's own `test` backend, `scanimage` and several backends'
   `sane_set_io_mode`, wait on review. TEST-3 (TWAIN's sample source) was done by slice 7
   (`archive/backlog-done.md`); from slice 8, TEST-11 (`twain-dsm`'s decoders fuzzed), for a slice with nightly
@@ -32,7 +36,7 @@ settles, and its upstream contributions.
   (`scanimage`, sane-dll(5)) wait on review. From slice 3: TEST-12 (`scan-device`'s layout tests on a 32-bit
   `usize` again, in CI) by slice 4 or 9; TEST-13 (its code on CI's Windows and macOS) closed by CI's run of its
   pull request; Q-5 (the packaged crate's tests without the fake) and Q-6 (what else of the model may grow) in
-  slice 11.
+  slice 11. BUG-7 (`sane-dl`'s `Image` printing its bytes in `Debug`) was done by slice 1a.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

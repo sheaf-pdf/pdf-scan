@@ -53,9 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - **Loading.** `Sane::load` opens the system's library: `libsane.so.1` on Linux and the other Unix-like
   systems, through the system loader's own search, and on macOS `libsane.1.dylib` at the paths Homebrew and
-  MacPorts install it (`Sane::DEFAULT_LIBRARIES`). Windows has none, since SANE isn't its scanner API.
-  `Sane::load_from` opens the library at a path the caller gives. Then `sane_init`, with no authorization
-  callback, so a backend that asks for a password gets none.
+  MacPorts install it (`Sane::DEFAULT_LIBRARIES`). Windows has none, since SANE isn't its scanner API, nor
+  have Apple's other systems.
+  Another SANE is loaded through the loader's own search path, given to the process as it starts (below).
+  Then `sane_init`, with no authorization callback, so a backend that asks for a password gets none.
 - **Devices under a deadline.** `Sane::devices` lists them on a thread of its own, and stops waiting at the
   deadline: listing can take seconds, as every backend loaded looks for its devices, and some hang.
 - **A known device, fast.** `Sane::open` opens a device by its name, with no listing first. `ConfigDir`
@@ -81,26 +82,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Loading happens only when asked for, and fails with a `LoadError`:
 
-- `NotFound`: no library could be opened by the names tried, which it lists (SANE isn't installed, or the
-  path is wrong);
-- `NoDefault`: this system has no default library (Windows); `load_from` still loads one by its path;
-- `MissingSymbol`: the library lacks one of SANE's functions, so it isn't SANE;
+- `NotFound`: no library could be opened by the names tried, which it lists (SANE isn't installed where the
+  system's loader looks);
+- `NoDefault`: this system has no default library (Windows, and Apple's systems but macOS), so nothing is
+  loaded;
+- `MissingSymbol`: the library found under SANE's name lacks one of SANE's functions, so it isn't SANE;
 - `Init`: `sane_init` answered a status other than `GOOD`;
 - `UnsupportedVersion`: the library follows a SANE other than version 1 (it's ended before this returns);
-- `AlreadyLoaded`: SANE is already loaded in this process.
+- `AlreadyLoaded`: SANE is already loaded in this process by this copy of the crate;
+- `SlotTaken`: on Linux, the process's slot for SANE is held by someone other than this copy: another copy of
+  the crate with SANE loaded, a child the process forked, or another process (below);
+- `SlotRefused`: on Linux, the system refused the socket that keeps SANE to one per process (a sandbox that
+  forbids Unix sockets or binding its name, or no file descriptor left), so nothing was loaded.
 
 There's one `Sane` per process, since SANE is started once per process; once it and every handle opened from
 it are gone, SANE is ended (`sane_exit`) and another may load. A load that fails leaves nothing behind. The
 library is never unloaded, since backends may leave threads or exit handlers in it.
 
-Loading a library runs its code in this process, and its functions are called as `sane.h` declares them, so
-`load_from` is `unsafe`: the path given must name a library trusted as much as the program itself, never one
-an untrusted party can write, whose SANE functions have `sane.h`'s types. `load` opens only the system's own
-SANE, trusted as a library linked at build time would be; on macOS by its installed paths, never by a bare
-name, which dyld would look for in the working directory too.
+Loading a library runs its code in this process, and its functions are called as `sane.h` declares them.
+`load` is safe because no code in the process chooses the library, this crate's or its caller's: it's the one
+the system's loader finds under SANE's name, by the search the process started with, taken as SANE as a
+library linked at build time would be, and never closed. On macOS that's at its installed paths, never by a
+bare name, which dyld would look for in the working directory too; Apple's other systems have no default.
 
-A program holds one copy of this crate: its manifest's `links` key makes cargo refuse two versions of it in
-one build, since each would start SANE as if it were alone.
+To load another SANE, one a program ships or a build of one's own, give the process that loads it the
+loader's search path as it starts: `LD_LIBRARY_PATH` on Linux and the other Unix-like systems,
+`DYLD_LIBRARY_PATH` on macOS (where dyld looks there for the file name of each installed path first). Name a
+directory that holds SANE's own libraries alone, since the variable reaches every library the process loads
+by name. Or build a run path into the binary or shared library that holds this crate, whose code calls the
+loader (`$ORIGIN/…` on Linux, from that file's directory). So a program that runs SANE in a worker process
+sets the variable on the worker's command, as it sets `SANE_CONFIG_DIR`. The loaders ignore these variables
+in a set-id process, and dyld in a process it restricts, such as one under the hardened runtime.
+
+That rests on the process's environment, as every library a process loads by name does, and holds while it
+keeps to two rules, its starter's and the program's:
+
+- **Every entry of the search path is absolute,** in the variable and in any run path built in. An empty
+  entry (a leading, trailing or doubled `:`, as `LD_LIBRARY_PATH=/opt/sane/lib:$LD_LIBRARY_PATH` leaves where
+  the variable was unset) means the working directory, and a relative entry is looked for from it, as the
+  library loads; the program's own code may change its working directory, and so would choose the library.
+  The C library's own lookups, which std uses, are open to such entries alike.
+- **Nothing in the process changes `LD_LIBRARY_PATH`, `SHLIB_PATH` or `LIBPATH` while SANE is in use.** The
+  system's loader reads the first as the process starts, so for SANE itself a change comes too late. But
+  SANE's `dll`, the part of SANE that loads its backends, reads the first of the three that's set each time it
+  loads one, at a listing or an open, and looks there first for the backend's library: a value set inside the
+  process would choose libraries that then run in it.
+
+In a set-id process, whose starter isn't trusted, the loader ignores its variables and glibc clears
+`LD_LIBRARY_PATH`, but `dll` then reads `SHLIB_PATH` and `LIBPATH`, which nothing clears: so a set-id program
+runs SANE in a process it starts with an environment of its own choosing, never in itself.
+
+That holds across copies of this crate as far as each system lets it be seen. Its manifest's `links` key
+makes cargo refuse two versions of it in one build, but every shared library built with it holds a copy of
+its own, so a process that loads two such libraries holds two copies, each of which would start SANE as if
+it were alone. On Linux every copy takes one slot for the whole process before the library opens: a Unix
+datagram socket bound to the name `sane-dl/slot/pidns/<device>/<inode>/pid/<pid>` in the abstract socket
+namespace, from the device and inode of the process's pid namespace (`/proc/self/ns/pid`, or `none` in their
+place where it can't be read) and its pid. The name is fixed for good, so every version of the crate finds
+every other's, and the system frees it when SANE has ended or the process ends. While someone other than this
+copy holds it, a load is `SlotTaken`: a second copy's load, or one while a child the process forked still
+holds it (until the child runs a program or ends), or after another process bound the name first. A child
+spawned on any thread holds it from its fork until its program starts, a moment a load waits out, trying
+again for a tenth of a second. Where the system refuses the socket the load is `SlotRefused`, never SANE
+unguarded; a sandbox's profile that lets the process bind abstract names under `sane-dl/slot/` (AppArmor's
+`@sane-dl/slot/**`) lets it load. The slot can't see across a change, between two copies' loads, of the
+process's network namespace (where the name lives) or of its view of `/proc` (which the name is formed from),
+so a program that makes one keeps to one copy. On every system but Linux a copy sees only its own loads, so
+a program there keeps to one copy of this crate in a process. And the slot guards this crate's copies alone:
+another user of libsane in the process, such as a library linked to it, shares the library this crate opens,
+and is the program's to rule out.
 
 ## Threads, and cancelling
 
@@ -166,8 +216,8 @@ party.
 
 The crate builds on every system `libloading` does, and needs nothing of SANE's to build: no header and no
 library (its build script builds nothing, there for the `links` key). On Linux it loads the distribution's
-libsane (`libsane1` on Debian and Ubuntu). On Windows `Sane::load` is `NoDefault`; `select_fd` exists on Unix
-only. Its tests, in the repository, run
+libsane (`libsane1` on Debian and Ubuntu). On Windows, and Apple's systems but macOS, `Sane::load` is
+`NoDefault`; `select_fd` exists on Unix only. Its tests, in the repository, run
 against SANE's own `test` and `pnm` backends and a stand-in library of their own, and check the bindings
 against the installed `sane.h`; on macOS, Homebrew's sane-backends hasn't been tried.
 

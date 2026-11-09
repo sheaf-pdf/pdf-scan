@@ -122,7 +122,7 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   taken alone and open to review): `/crates/fake-libsane/`, a `cdylib`, never published, which no crate
   depends on, of any kind (`just gates` checks both). It isn't moved into `scan-fixtures` with S1, where it
   was planned: `scan-fixtures` will be a library of pages that crates take as a dev-dependency, with image
-  codecs behind it, while the fake is a shared object tests build and load by its path, and must carry none
+  codecs behind it, while the fake is a shared object tests build and load as SANE, and must carry none
   of them into the process that loads it. So the family is eleven crates, ask 2's ten and this one, nine
   published (`plan.md`, `crates/fake-libsane.md`).
 - **`sane-dl`'s MSRV is 1.89** (S0 slice 1, 2026-11-08, measured as S1 slice 1 measured the pixel crates'):
@@ -152,4 +152,10 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   `unsafe` allocator, whose rule was "the DSM must be loaded"), the crate binds it with lifetimes, ownership,
   types or a library kept loaded instead, and its plan explores the API's shapes before fixing one; `unsafe`
   remains only where an FFI call or a callback needs it, never in what a user calls. First for `twain-dsm`
-  (S0 slice 8; `crates/twain-dsm.md`, "Safe by construction").
+  (S0 slice 8; `crates/twain-dsm.md`, "Safe by construction"). Confirmed 2026-11-09: "i think that we should
+  try to define safe apis where possible". `sane-dl` follows it (S0 slice 1a, `slices/s0-1a-sane-dl-safe-api.md`):
+  `Sane::load_from` removed, the library the system loader's choice alone; on Linux a slot for the whole
+  process keeping SANE to one per process across copies of the crate; no public item `unsafe`, held by a gate
+  over its public API (`just public-api`). The one rule left to a program is the environment's, said in
+  `Sane::load`'s docs and named for review (the slice's decision 33): its loader's search path absolute, and
+  never changed inside a process using SANE, whose `dll` reads it as it loads each backend.

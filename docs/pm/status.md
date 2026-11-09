@@ -2,20 +2,21 @@
 
 As of 2026-11-09.
 
-**S0 slice 3, `scan-device` provisional, is done on its branch, `s0-3-scan-device`** (from `master` at `3f33be5`,
-`master` merged in after #5), pushed, in pull request #6, waiting on review and CI ("Running", below). **S0 slices
-1, 2 and 8 are merged** (pull requests #2, #3 and #4, squashed; #5 recorded slice 8's close), as **S0 slice 7,
-the TWAIN spike,** is (#1); slices 7 and 8 from the Windows machine. S0 slice 1a, `sane-dl`'s public API made
-safe, runs beside slice 3 on a branch of its own. It's a git repository at github.com/sheaf-pdf/pdf-scan
-(public; `master`).
+**S0 slice 1a, `sane-dl`'s public API made safe, is done on its branch, `s0-1a-sane-dl-safe-api`** (from
+`master` at `3f33be5`, `master` merged in after #6), pushed, in pull request #7, waiting on review and CI
+("Running", below). **S0 slices 1, 2, 3 and 8 are merged** (pull requests #2, #3, #6 and #4, squashed; #5
+recorded slice 8's close), as **S0 slice 7, the TWAIN spike,** is (#1); slices 7 and 8 from the Windows machine.
+S0 slice 4, `scan-worker`, is under way from `master` at `5a4bff2`. It's a git repository at
+github.com/sheaf-pdf/pdf-scan (public; `master`).
 
-- **Running: S0 slice 3, done on `s0-3-scan-device`** (`slices/s0-3-scan-device.md`; the code to `5a5c367`),
-  four steps, each checked, then its code review's 18 findings all fixed: `scan-device` 0.0.0, unpublished,
-  MSRV 1.89, the seam note's model as written (`Paper` now `#[non_exhaustive]`) and the `fake` backend, every
-  script of proposal 22 tested; `RawImage`'s sizes held to `isize::MAX` (the review's major finding). **Waits
-  on:** the maintainer's review (50 decisions, 6 security items); CI's run of pull request #6 on Ubuntu,
-  Windows and macOS (TEST-13). Later: TEST-12, Q-5, Q-6; its TEST-12 or slice 1a's is
-  renumbered at whichever merge comes second.
+- **Running: S0 slice 1a, `sane-dl`'s public API made safe, done on its branch**
+  (`slices/s0-1a-sane-dl-safe-api.md`; `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`), through the `scan-slice` workflow (local):
+  four steps, each checked, and the code review's 22 findings all fixed. No public item of `sane-dl` is
+  `unsafe`: `Sane::load_from` gone, the library the system loader's choice; on Linux one SANE per process across
+  copies of the crate, a spawned child's moment waited out; `just public-api` over every public item; BUG-7
+  done. `Sane::load`'s safety rests on two rules of the environment, now in its docs (decision 33). **Waits
+  on:** review (40 decisions, 11 security items; Q-7, UP-14) and CI's run of pull request #7 on Ubuntu, Windows
+  and macOS (TEST-15, TEST-7). Its TEST-12 is TEST-14 (slice 3 merged first).
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
@@ -54,6 +55,11 @@ safe, runs beside slice 3 on a branch of its own. It's a git repository at githu
   and on `windows-latest`; TWAIN walked from state 1 to 7 and back in both bitnesses; native and memory
   transfers equal pixel for pixel; cancels from another thread; four code reviewers, every finding fixed; the
   seam note's TWAIN rows and `crates/twain-dsm.md` revised from it (TEST-3 done).
+- **Done: S0 slice 3, `scan-device` provisional** (merged 2026-11-09 as pull request #6, squashed `5a4bff2`;
+  CI green on every job of `master`'s run of it, 42644985306; `slices/s0-3-scan-device.md`): four steps, each
+  checked, then its code review's 18 findings all fixed: `scan-device` 0.0.0, unpublished, MSRV 1.89, the seam
+  note's model as written (`Paper` now `#[non_exhaustive]`) and the `fake` backend, every script of proposal 22
+  tested; `RawImage`'s sizes held to `isize::MAX` (the review's major finding). Later: TEST-12, Q-5, Q-6.
 - **Done: S0 slice 8, `twain-dsm`** (merged 2026-11-09 as pull request #4, CI green on every job, run
   42617750221; `archive/slices/s0-8-twain-dsm.md`), on the Windows machine: planned, reviewed (24 findings, all
   taken), its six steps built and pushed 2026-11-08: the crate safe by construction (`decisions.md`;
@@ -73,9 +79,9 @@ safe, runs beside slice 3 on a branch of its own. It's a git repository at githu
   answered, the raw layout fixed, and the model written down for slice 3, then revised by its code review (25
   findings fixed, BUG-7 deferred).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
-  3 (50 and 6); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3,
-  ready to hand off on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the
-  interpreter stays out" line.
-- **Next:** S0 slice 4, `scan-worker`, on Linux, on slice 3's model and fake, once slice 3's pull request is
-  green. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 1a (40 and 11); S0
+  slice 2 (41 and 6); S0 slice 3 (50 and 6); S0 slice 8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13,
+  upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK; PL-4, which first needs the
+  maintainer's call on pdf-lint's "the interpreter stays out" line.
+- **Next:** S0 slice 4, `scan-worker`, under way on Linux from `master` at `5a4bff2`, on slice 3's model and
+  fake. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

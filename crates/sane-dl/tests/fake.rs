@@ -26,6 +26,7 @@ fn list_once_free(sane: &Sane) -> Result<Vec<Device>, Error> {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn devices_are_copied_as_sane_lists_them() {
     let script = r#"
         device fake:0 "Fake Co" "Model One" "flatbed scanner"
@@ -83,6 +84,7 @@ fn devices_are_copied_as_sane_lists_them() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn the_last_drop_after_a_listing_in_time_ends_sane_at_once() {
     const ROUNDS: usize = 500;
     let fake = Fake::new(
@@ -102,7 +104,7 @@ fn the_last_drop_after_a_listing_in_time_ends_sane_at_once() {
                 drop(sane);
                 // No listing's thread is left holding the library: the drop
                 // ended SANE, so the process's slot is free at once.
-                match common::load_from(common::fake_path()) {
+                match common::try_load_fake() {
                     Ok(again) => drop(again),
                     Err(error) => panic!("round {round}: a load right after the drop: {error:?}"),
                 }
@@ -135,6 +137,7 @@ fn the_last_drop_after_a_listing_in_time_ends_sane_at_once() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_slow_listing_within_its_deadline_returns_its_list() {
     let fake = Fake::new(
         "a_slow_listing_within_its_deadline_returns_its_list",
@@ -153,6 +156,7 @@ fn a_slow_listing_within_its_deadline_returns_its_list() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_listing_past_its_deadline_says_so_and_holds_the_library() {
     let fake = Fake::new(
         "a_listing_past_its_deadline_says_so_and_holds_the_library",
@@ -211,6 +215,7 @@ fn a_listing_past_its_deadline_says_so_and_holds_the_library() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn waiting_for_another_call_counts_against_the_deadline() {
     let fake = Fake::new(
         "waiting_for_another_call_counts_against_the_deadline",
@@ -252,6 +257,7 @@ fn waiting_for_another_call_counts_against_the_deadline() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_handle_dropped_during_a_late_listing_is_closed_by_the_listing() {
     let fake = Fake::new(
         "a_handle_dropped_during_a_late_listing_is_closed_by_the_listing",
@@ -307,6 +313,7 @@ fn a_handle_dropped_during_a_late_listing_is_closed_by_the_listing() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn the_sane_dropped_during_a_late_listing_is_ended_by_the_listing() {
     let fake = Fake::new(
         "the_sane_dropped_during_a_late_listing_is_ended_by_the_listing",
@@ -334,7 +341,7 @@ fn the_sane_dropped_during_a_late_listing_is_ended_by_the_listing() {
             // SANE; until then a load is refused.
             let until = Instant::now() + Duration::from_secs(20);
             let again = loop {
-                match common::load_from(common::fake_path()) {
+                match common::try_load_fake() {
                     Err(LoadError::AlreadyLoaded) if Instant::now() < until => {
                         thread::sleep(Duration::from_millis(20))
                     }
@@ -373,6 +380,7 @@ fn the_sane_dropped_during_a_late_listing_is_ended_by_the_listing() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn calls_from_several_threads_never_overlap() {
     let fake = Fake::new(
         "calls_from_several_threads_never_overlap",
@@ -413,6 +421,7 @@ fn calls_from_several_threads_never_overlap() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_null_list_is_refused() {
     let fake = Fake::new("a_null_list_is_refused", "devices-null\n");
     in_child!(a_null_list_is_refused, fake.child(), || {
@@ -427,6 +436,7 @@ fn a_null_list_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_device_with_a_null_name_is_refused() {
     let fake = Fake::new(
         "a_device_with_a_null_name_is_refused",
@@ -444,6 +454,7 @@ fn a_device_with_a_null_name_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_list_past_the_cap_is_refused() {
     let fake = Fake::new("a_list_past_the_cap_is_refused", "device-repeat 1025\n");
     in_child!(a_list_past_the_cap_is_refused, fake.child(), || {
@@ -473,6 +484,7 @@ fn a_list_past_the_cap_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_string_past_the_cap_is_refused() {
     let fake = Fake::new(
         "a_string_past_the_cap_is_refused",
@@ -496,6 +508,7 @@ fn a_string_past_the_cap_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_listings_status_is_kept_with_its_call() {
     let fake = Fake::new(
         "a_listings_status_is_kept_with_its_call",
@@ -519,6 +532,7 @@ fn a_listings_status_is_kept_with_its_call() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_listings_status_sane_doesnt_define_is_kept() {
     let fake = Fake::new(
         "a_listings_status_sane_doesnt_define_is_kept",
@@ -542,6 +556,7 @@ fn a_listings_status_sane_doesnt_define_is_kept() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_device_opens_by_name_without_a_list() {
     let fake = Fake::new(
         "a_device_opens_by_name_without_a_list",
@@ -571,6 +586,7 @@ fn a_device_opens_by_name_without_a_list() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_name_sane_doesnt_know_is_sane_opens_status() {
     let fake = Fake::new(
         "a_name_sane_doesnt_know_is_sane_opens_status",
@@ -606,6 +622,7 @@ fn a_name_sane_doesnt_know_is_sane_opens_status() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_good_open_with_a_null_handle_is_refused() {
     let fake = Fake::new(
         "a_good_open_with_a_null_handle_is_refused",
@@ -628,6 +645,7 @@ fn a_good_open_with_a_null_handle_is_refused() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_name_holding_a_nul_never_reaches_sane() {
     let fake = Fake::new(
         "a_name_holding_a_nul_never_reaches_sane",
@@ -650,6 +668,7 @@ fn a_name_holding_a_nul_never_reaches_sane() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn status_messages_are_sanes_words() {
     let fake = Fake::new("status_messages_are_sanes_words", "");
     in_child!(status_messages_are_sanes_words, fake.child(), || {
@@ -672,6 +691,7 @@ fn status_messages_are_sanes_words() {
 }
 
 #[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_null_status_message_is_none() {
     let fake = Fake::new("a_null_status_message_is_none", "strstatus-null\n");
     in_child!(a_null_status_message_is_none, fake.child(), || {
