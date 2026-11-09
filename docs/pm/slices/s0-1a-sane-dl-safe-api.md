@@ -476,8 +476,11 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
    cancel on another thread may end the descriptor while it's borrowed; a `RawFd`'s every use is the caller's own
    `unsafe`.
 9. **The slot across copies on Linux only:** an abstract socket named for the process (pid namespace and pid),
-   std alone, freed by the kernel. On macOS and the BSDs the program's rule stays, said in the docs (BUG-8): the
-   one exception the slice leaves, since no exact shape was found there in std.
+   std alone, freed by the kernel. On macOS and the BSDs the program's rule stays, said in the docs (BUG-8),
+   since no exact shape was found there in std; on Linux it stays only across what the slot can't see, a change
+   of the process's network namespace or of its view of `/proc` between two copies' loads (security item 7),
+   said in `Sane`'s docs, the README and `sane_init`'s `SAFETY:` comment. Those two are the exceptions the slice
+   leaves (revised in step 4, from step 3's check).
 10. **The gate:** rustdoc's JSON on a pinned nightly, `nightly-2026-10-16` (revised by the plan review from
     unpinned: a format change would otherwise turn an unrelated pull request red; `twain-dsm-doc-codes` stays on
     unpinned nightly, whose error codes rarely move), one justfile variable and CI's pin kept in step; its
@@ -549,6 +552,15 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
     (the probe built its two apart). The crate docs, the README, the changelog and the manifest's comment say
     so, then the slot on Linux, and the program's rule elsewhere and across what the slot can't see (security
     item 7).
+31. **`Image`'s `Debug` through `debug_struct`** (step 4), the data given by a private helper that writes
+    `<n> bytes`, so `{:#?}` keeps the struct's layout and the field's name stays `data`; `frames` given whole,
+    since an image from a batch holds at most three (the assembly's rule). Its doc names the form; the
+    changelog gives an example (`data: 1048576 bytes`).
+32. **The prlimit test's skips skip** (step 4, from step 3's check, as step 2 took step 1's): `Child::run`
+    returns whether the child ran its body, false where it skipped, so the parent of
+    `a_socket_the_system_refuses_refuses_the_load` leaves out its checks of the fake's log then; and "the limit
+    doesn't take" is a skip, not an `assert!`, as decision 29 had it. Every other caller ignores the value: no
+    other test has checks of its own after a child that can skip.
 
 ## For review (security)
 
@@ -926,3 +938,77 @@ never freed; this copy's atomic kept when the process's slot is refused; `AddrIn
 another refusal taken as `AlreadyLoaded`; the name's rule changed. Left to the step's checking agent: `just ci`
 whole (the gates, the MSRV build and tests on 1.89, the package), the `SAFETY:` comment changed, read against its
 call.
+
+**Step 3's check** (2026-11-09, at `8568577`, by the checking agent; its record is local, `scratch/work/s0-1a/flow/
+checks.md`): passed. `just ci` with both require variables green (253 tests, no skip, `prlimit` there; the
+package's 17 files, `src/process_slot.rs` the new one; the gate: 1,653 items, none unsafe; `sane-dl` and
+`twain-dsm` on 1.89); the test list 246 to 253, seven new, none lost; the gate's list as step 2's but `variant
+SlotRefused` and its `field 0`; the two-copies probe redone apart, with a drop between (before the step both
+copies loaded and the fake logged `sane_init` twice; after, the second refused until the first was dropped, and
+no violation); make-fails: the slot's module undone (three of the four integration tests fail) and, its own,
+the process's slot taken after the library opens (two fail); cross `clippy` and `doc` green; no `unsafe` added;
+a fork and exec probe bearing out the docs (the socket close-on-exec; an exec'd child holds nothing, a forked one
+holds the slot until it ends). Three findings, taken by step 4 (decisions 9 and 32): the prlimit test failed
+rather than skipped where `prlimit` was missing (the parent checked the fake's empty log) and asserted where the
+limit didn't take; the `sane_init` `SAFETY:` comment left out what the slot can't see; decision 9 named only
+macOS and the BSDs as exceptions.
+
+### Step 4: BUG-7; the plan's files; the slice's end (2026-11-09)
+
+One commit, this one, which holds this record.
+
+- **BUG-7:** `Image`'s `Debug` written by hand (decision 31): `Image { format: FrameFormat::GRAY, depth: 8,
+  width: 1024, height: 1024, stride: 1024, frames: [Parameters { .. }], data: 1048576 bytes }`, never the
+  bytes; `Image` alone drops `derive(Debug)`, `Page` derives it still and prints that; the struct's doc says
+  why. Unit tests in `scan.rs`, on a 1 MiB gray image whose every byte is 171, a number nothing else in its
+  `Debug` holds: `an_images_debug_gives_its_datas_length_not_its_bytes` (its `{:?}` the text above exactly; it
+  and `{:#?}` under 1 KiB, `1048576 bytes` in each, no `171`, every other field named) and
+  `a_pages_debug_gives_its_images_length_not_its_bytes` (a `Page::Image` of it, the same for both forms). Each
+  assertion's message gives the text's length and its first 200 characters (`told`), never the text. The
+  changelog: "Changed before the release" names it, and the scanning entry says what `Debug` gives.
+- **Step 3's check's findings** (decisions 9 and 32): `Child::run` returns whether the child ran its body, and
+  `a_socket_the_system_refuses_refuses_the_load` leaves out its checks of the fake's log when its child
+  skipped; "the limit doesn't take" is a skip; the test's doc says when it skips. `sane_init`'s `SAFETY:`
+  comment names what the slot can't see (a change of network namespace or of `/proc`'s view between two
+  copies' loads) and that beyond it a program keeps to one copy, as `Sane`'s docs say. Decision 9 names both
+  exceptions.
+- **The plan's files:** `crates/sane-dl.md` as built (slice 1a beside slice 1; which library and why that's
+  safe; another SANE through the loader's variable, and M5 proposal 6's `SHEAF_LIBSANE` as that variable on
+  sheaf's test's child; the slot, its name's rule, `AlreadyLoaded`, `SlotRefused` and what it can't see;
+  `ffi`'s function types inside; `Image`'s `Debug`; the gate in "Boundary"; the tests' route, the path tests
+  inside the crate, the slot's tests and the probe; 230 `sane-dl` and `fake-libsane` tests; BUG-7 gone from
+  "Open", BUG-8 and FEAT-13 in it, TEST-7 revised); `crates/fake-libsane.md` ("How tests load it", and loaded
+  as SANE wherever it said by path); `crates/README.md`'s line and `crates/scan-fixtures.md`'s sentence (as
+  SANE through the loader's search path, ignored on Windows); `plan.md`'s row and its line under the graph;
+  the milestone (in slice 1's entry, `load_from` "which slice 1a removed"; slice 1a's "Built on the branch",
+  and what it waits on); `decisions.md` (the ruling confirmed 2026-11-09, in its words, and how `sane-dl`
+  follows it); `status.md` (a bullet of its own, after slice 2's); `slices/README.md`. The backlog: BUG-7 to
+  `archive/backlog-done.md` under "Bugs closed by S0 slice 1a", its "Done" said; BUG-8 (bugs, later), FEAT-13
+  (features, later), TEST-12 (tests, S0), each read against the code first; TEST-7 revised (the fake's tests on
+  macOS through `DYLD_LIBRARY_PATH`, beside Homebrew's SANE); "Where to start"; the counts redone (47 open:
+  BUG 7, FEAT 13, TEST 9; S0 15, later 10). The IDs are the next ones `origin/master` names, fetched as the
+  step started (`8276ad1`, which closed slice 8 and changed no backlog file): none of the three is an item
+  there, only each file's "the next new one". Slice 3 plans the same three (decision 18).
+
+**Departed from the plan:** step 3's check's three findings are taken here (decisions 9 and 32), as step 2 took
+step 1's. `decisions.md`'s "Made here" entry on the fake also said tests "load it by its path", a place the plan
+didn't list: now "load as SANE". `bugs.md` had no "Later" heading, so BUG-8 adds one, and its S0 heading stays,
+saying none is open. `origin/master` has moved to `8276ad1` since the slice began (slice 8 closed: `status.md`,
+the milestone's slice 8 entry, `slices/README.md`, `archive/`); this branch doesn't take it, and its edits to
+those files keep to lines of their own, so the merge meets as few as it can.
+
+**Checked here** (records in `scratch/work/s0-1a/step-4/`): `cargo fmt --check`; `cargo clippy --workspace
+--all-targets -D warnings`; `cargo clippy -p sane-dl --all-targets -D warnings` for `x86_64-pc-windows-gnu` and
+`x86_64-apple-darwin` (the tests' helper changed); `cargo doc -D warnings` of `sane-dl`; its tests with both
+require variables, 187 passed (the fake's 43 untouched). The test list: 255, step 3's 253 and the two `Debug`
+tests, none lost, the README's doctest still at line 188. Make-fails, on a worktree removed after (the branch
+unchanged; `step-4/make-fail.md`): the derived `Debug` put back, and both new tests fail on texts of over 5 MB
+each, the log 3.5 KB; `prlimit` renamed, and the test skips and passes (at `8568577` it failed so); the same with
+the parent's guard removed, and it fails on the empty log; the limit made not to take, and it skips and passes.
+Left to the step's checking agent: `just ci` whole (the gates, the gate's list unchanged from step 3's, the MSRV
+build and tests, the package), `just sane-dl-package` in a fresh `scratch/work/s0-1a/package/` with its 17
+files read, the branch's commit messages and the maintainer's name, the backlog's IDs against `origin/master`,
+the changed `SAFETY:` comment read against its call. What only CI shows, after the push: macOS's fake tests
+through `DYLD_LIBRARY_PATH` (Risk 1, TEST-7); Windows's fake tests ignored with their reason, none failing; the
+`public-api` job on CI's pinned nightly; the slot's tests on CI's Ubuntu; the MSRV job's real-libsane tests
+skipping; the package job.

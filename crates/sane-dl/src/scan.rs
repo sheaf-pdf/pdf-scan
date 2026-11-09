@@ -253,7 +253,11 @@ impl fmt::Display for Parameters {
 /// - at depth 8, a byte a sample, 0 the least intensity;
 /// - at depth 16, two bytes a sample in this machine's byte order, 0 the
 ///   least intensity.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Its `Debug` gives the data's length, never its bytes: a page's image is
+/// tens of megabytes, which a log line, `dbg!` or a failed `assert_eq!`
+/// would otherwise write out as text.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Image {
     /// [`FrameFormat::GRAY`] or [`FrameFormat::RGB`].
     pub format: FrameFormat,
@@ -270,6 +274,32 @@ pub struct Image {
     /// Each frame's parameters, as SANE gave them after its start, in the
     /// order they came.
     pub frames: Vec<Parameters>,
+}
+
+/// `Image { format: FrameFormat::GRAY, depth: 8, width: 4, height: 2,
+/// stride: 4, frames: [..], data: 8 bytes }`: every field but the data,
+/// whose length alone is given.
+impl fmt::Debug for Image {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Image")
+            .field("format", &self.format)
+            .field("depth", &self.depth)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("stride", &self.stride)
+            .field("frames", &self.frames)
+            .field("data", &ByteCount(self.data.len()))
+            .finish()
+    }
+}
+
+/// A length of bytes, for a `Debug` that gives it in their place.
+struct ByteCount(usize);
+
+impl fmt::Debug for ByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} bytes", self.0)
+    }
 }
 
 /// How far the page being read has come, for a progress bar.
@@ -1358,5 +1388,63 @@ mod tests {
         }
         assert_eq!(heard, [(4, Some(12)), (16, Some(28)), (28, Some(28))]);
         assert_eq!(padded.finish().data.len(), 12);
+    }
+
+    /// A text's length and its first 200 characters, for an assertion's
+    /// message: a `Debug` that printed every byte would be megabytes.
+    fn told(text: &str) -> String {
+        let prefix: String = text.chars().take(200).collect();
+        format!("{} bytes of text, beginning {prefix:?}", text.len())
+    }
+
+    /// A 1 MiB gray image, every byte 171, a number nothing else in its
+    /// `Debug` holds.
+    fn megabyte_image() -> Image {
+        Image {
+            format: FrameFormat::GRAY,
+            depth: 8,
+            width: 1024,
+            height: 1024,
+            stride: 1024,
+            data: vec![171; 1024 * 1024],
+            frames: vec![gray(1024, 1024, 1024, 8)],
+        }
+    }
+
+    /// Checks a `Debug` text of [`megabyte_image`]: short, its data's length
+    /// in it, none of its bytes.
+    fn check_debug_text(text: &str) {
+        assert!(text.len() < 1024, "over 1 KiB: {}", told(text));
+        assert!(text.contains("1048576 bytes"), "no length: {}", told(text));
+        assert!(!text.contains("171"), "a byte of the data: {}", told(text));
+        for field in ["format", "depth", "width", "height", "stride", "frames"] {
+            assert!(text.contains(field), "no {field}: {}", told(text));
+        }
+    }
+
+    #[test]
+    fn an_images_debug_gives_its_datas_length_not_its_bytes() {
+        let image = megabyte_image();
+        let text = format!("{image:?}");
+        assert!(
+            text == "Image { format: FrameFormat::GRAY, depth: 8, width: 1024, \
+                     height: 1024, stride: 1024, frames: [Parameters { format: \
+                     FrameFormat::GRAY, last_frame: 1, bytes_per_line: 1024, \
+                     pixels_per_line: 1024, lines: 1024, depth: 8 }], \
+                     data: 1048576 bytes }",
+            "{}",
+            told(&text)
+        );
+        check_debug_text(&text);
+        check_debug_text(&format!("{image:#?}"));
+    }
+
+    #[test]
+    fn a_pages_debug_gives_its_images_length_not_its_bytes() {
+        let page = Page::Image(megabyte_image());
+        let text = format!("{page:?}");
+        assert!(text.starts_with("Image(Image { "), "{}", told(&text));
+        check_debug_text(&text);
+        check_debug_text(&format!("{page:#?}"));
     }
 }

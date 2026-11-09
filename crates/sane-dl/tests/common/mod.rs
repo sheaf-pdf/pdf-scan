@@ -210,8 +210,10 @@ impl Child {
         self
     }
 
-    /// Runs `body` in a child process, through [`in_child!`].
-    pub fn run(self, test: &str, id: rusty_fork::RustyForkId, body: impl FnOnce()) {
+    /// Runs `body` in a child process, through [`in_child!`]. False where
+    /// the child skipped ([`skip`]), so a parent with checks of its own
+    /// after the child leaves them out.
+    pub fn run(self, test: &str, id: rusty_fork::RustyForkId, body: impl FnOnce()) -> bool {
         let Child {
             env,
             prepare,
@@ -248,7 +250,7 @@ impl Child {
                     io::stderr(),
                     "{test}: the child aborted, as it was to: it ended {how}"
                 );
-                return;
+                return true;
             }
             if status.code() == Some(SKIP) {
                 let mut text = String::new();
@@ -259,14 +261,15 @@ impl Child {
                     .find_map(|line| line.strip_prefix(SKIP_MARK))
                     .unwrap_or("it gave no reason");
                 report_skip(test, reason, require);
-                return;
+                return false;
             }
             assert!(
                 status.success(),
                 "{test}: the child failed ({status}); its output is above"
             );
+            true
         };
-        rusty_fork::fork(test, id, configure, supervise, body).expect("couldn't start the child");
+        rusty_fork::fork(test, id, configure, supervise, body).expect("couldn't start the child")
     }
 }
 

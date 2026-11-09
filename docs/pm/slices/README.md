@@ -12,6 +12,10 @@ and it moves to `archive/slices/` once merged).
 Done on its branch, its code review's findings fixed: [`s0-2-seam-note.md`](s0-2-seam-note.md), S0 slice 2,
 the seam note revised (three steps, docs only; its pull request to be stacked on slice 1's).
 
+Built on its branch, its code review next: [`s0-1a-sane-dl-safe-api.md`](s0-1a-sane-dl-safe-api.md), S0 slice
+1a, `sane-dl`'s public API made safe (four steps, each checked; its pull request against `master` once
+reviewed and fixed).
+
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).
 

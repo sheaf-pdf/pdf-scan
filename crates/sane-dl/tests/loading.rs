@@ -298,12 +298,13 @@ fn a_refused_load_frees_the_slot() {
 
 /// The system refusing the slot's socket, as a sandbox would: here by the
 /// process having no file descriptor left, its limit lowered with
-/// util-linux's `prlimit`, which a process can do to itself.
+/// util-linux's `prlimit`, which a process can do to itself. Skipped, saying
+/// why, where `prlimit` isn't there or the limit doesn't take.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_socket_the_system_refuses_refuses_the_load() {
     let fake = Fake::new("a_socket_the_system_refuses_refuses_the_load", "");
-    in_child!(
+    let ran = in_child!(
         a_socket_the_system_refuses_refuses_the_load,
         fake.child(),
         || {
@@ -329,7 +330,9 @@ fn a_socket_the_system_refuses_refuses_the_load() {
                     Err(error) => panic!("couldn't open /dev/null: {error}"),
                 }
             };
-            assert!(exhausted, "the limit of {LIMIT} descriptors didn't take");
+            if !exhausted {
+                common::skip(format!("the limit of {LIMIT} descriptors didn't take"));
+            }
             let loaded = sane_dl::Sane::load();
             drop(files);
             match loaded {
@@ -344,6 +347,9 @@ fn a_socket_the_system_refuses_refuses_the_load() {
             let _sane = common::load_fake();
         }
     );
+    if !ran {
+        return;
+    }
     let log = fake.log();
     log.assert_no_violations();
     assert_eq!(log.calls_but_options(), ["sane_init", "sane_exit"]);

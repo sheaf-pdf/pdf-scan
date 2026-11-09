@@ -9,8 +9,9 @@ version is published.
 
 Changed before the release, for anyone who built this version from the repository: `Sane::load_from` is
 gone, so the library is always the one the system's loader finds under SANE's name; `ffi`'s
-function-pointer types (`SaneInitFn` and the rest, and `SANE_Auth_Callback`) are inside the crate; and on
-Linux one SANE per process holds across copies of the crate, with `LoadError::SlotRefused` new.
+function-pointer types (`SaneInitFn` and the rest, and `SANE_Auth_Callback`) are inside the crate; on
+Linux one SANE per process holds across copies of the crate, with `LoadError::SlotRefused` new; and `Image`'s
+`Debug` gives its data's length rather than every byte.
 
 - **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
   `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on
@@ -60,7 +61,9 @@ Linux one SANE per process holds across copies of the crate, with `LoadError::Sl
   the parameters or a read. By the page: `Handle::batch` and `Batch::next_page`, every frame read to its
   end, `lines = -1` included, assembled into an `Image` (rows top down, padding dropped, three-pass frames
   interleaved, samples as SANE encodes them), with progress told between reads; `Page::NoDocs` from either
-  call that can say so, with the pages delivered; `sane_cancel` however a batch ends.
+  call that can say so, with the pages delivered; `sane_cancel` however a batch ends. `Image`'s `Debug`
+  gives every field but the data, whose length alone it gives (`data: 1048576 bytes`), so a page in a log
+  line or a failed assertion isn't megabytes of text.
 - **Strict frames.** Parameters no frame can have are `BadParameters`, carrying them; frames that end
   short or run long, a frame of unknown height with no row, and a partial last row, are `ShortFrame`,
   `LongFrame` and `PartialRow`.

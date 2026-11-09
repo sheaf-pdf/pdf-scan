@@ -69,6 +69,16 @@ machine, code-reviewed and fixed, in pull request #4, rebased onto `master` afte
   raw layout fixed, and the model written down for slice 3, then revised by its code review (25 findings
   fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
   1's; CI's run on the three systems then shows nothing of its own (docs only).
+- **Built on its branch: S0 slice 1a, `sane-dl`'s public API made safe** (`slices/s0-1a-sane-dl-safe-api.md`;
+  `s0-1a-sane-dl-safe-api`, from `3f33be5`), through the `scan-slice` workflow (local), beside slice 3: four
+  steps, each checked. No public item of `sane-dl` is `unsafe` (`decisions.md`'s ruling, confirmed
+  2026-11-09): `Sane::load_from` is gone, the library the system loader's choice alone, another SANE loaded
+  through the loader's own search path as a process starts; the tests load `fake-libsane` through
+  `Sane::load()` (ignored on Windows, saying why); `ffi`'s function types inside the crate; on Linux one SANE
+  per process across copies of the crate built apart; `Image`'s `Debug` by hand (BUG-7 done); `just
+  public-api`, a gate over every public item. New: BUG-8, FEAT-13, TEST-12. Waits on its code review (the
+  milestone's soundness review) and fixes, then review of its "Decisions taken alone, for review" and "For
+  review (security)", the push, its pull request and CI's run (macOS's fake tests above all: TEST-7).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
   (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
   8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the

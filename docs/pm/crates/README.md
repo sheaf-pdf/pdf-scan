@@ -50,4 +50,5 @@ crate that decodes them is here (ask 5).
 - [`scan-fixtures`](scan-fixtures.md): seeded pages, degradations, codes drawn, device scripts (never
   published).
 - [`fake-libsane`](fake-libsane.md): a stand-in for libsane, a `cdylib` that `sane-dl`'s tests build and load
-  by its path, scripted, checking SANE's calling rules (never published; built in S0 slice 1).
+  as SANE through the loader's search path (ignored on Windows), scripted, checking SANE's calling rules
+  (never published; built in S0 slice 1).

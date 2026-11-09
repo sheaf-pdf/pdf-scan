@@ -1050,8 +1050,10 @@ impl Sane {
         // lives and the last one's `sane_exit` has returned: nothing else
         // calls SANE, and this `sane_init` follows no other unended one.
         // That holds across every copy of this crate in the process on
-        // Linux, where the slot is the process's; elsewhere within this
-        // copy, and a program holds one copy there (`Sane`'s docs).
+        // Linux, where the slot is the process's, but for a change of the
+        // process's network namespace or of its view of `/proc` between two
+        // copies' loads; elsewhere within this copy. Beyond what the slot
+        // sees, a program keeps to one copy (`Sane`'s docs).
         // `code` is valid for SANE's write; no authorization callback is
         // given.
         let status = Status(unsafe { (api.init)(&mut code, None) });

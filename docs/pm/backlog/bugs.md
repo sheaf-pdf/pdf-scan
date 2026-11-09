@@ -1,6 +1,6 @@
 # Bugs: known wrong behaviour not yet fixed
 
-IDs BUG-1 to BUG-7; the next new one is **BUG-8**. Format and rules: `README.md`.
+IDs BUG-1 to BUG-8; the next new one is **BUG-9**. Format and rules: `README.md`.
 
 BUG-1 to BUG-6 are in sheaf's code as it is cut, so each is fixed in the slice that moves its file, and the
 harness's byte-for-byte check parts from sheaf there only, said in the slice (plan.md, "Standing rules").
@@ -9,7 +9,7 @@ and bugs.md").
 
 ## For S0 (scan devices)
 
-- **BUG-7** · sane-dl · S0 · open — **`Image`'s derived `Debug` prints a page's every byte.** `Image` derives `Debug` over `data: Vec<u8>` (`sane-dl`'s `src/scan.rs`), and `Page`, which holds one, derives it too, so `{:?}` of a page (a log line, `dbg!`, an `assert_eq!` that fails) writes each byte as decimal text: hundreds of MB for a 600 dpi color page of about 100 MB. Write `Image`'s `Debug` by hand (its format, depth, size, stride, frames and the data's length, not the bytes) for the next alpha, said in the changelog; the model's `RawImage` and `Encoded` do the same (S0 slice 3). Not a defect the seam can't do without, so no code change in S0 slice 2; whichever slice next releases `sane-dl` (S0 slice 5, if it needs a change there) takes it. *(S0 slice 2, code review)*
+None open: BUG-7 was done by S0 slice 1a (`archive/backlog-done.md`).
 
 ## For S1 (pages)
 
@@ -22,3 +22,7 @@ and bugs.md").
 ## For S2 (PDF)
 
 - **BUG-6** · pdf-scan · S2 · open — **The glyphless font's ToUnicode is one range across every high byte.** sheaf's `Glyphless` writes `1 beginbfrange <0000> <FFFF> <0000> endbfrange` (`sheaf-doc/src/content/font/glyphless.rs:40-42`). The range crosses 255 high-byte boundaries, which Chromium's PDF writer forbids (bfrange entries may not change the high byte), and Ghostscript 9.56 to 10.04.x discards a whole ToUnicode map when any block has more than 100 entries (OCRmyPDF's 17.x notes). Fix: 256 ranges, one per high byte, at most 100 to a block, about 7 KB more before compression. Checked by PDFium, pdf.js and Poppler extracting the same text (TEST-1), and by Ghostscript if it's in the matrix. *(survey, pdf images and writing; Chromium review 23519006)*
+
+## Later
+
+- **BUG-8** · sane-dl · later · open — **Two copies of `sane-dl` built apart can start SANE twice in one process on macOS and the BSDs.** Each shared library built with the crate holds a copy of its own (cargo's `links` refuses two versions in one build, not two builds), so a process that loads two such libraries holds two copies, and on macOS and the BSDs each keeps its own slot: each copy's `Sane::load()` can call `sane_init` while the other's SANE lives, which SANE's rules forbid. On Linux every copy takes one slot for the whole process before the library opens (S0 slice 1a: a Unix socket bound to an abstract name formed from the process's pid namespace and pid, which the kernel frees; a probe with two `cdylib`s showed the second copy's load refused). Neither system offers a name std can bind that the kernel frees with the process: a lock file can be removed under its holder (a temp cleaner), a named POSIX semaphore outlives a crash, and `dlopen(RTLD_NOLOAD)` races two loads at once. Meanwhile the rule is the program's, said in `Sane`'s docs and the README: one copy of the crate in a process there. *(S0 slice 1a, decision 9)*
