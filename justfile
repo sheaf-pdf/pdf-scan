@@ -27,17 +27,25 @@ fmt:
     cargo fmt --all -- --check
 
 # Every feature on, so a backend behind one (scan-device's fake) is linted
-# and documented as a user who turns it on meets it.
-# Lint every crate, with its tests and every feature.
+# as a user who turns it on meets it; then each library alone, its default
+# features alone, as an app's build has it, which the first line never
+# builds where a crate's tests turn a feature on (scan-device's fake,
+# through its dev-dependency on itself).
+# Lint every crate, with its tests and every feature, and each library as shipped.
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --locked --workspace --lib -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
     cargo test --locked --workspace
 
-# Build the API docs, every feature on, failing on warnings.
+# Default features first, as docs.rs and an app's build have them, so a
+# link to an item behind a feature fails here; then every feature on, as a
+# user who turns one on meets them, which is what's left in target/doc.
+# Build the API docs, with default features and with every one, failing on warnings.
 doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 # Each library tested on its oldest supported Rust.
@@ -115,9 +123,9 @@ twain-bindings *args:
     python -I scripts/twain-bindings.py {{ args }}
 
 # Over every target's dependency graph, every feature on, the layers'
-# boundaries, and that fake-libsane takes no dependency; that nothing links
-# libsane; that fake-libsane is never published or depended on; and what
-# files may name.
+# boundaries, and that fake-libsane takes no dependency; that nothing built
+# with every feature on links libsane; that fake-libsane is never published
+# or depended on; and what files may name.
 # The layers' boundaries, nothing linking libsane, fake-libsane, and names.
 gates:
     #!/usr/bin/env bash
@@ -171,10 +179,12 @@ gates:
     [[ -z $linkers ]] || fail "these declare links = \"sane\": $linkers"
     # ...and no binary built needs it: neither a test binary nor a shared
     # library (the fake's cdylib, which only `cargo build` builds), each read
-    # for libsane among the NEEDED entries of its dynamic section.
+    # for libsane among the NEEDED entries of its dynamic section. Built with
+    # every feature on, as the graphs are read, so a backend's feature that
+    # links it is caught.
     binaries=$({
-        cargo test --locked --workspace --no-run --message-format=json
-        cargo build --locked --workspace --message-format=json
+        cargo test --locked --workspace --all-features --no-run --message-format=json
+        cargo build --locked --workspace --all-features --message-format=json
     } | jq -r 'select(.reason == "compiler-artifact")
         | if .profile.test then .executable
           elif (.target.kind | index("cdylib")) then (.filenames[] | select(test("\\.so$")))

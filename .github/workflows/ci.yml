@@ -183,8 +183,10 @@ jobs:
       - name: Test
         run: just twain-dsm-msrv
 
-  # The model has no platform code, and the check job runs its tests on all
-  # three systems, so one runner checks what the oldest Rust can break.
+  # The crate's sources have no platform code, and the check job runs its
+  # tests on all three systems, so one runner checks what the oldest Rust can
+  # break. Its crash test's Windows branch (a constant, an exit code read) is
+  # left uncompiled on that Rust, which is accepted.
   scan-device-msrv:
     name: scan-device on its minimum Rust
     runs-on: ubuntu-latest

@@ -66,7 +66,11 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
       can block a thread for good and end the process). The crate's own tests, doctests included, turn it on
       through a dev-dependency on the crate itself, so a plain `cargo test` runs them and a build without the
       feature has no fake in it; `cargo doc` and `clippy` take `--all-features` (the justfile), and the crate
-      docs name the fake's items in code only, so `cargo doc` without the feature stays clean.
+      docs name the fake's items in code only, so `cargo doc` without the feature stays clean: `just doc` and
+      `just clippy` check that too, each library documented and linted with its default features alone as well
+      (the code review). A crate that tests through the fake asks for the feature in its own dev-dependencies:
+      `cargo test --workspace` unifies it from this crate's tests, hiding one that forgot (the seam note's "What
+      slice 4 needs of it").
     - **Scripts are Rust values,** no text format: `FakeBackend` (`new`, `with(FakeDevice)`,
       `listing_takes(delay)`, `not_installed()`) holds `FakeDevice`s (`new(name, maker, model)`, its id
       `fake:<name>`; `caps`, `unlisted`, `refuses_open`, `reports_sides`, `warms_up`, `settings_window`), each
@@ -159,7 +163,8 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
   - Patch codes the driver reports, optional, as hints beside pixel reading (FEAT-5).
 - **Boundary:** no image codecs, imageproc, PDF crate or GUI toolkit under it. A gate keeps it so: the gates'
   devices-layer loop reads its graph with every feature on, so a dependency a backend's feature brings is read
-  as a default one is (S0 slice 3; 8 packages as built: itself, `in-progress`, `thiserror` and its macro's
+  as a default one is, and the libsane gate builds every binary with every feature on (S0 slice 3, the latter
+  from its code review; 8 packages as built: itself, `in-progress`, `thiserror` and its macro's
   `thiserror-impl`, `proc-macro2`, `quote`, `syn` and `unicode-ident`).
   Dependencies: `in-progress = "0.1.0"` (cancel and progress, in its public API and re-exported; taken by S0
   slice 3, vetted in S0 slice 2's plan and read again in slice 3's; a caret requirement, since an exact pin
