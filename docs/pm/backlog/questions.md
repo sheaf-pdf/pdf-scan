@@ -1,6 +1,6 @@
 # Questions: decisions still to make
 
-IDs Q-1 to Q-3; the next new one is **Q-4**. Format and rules: `README.md`. A question for the maintainer
+IDs Q-1 to Q-4; the next new one is **Q-5**. Format and rules: `README.md`. A question for the maintainer
 alone goes in `asks.md`; these are the plan's, settled by a measurement, a test or a slice, and any of them
 can be raised to an ask.
 
@@ -12,3 +12,7 @@ can be raised to an ask.
 
 - **Q-2** · pdf-scan · S2 · open — **Right-to-left words in the invisible layer: visual order or a mirrored text matrix?** Text extractors run the bidi algorithm on glyph positions, so OCRmyPDF lays right-to-left words out in visual order; Tesseract mirrors the text matrix instead. Settled by TEST-1. *(survey, pdf images and writing)*
 - **Q-3** · pdf-scan · S2 · open — **Text beyond the Basic Multilingual Plane.** As sheaf writes it, each such character becomes two Identity-H CIDs whose ToUnicode entries are lone surrogates; no source says how PDFium, pdf.js and Poppler join them. Options: keep the pair and test; map the pair's first CID to the whole character and the second to nothing; or another scheme. Settled by TEST-1. *(survey, pdf images and writing)*
+
+## For S0 (scan devices)
+
+- **Q-4** · sane-dl, scan-device (`sane` backend) · S0 · open — **A SANE device's vendor, model and kind: its bytes, or lossy UTF-8?** The standard makes every SANE string Latin-1. `sane-dl` gives a device's name as its bytes (`DeviceName`, which the model's id reads as Latin-1) but its vendor, model and kind as UTF-8 with any other byte replaced, so a Latin-1 byte is lost (S0 slice 2's probe N1, through the fake: a vendor `Caf\xe9 Scan` came back with U+FFFD for the `\xe9`); the `test` and `pnm` backends send ASCII (`Noname`, `frontend-tester`, `PNM file reader`). The fallback by backend, vendor and model compares the stored device's strings with a fresh listing's, which match while both came through the same conversion; what's lost is the text shown, and a match across a `sane-dl` whose conversion changed. Settled by slice 5, before `sane-dl`'s first publish if its API changes: the three as bytes too (or read as Latin-1, as the id is), or kept as they are, from what backends are seen to send (the fi-6130's, TEST-9). *(S0 slice 2, probe N1; its plan's rejected finding 6)*

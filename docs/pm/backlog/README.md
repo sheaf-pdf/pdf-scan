@@ -11,12 +11,12 @@ settles, and its upstream contributions.
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | | 5 | 1 | | 6 | |
-| feature (FEAT) | `features.md` | 1 | 2 | 2 | 6 | 11 | |
+| feature (FEAT) | `features.md` | 2 | 2 | 2 | 6 | 12 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 3 | 2 | 1 | 1 | 7 | |
-| question (Q) | `questions.md` | | 1 | 2 | | 3 | |
-| upstream (UP) | `upstream.md` | 5 | 4 | 1 | 1 | 11 | 10 |
-| **all** | | **9** | **15** | **7** | **8** | **39** | **10** |
+| test (TEST) | `tests.md` | 5 | 2 | 1 | 1 | 9 | |
+| question (Q) | `questions.md` | 1 | 1 | 2 | | 4 | |
+| upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
+| **all** | | **15** | **15** | **7** | **8** | **45** | **12** |
 
 ## Where to start
 
@@ -24,7 +24,10 @@ settles, and its upstream contributions.
   with CI's run of its pull request; TEST-7 (Homebrew's SANE on macOS) when a slice next touches `sane-dl`'s
   CI; FEAT-5 (patch codes the driver reports) with the Windows backends; UP-7 to UP-11, defects slice 1 found
   in SANE's own `test` backend, `scanimage` and several backends' `sane_set_io_mode`, wait on review. TEST-3
-  (TWAIN's sample source) was done by slice 7 (`archive/backlog-done.md`).
+  (TWAIN's sample source) was done by slice 7 (`archive/backlog-done.md`). From slice 2: FEAT-12 (stored ids
+  refused before `sane_open`), TEST-10 (the stored-id worker's configuration, tested without the system's) and
+  Q-4 (a device's strings as bytes) in slice 5; TEST-9 (what only the fi-6130 shows of names and cancels) in
+  slice 6's hand check; UP-12 and UP-13 (`scanimage`, sane-dll(5)) wait on review.
 - **S1:** BUG-1 to BUG-5 and DOC-1 are fixed in the cut; FEAT-1 and FEAT-8 are built in it; TEST-4 and
   TEST-6 run in it; Q-1's second half (one hayro-ccitt across both workspaces) is PL-3's.
 - **S2:** BUG-6, FEAT-2, FEAT-3; TEST-1, the viewer matrix, early, which settles Q-2 and Q-3.

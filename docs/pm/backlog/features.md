@@ -1,6 +1,6 @@
 # Features: what a crate should do and doesn't yet
 
-IDs FEAT-1 to FEAT-11; the next new one is **FEAT-12**. Format and rules: `README.md`.
+IDs FEAT-1 to FEAT-12; the next new one is **FEAT-13**. Format and rules: `README.md`.
 
 FEAT-1 to FEAT-4 are each a sheaf entry's crate half: what a crate here offers so sheaf can fix its entry.
 The other half (the dialog, the command, the app) is sheaf's and stays in sheaf's entry. FEAT-5 on came from
@@ -19,6 +19,7 @@ the prior-art survey (`research/prior-art/README.md`, 2026-11-08).
 ## For S0 (scan devices)
 
 - **FEAT-5** · scan-device · S0 · open — **Patch codes the driver reports, as hints beside pixel reading.** TWAIN 2.5 defines `ICAP_PATCHCODEDETECTIONENABLED` and the other `ICAP_PATCHCODE*` capabilities (0x113f–0x1145), a per-image `TWEI_PATCHCODE` (0x1212, values `TWPCH_*`), and job separation through `CAP_JOBCONTROL` with the patch in `TWEJ_PATCH*`. WIA 2.0 has a Patch Code Reader item (`WIA_IPS_PATCH_CODE_READER`, off by default; types 1, 2, 3, 4, 6, T and custom; results as XML or raw). SANE exposes nothing (the fujitsu and kodak backends define fields they never use). Neither TWAIN nor WIA says which edge a code lies along, so `patch-codes` stays the source of truth and these are hints. Unverified: whether the fi-6130, fi-7160 and fi-8170 report `TWEI_PATCHCODE` through PaperStream IP, and which Windows version added WIA's reader. *(survey, patch codes and barcodes)*
+- **FEAT-12** · scan-device (`sane` backend) · S0 · open — **Stored SANE ids that reach `dll`'s own name rules refused before `sane_open`, as `BadId`.** Through `dll`, a name starting `fakeusb:`, `fakeusbdev:` or `fakeusbout:` has SANE replay USB traffic from a file the name gives, or record into one, and a name whose backend part is empty (`:<device>`, or the empty name) opens a device of `dll`'s first backend, the last its `dll.conf` lists, which the id never named (`backend/dll.c`, `sane_open`, at sane-backends' `a113b257`, studied; S0 slice 2's probe N1 and its step 1's repair). No listing gives either, so the `sane` backend refuses them before SANE sees them, with an id not `sane:` and Latin-1 or holding a `NUL`, each as `ScanError::BadId` (S0 slice 2's decisions 20 and 25, its security items 2 and 5, for review); an alias named with a leading `:` is refused too, a limit. An empty name after a backend (`fujitsu:`) and a backend's name alone, each opening that backend's first device, stay allowed: they stay within the backend the id names. Built and checked in slice 5 (the milestone's entry): each refused id answered `BadId` with no `sane_open` called. *(S0 slice 2, decisions 20 and 25)*
 
 ## Later
 

@@ -41,6 +41,14 @@ S1 back: S1 can start once the Linux slices are done.
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change
    on replugging, stopping after the page in flight), the raw layout's polarity and byte order fixed, and the
    unknowns TWAIN is to settle kept. Checked: reviewed before slice 3 starts, since it fixes slice 3's API.
+   **Done on the branch** (2026-11-09; `slices/s0-2-seam-note.md`), waiting on review: branch
+   `s0-2-seam-note`, from slice 1's tip `4624760`, docs only, three steps, each checked. The note's SANE rows
+   from slice 1 and the slice's probes, the two SANE unknowns answered (what only slice 6 settles is TEST-9),
+   the raw layout fixed and held beside `scanimage`'s pages, and the model written down for slice 3 ("The
+   model, for slice 3"); the backlog's items for slices 5 and 6. Its code review next, which with the plan's
+   review is the review this entry asks for; then its pull request, stacked on slice 1's, reviewed by the
+   maintainer out of band, and slice 3 starts once it's open. For review: the plan's "Decisions taken alone,
+   for review" (26) and "For review (security)" (6).
 3. **scan-device, provisional:** the model as the seam note's "The model, for slice 3" has it (its types, the
    `Backend` and `Device` traits, `RawImage`'s checked constructor, cancel and progress through `in-progress`,
    taken here: vetted in slice 2's plan, the devices layer's gate holding it, and `plan.md`'s graph updated),
@@ -50,9 +58,11 @@ S1 back: S1 can start once the Linux slices are done.
    padding bits, a size past `u64` or a 32-bit `usize` refused, never wrapped).
 4. **scan-worker:** the protocol, `serve`, the client, the watchdog. The protocol as the seam note's "What
    slice 4 needs of it" has it: an `open` request answered with `renamed_from`, before `caps` and `scan`; an
-   `applied` event; progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker; a
-   page's format and size before its bytes; and a SANE worker that opens a stored id spawned with that id's
-   one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no backend). Checked: the
+   `applied` event; progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker, and
+   the kill after it allowing for the sheet in flight; a `settings_window` request; a page's format and size
+   before its bytes, and a `RawImage` decoded through `RawImage::new`; and a SANE worker that opens a stored id
+   spawned with that id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming none for an id with no
+   backend), in a directory it trusts. Checked: the
    `fake` backend through a real worker process: a hang killed with the pages kept, a crash with the pages
    kept and the exit said, a cancel mid-page (the sheet finished, none fed after), a version mismatch, a page
    cut short; the raw layout across the pipe byte for byte; throughput of 300 dpi pages in color and black

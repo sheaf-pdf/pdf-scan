@@ -199,7 +199,7 @@ dpi either way, and the app asks for a dpi, never the automatic value.
 
 | API | How |
 |---|---|
-| SANE | Per page, pulled: `sane_start`, then `sane_get_parameters` (format `GRAY`, `RGB`, or one of `RED`/`GREEN`/`BLUE`; `last_frame`; bytes and pixels per line; lines, or -1 for unknown; depth 1, 8 or 16), then `sane_read` in chunks to `EOF`. If not `last_frame`, `sane_start` again for the next frame (three-pass color). SANE 1 has only these five frame types: JPEG, CCITT and infrared frames are reserved for a later SANE under `#if 0`. `sane-dl`'s `Batch::next_page` gives a page whole (`Image`): every frame read to `EOF` (`lines = -1` included), the bytes past a row's pixels dropped, three-pass frames interleaved into RGB by their labels, each frame's parameters kept (`Image::frames`), progress by bytes (`Progress { bytes_read, bytes_expected }`). The samples as SANE encodes them, unchanged (the standard's "Image Data Format"; probe L1): rows top down; at depth 1 eight pixels a byte, the leftmost in the high bit, a gray image's 1 black and 0 white (`Solid black` all `0xFF`), the bits past a row's last pixel as the backend sent them (the `test` backend's black sets them, `pnm` passes a PBM's); at depth 1 in RGB each byte eight pixels of one channel, the bytes R, G, B, 0 the least intensity (`Solid black` all `0x00`); at 8 and 16 bits 0 the least intensity; 16-bit in the host's byte order (a `test` page here, each sample swapped, equals `scanimage`'s big-endian PGM). Reads are blocking: several backends answer `UNSUPPORTED` to `sane_set_io_mode` whichever mode is asked for (UP-11; S0 slice 1's decision 57), so the select fd is `sane-dl`'s step-by-step API's alone, and no backend of the model relies on it. |
+| SANE | Per page, pulled: `sane_start`, then `sane_get_parameters` (format `GRAY`, `RGB`, or one of `RED`/`GREEN`/`BLUE`; `last_frame`; bytes and pixels per line; lines, or -1 for unknown; depth 1, 8 or 16), then `sane_read` in chunks to `EOF`. If not `last_frame`, `sane_start` again for the next frame (three-pass color). SANE 1 has only these five frame types: JPEG, CCITT and infrared frames are reserved for a later SANE under `#if 0`. `sane-dl`'s `Batch::next_page` gives a page whole (`Image`): every frame read to `EOF` (`lines = -1` included), the bytes past a row's pixels dropped, three-pass frames interleaved into RGB by their labels, each frame's parameters kept (`Image::frames`), progress by bytes (`Progress { bytes_read, bytes_expected }`). The samples as SANE encodes them, unchanged (the standard's "Image Data Format"; probe L1): rows top down; at depth 1 eight pixels a byte, the leftmost in the high bit, a gray image's 1 black and 0 white (`Solid black` all `0xFF`), the bits past a row's last pixel as the backend sent them (the `test` backend's black sets them, its `Grid` not the same ones from one run to another: two of `scanimage`'s PBMs of it half an hour apart, their pixels equal, differ there in 191 rows of 196; `pnm` passes a PBM's); at depth 1 in RGB each byte eight pixels of one channel, the bytes R, G, B, 0 the least intensity (`Solid black` all `0x00`); at 8 and 16 bits 0 the least intensity; 16-bit in the host's byte order (a `test` page here, each sample swapped, equals `scanimage`'s big-endian PGM). Reads are blocking: several backends answer `UNSUPPORTED` to `sane_set_io_mode` whichever mode is asked for (UP-11; S0 slice 1's decision 57), so the select fd is `sane-dl`'s step-by-step API's alone, and no backend of the model relies on it. |
 | TWAIN | Per image, pushed then pulled: the source posts `MSG_XFERREADY` (state 6), once per enable: after `MSG_ENDXFER` with pages pending the application transfers again, with no second signal. `DAT_IMAGEINFO` gives width, height, resolution, pixel type, bits per pixel and compression; then a transfer (state 7): **native** (on Windows a `GlobalAlloc` handle to a packed DIB, the application's to free: a header, a palette, rows bottom up, each padded to four bytes, BGR), **memory** (buffers of rows or tiles with `XOffset`, `YOffset` and bytes per row, compressed if `ICAP_COMPRESSION` asked for G4 or JPEG; the sample sends strips of full rows, top to bottom, rows padded to four bytes, as many rows as fit the preferred buffer), **file** or **memory file** (the driver writes a file format). After it, `DAT_EXTIMAGEINFO` (section 4), then `DAT_PENDINGXFERS`/`MSG_ENDXFER`, which says how many more are pending. |
 | WIA | Pushed: `IWiaTransfer::Download` calls back `GetNextStream` for each page (we hand it a stream) and `TransferCallback` with progress (`ulTransferredBytes`; not the percentage, which peaks near 40 then jumps), end of stream and end of transfer. The page's format is the driver's choice among what it lists (`EnumWIA_FORMAT_INFO`): a bitmap, WIA's raw format, PNG, JPEG or TIFF. |
 | ICA | Pushed, through delegates: memory-based transfers give bands (`ICScannerBandData`: the full image's size, bits per pixel and per component, rows from a start row, bytes per row, a buffer); file-based ones a file's URL (to confirm). |
@@ -320,7 +320,7 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 | `Busy` | `DEVICE_BUSY`, at open too (`pnm` opens one device at a time) | `TWCC_MAXCONNECTIONS` | `WIA_ERROR_BUSY` | to confirm |
 | `Gone` (unplugged, offline) | `IO_ERROR` after opening; `INVAL` from `sane_open`, for a device gone and a backend not installed alike (section 1); `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running: "The model, for slice 3") | `TWCC_CHECKDEVICEONLINE` (offline at state 3 or less, lost at 4 or more) | `WIA_ERROR_OFFLINE` | the device removed |
 | `Driver { message, shown }` | other statuses: `ACCESS_DENIED` (no authorization callback, FEAT-11), `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
-| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll` in the system folder (`twain-dsm`'s loading, slice 8) | to confirm | to confirm |
+| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`, neither the system's nor the one the app names (its bundled copy: `crates/twain-dsm.md`, slice 8); which the app names, slice 9's | to confirm | to confirm |
 | `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | slice 9's to say | to confirm | to confirm |
 
 **SANE, as `sane-dl` gives it** (S0 slice 1): every status with the function that answered it
@@ -645,19 +645,26 @@ pub trait Device: Send {
 this):
 
 - every type plain data the worker can encode: a `serde` feature of `scan-device`, or wire types of the
-  worker's own (slice 4's choice);
+  worker's own (slice 4's choice); either way a `RawImage` decoded on the client is made by `RawImage::new` (a
+  `try_from`, never a derive that fills its private fields), so its checks hold there too;
 - a page's format, width and height before its bytes, so the client caps them before it reads them
   (`plan.md`'s hostile-input rule), and `RawImage::new` refusing a length that doesn't match: a crashed
   worker's half page is never a page;
 - a page delivered whole, once complete, never cut short (section 3); every size `u32`, the same in the 32-bit
   worker;
-- `Stopped` the client's own (its watchdog's), never the worker's;
+- `Stopped` the client's own (its watchdog's), never the worker's; and the kill after a cancel allowing for
+  the sheet in flight, which a cancel now finishes, front and back (section 7): `crates/scan-worker.md` kills a
+  worker 10 s after a cancel (proposal 4), which a sheet's two sides may outlast on a slow scanner or at a high
+  resolution, so slice 4 sets it anew, counted from the worker's last line, say, as the watchdog's 60 s is;
 - the protocol's consequences, which `crates/scan-worker.md`'s list (`list`, `caps`, `scan`, `cancel`,
   `quit`; `device`, `caps`, `sheet`, `page`, `status`, `error`, `done`) predates: an `open` request, its answer
   carrying `renamed_from`, before `caps` and `scan` (the two traits); an `applied` event (`Event::Applied`);
-  progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker; and a SANE worker that
-  opens a stored id started with that id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming the
-  backend `backend_of` gives, or none where it gives none: section 1), passed at the spawn.
+  progress lines from the worker's `Progress`; `cancel` cancelling the batch's tracker; a `settings_window`
+  request (`Device::settings_window`, section 9); and a SANE worker that opens a stored id started with that
+  id's one-backend `ConfigDir` (`Search::BeforeSystem`, naming the backend `backend_of` gives, or none where it
+  gives none: section 1), passed at the spawn, in a directory it trusts: `BeforeSystem` has SANE read the
+  process's current directory after the `ConfigDir` and before the system's, so a `dll.aliases` or a backend's
+  `.conf` there would be read (`sane-dl`'s `Search`; S0 slice 1's security item 4).
 
 **What slice 9's `twain` backend meets** (slice 7's rows, as they are): its tiles and DIB assembled into a
 `RawImage` (section 3's table: rows flipped, padding dropped, tiles placed, the DIB's B, G, R swapped); a DIB's

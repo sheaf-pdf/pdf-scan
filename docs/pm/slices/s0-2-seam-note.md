@@ -1,6 +1,7 @@
 # S0 slice 2: the seam note revised
 
-Status: running, on branch `s0-2-seam-note`, from 2026-11-09. Milestone: `milestones/s0-devices.md`, slice 2.
+Status: running, on branch `s0-2-seam-note`, from 2026-11-09; its three steps done, its code review next.
+Milestone: `milestones/s0-devices.md`, slice 2.
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
 with a leading `/` (`/crates/sane-dl/`, `/justfile`); `scratch/` from the root, local and never tracked.
@@ -607,6 +608,14 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
     id isn't echoed into a message. The alternatives: `Gone` (the app keeps retrying an id that can't open) or
     `Driver` (a message for the user about a stored setting the driver never saw). Probe M1 holds it (its
     fourteenth test).
+26. **The check's points for slice 4 go into the note's "What slice 4 needs"** (step 3; step 2's check, its
+    minor points): a `RawImage` decoded on the client is made by `RawImage::new`, never a derive that fills its
+    private fields; the kill after a cancel allows for the sheet in flight, since `crates/scan-worker.md`'s 10 s
+    (proposal 4) predates a cancel that finishes a sheet's two sides, and slice 4 sets it anew (counted from the
+    worker's last line, as the watchdog's 60 s is, the note's suggestion); a `settings_window` request, which
+    the protocol's list lacked; and the stored-id worker started in a directory it trusts (security item 6).
+    The milestone's slice 4 says each in a clause. The alternative, a backlog item for slice 4, would leave
+    the note that slice 4 writes its protocol from short of them.
 
 ## For review (security)
 
@@ -637,6 +646,14 @@ touches code behind `cfg`, and `just ci` (its package and MSRV recipes among it)
    it. An alias resolves through the system's `dll.aliases` in the worker (decision 19) and opens the device the
    system's listing showed under it, on whichever backend the alias names: the system's configuration, which the
    listing trusts already, not a fallback, which stays within the directory's backend (item 1).
+6. **The stored-id worker's current directory** (step 3, from step 2's check): `Search::BeforeSystem` has SANE
+   read the process's current directory after the `ConfigDir` and before `/etc/sane.d` (`sane-dl`'s `Search`;
+   sane-dll(5)), and decision 19 leaves `dll.aliases` and the backend's own `.conf` to the first directory that
+   holds one, so either file planted in the worker's current directory would be read: an alias there could
+   turn a stored id into a device of another backend, which `dll` loads by its prefix (slice 1's security item
+   7), past item 1's "never across backends" (from `dll.c`'s order, not tried). The worker is started in a
+   directory it trusts, as slice 1's item 4 says of any process loading SANE so: the note's "What slice 4
+   needs" and the milestone's slice 4 say it, slice 4 chooses the directory.
 
 ## Risks
 
@@ -1029,3 +1046,62 @@ One commit, the one that carries this account. Docs only: `crates/scan-device-se
     own DSM, the stored-id worker's current directory under `BeforeSystem`, the 10 s kill after a cancel against
     the sheet in flight, a `serde` `RawImage` going through `new`, the settings window's protocol request, a
     clause on the `test` backend's varying padding bits, and the `image` module's name after slice 8's merge.
+
+### Step 3: the backlog and the plan's files; the slice's end (2026-11-09)
+
+One commit, the one that carries this account. Docs only: the backlog (`README.md`, `tests.md`,
+`questions.md`, `features.md`, `upstream.md`), `crates/scan-device-seam.md`, `milestones/s0-devices.md`,
+`status.md`, `slices/README.md` and this plan.
+
+- **What it does:** the backlog's items, one line each in the README's format, the next free IDs on this
+  branch: TEST-9 (slice 6: the fi-6130's name through `fujitsu` and what replugging, another port and a reboot
+  do to it, what its open answers once gone and once back, whether the fallback finds it; a sheet pulled in
+  before the page in flight ends, and `sane_cancel` on a started batch; the back after a cancel after a front;
+  its vendor, model and kind byte for byte); TEST-10 (slice 5: the stored-id worker's `BeforeSystem`
+  configuration tested through a stand-in for the system's directory, never `/etc/sane.d`, its aliases with and
+  without a colon); Q-4 (slice 5: a device's vendor, model and kind as bytes or lossy UTF-8, N1's lost `\xe9`);
+  FEAT-12 (slice 5: decision 20's refusals as `BadId`, decision 25); UP-12 (`scanimage` aborting on one-pass
+  1-bit color, the assertion step 2's check found, beside UP-10's) and UP-13 (sane-dll(5)'s name without a `:`,
+  which `dll.c` reads as a backend's, step 1's finding). The README's table counted again with `rg` (45 items:
+  15 for S0, 15 for S1, 7 for S2, 8 later; 12 waiting on review) and its "Where to start" given slice 2's. The
+  milestone's slice 2 entry: done on the branch, waiting on review, its decisions and security items counted.
+  `status.md` and `slices/README.md` a line each (`status.md` also its date, its next slice, and UP-7 to UP-13).
+- **Step 2's check's minor points, taken here** (`scratch/work/s0-2/flow/checks.md`, "Step 2 at 0175f81",
+  "Minor"), six of the seven, prose only (the model's block untouched): in the note's "What slice 4 needs", a
+  `RawImage` decoded on the client made by `RawImage::new`, the kill after a cancel allowing for the sheet in
+  flight, a `settings_window` request, and the stored-id worker in a directory it trusts (decision 26, security
+  item 6), each also a clause in the milestone's slice 4; section 6's `NotInstalled` TWAIN cell, the DSM neither
+  the system's nor the app's own copy (`crates/twain-dsm.md`'s loading); section 3's SANE row, the `test`
+  backend's `Grid` padding bits not the same from run to run (`scanimage`'s PBMs of it at 01:55 and 02:25, their
+  pixels equal, differing in 191 rows' padding of 196, three at 01:55 equal among themselves and two at 02:25:
+  `scratch/work/s0-2/step-3/grid-padding.txt`). The seventh, the `image` module's name beside slice 8's after
+  its merge, is the merge's to align: the note names it as it is at `4624760`, a record.
+- **Departures from the plan, and why:** TEST-10, UP-12 and UP-13 beyond the plan's list, as "whatever the
+  probes find" (step 1's repair probe, step 2's check of `scanimage`, step 1's reading of `dll.c` beside the man
+  page); the `test` backend's varying padding bits got no upstream item, since the standard says nothing of
+  the bits past a row's last pixel (its "padded" formats are whole bytes past `bytes_per_line`'s minimum). The
+  note and the milestone's slice 4 edited for the check's points, which the plan's step 3 didn't list; the
+  check's notes left them to this step or the code review, and the code review then reads them in place.
+- **Decisions taken alone:** 26 above; security item 6.
+- **Found, for the code review** (not changed here, since it changes the model's block and M1's sketch):
+  `Backend::open` takes the stored id alone (`&DeviceId`), but SANE's fallback opens "the one device of the same
+  backend, vendor and model", and a SANE id holds the backend and the name, neither vendor nor model
+  (`sane:fujitsu:libusb:001:004`), so the `sane` backend can't make the match as the trait stands. M1 didn't
+  show it, its fake renaming by id alone. Either `open` takes what the app stored of the device (its
+  `DeviceInfo`, or the id with its maker and model), and slice 4's `open` request carries the same, or the
+  fallback goes. For the api lens.
+- **Checks before it:** step 2's check and its repair are in step 2's account above; no check ran on the
+  repair's commit before this step, so nothing more to carry. CI on pull request #2 (`4624760`'s code tree, this
+  branch's too) is green on every job (run 42582929367, the Windows jobs on a rerun after GitHub's download
+  timeouts; its seven jobs' results read with `gh`, `scratch/work/s0-2/step-3/ci-run-42582929367.json`), which
+  closes TEST-2 and TEST-8; moving them to `archive/backlog-done.md` is the fix stage's.
+- **Quick checks here:** `git diff --stat 4624760` touching `docs/pm/` alone; the trial merge of a commit of
+  this tree with `origin/s0-8-twain-dsm` at `0f08bb0` and at the remote's tip `6ca9a2d` (unchanged since step 2)
+  conflicting in the six files of `4624760` alone, the seam note and the milestone merging cleanly, each edit
+  above in the merged note; every commit message of `4624760..HEAD` read for names, local paths, `scratch/`,
+  sheaf and pdf-lint (none); `git grep -i` for the maintainer's name finding only the root `LICENSE-MIT`; every
+  backlog line matched against the README's format, the new IDs used nowhere else; the paths the note cites
+  found (sane-backends' by their path at `a113b257`); lines at most 115 characters outside tables and backlog
+  lines; the diff and this message scanned. The test list, the core's tracing of each fact and the rest are the
+  checking agent's; `just ci` isn't run (no file outside `docs/pm/` changed; Baselines). **What only CI shows:**
+  nothing of this slice's (docs only).
