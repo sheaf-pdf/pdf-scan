@@ -1,0 +1,92 @@
+name: CI
+
+# Pushes to master, and pull requests: a push to a pull request's branch
+# runs once, not once as a push and again as the pull request.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Each step runs a recipe from the justfile, so `just ci` locally checks the
+# same things.
+jobs:
+  check:
+    name: Rust checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: extractions/setup-just@v4
+      # On Ubuntu, SANE itself: libsane1 holds libsane and its backends,
+      # `test` and `pnm` among them, which the tests drive; libsane-dev holds
+      # sane.h, which the bindings are checked against. Then a test that
+      # would skip for want of either fails instead. Windows and macOS have
+      # no SANE here, and those tests say they skipped.
+      - name: Install SANE (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libsane1 libsane-dev
+          dpkg-query --show libsane1 libsane-dev
+          dpkg --listfiles libsane1 | grep -E '/sane/libsane-(test|pnm)\.so' || { echo "libsane1 lacks the test or pnm backend" >&2; exit 1; }
+          echo "SANE_DL_REQUIRE_LIBSANE=1" >> "$GITHUB_ENV"
+          echo "SANE_DL_REQUIRE_HEADER=1" >> "$GITHUB_ENV"
+      - name: Check formatting
+        run: just fmt
+      - name: Clippy
+        run: just clippy
+      - name: Test (including doctests)
+        run: just test
+      - name: Build documentation
+        run: just doc
+
+  # The layers' boundaries over every target's dependency graph, so one
+  # runner checks them all; and that nothing links libsane, with libsane and
+  # its header installed, so a stray link would build and the gate, not the
+  # linker, says what's wrong.
+  gates:
+    name: Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: extractions/setup-just@v4
+      - name: Install SANE
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libsane1 libsane-dev
+          dpkg-query --show libsane1 libsane-dev
+      - name: Gates
+        run: just gates
+
+  # Without SANE installed: what the oldest Rust can break is compiling, and
+  # the tests that need libsane say they skipped.
+  sane-dl-msrv:
+    name: sane-dl on its minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Keep in step with rust-version in crates/sane-dl/Cargo.toml, which
+      # `just sane-dl-msrv` reads.
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: extractions/setup-just@v4
+      - name: Test
+        run: just sane-dl-msrv

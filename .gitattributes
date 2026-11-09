@@ -1,0 +1,18 @@
+# Shell scripts run under bash on every runner, Windows too, where a CR
+# would break them.
+*.sh text eol=lf
+
+# Images and PDFs are bytes: a checkout mustn't touch their line endings.
+*.png binary
+*.tif binary
+*.tiff binary
+*.jpg binary
+*.jpeg binary
+*.bmp binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.pbm binary
+*.pgm binary
+*.ppm binary
+*.pnm binary

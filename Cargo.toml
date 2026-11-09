@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+# Each crate says its own edition, license and rust-version in its manifest:
+# their oldest supported Rust may differ, as their dependencies do.
+members = [
+    "crates/sane-dl",
+    "crates/fake-libsane",
+]
+
+# No [workspace.dependencies] yet: it holds what more than one member takes,
+# required once there and taken with `workspace = true`, and no two members
+# share a dependency so far.
+
+# The rules for unsafe code, which the members that call or export a C API
+# need. Each member takes them with `lints.workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"

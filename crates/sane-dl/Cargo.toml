@@ -1,0 +1,22 @@
+[package]
+name = "sane-dl"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "SANE scanner access with libsane loaded at run time: its own bindings, a safe handle, typed options, frames assembled"
+repository = "https://github.com/sheaf-pdf/pdf-scan"
+# Not until the crate is ready: its README, changelog and package contents
+# come first.
+publish = false
+
+[dependencies]
+libloading = "0.9"
+thiserror = "2"
+
+[dev-dependencies]
+rusty-fork = { version = "0.3", default-features = false, features = ["timeout"] }
+tempfile = "3"
+
+[lints]
+workspace = true
