@@ -14,7 +14,8 @@ env:
   CARGO_TERM_COLOR: always
 
 # Each step runs a recipe from the justfile, so `just ci` locally checks the
-# same things.
+# same things; the Ubuntu job also sets the two SANE_DL_REQUIRE_* variables
+# (below), which a local run on Linux sets to match it.
 jobs:
   check:
     name: Rust checks (${{ matrix.os }})

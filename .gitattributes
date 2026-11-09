@@ -1,5 +1,5 @@
-# Shell scripts run under bash on every runner, Windows too, where a CR
-# would break them.
+# Shell scripts, should any be tracked, keep LF: bash, on a Windows
+# checkout too, can't run a script with CRs in it.
 *.sh text eol=lf
 
 # Images and PDFs are bytes: a checkout mustn't touch their line endings.

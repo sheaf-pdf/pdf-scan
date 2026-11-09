@@ -1,5 +1,8 @@
 # Development tasks. CI runs these same recipes, so a local `just ci` checks
-# what CI checks.
+# what CI checks, but for two variables: CI's Ubuntu job sets
+# SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
+# needs libsane or sane.h fails where it would skip. On Linux, set them for
+# a local run that matches it.
 
 # The oldest Rust sane-dl supports, from its Cargo.toml.
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
@@ -32,6 +35,7 @@ doc:
 # Each library tested on its oldest supported Rust.
 msrv: sane-dl-msrv
 
+# sane-dl's tests on its oldest supported Rust.
 sane-dl-msrv:
     cargo +{{ sane_dl_msrv }} test --locked -p sane-dl
 
@@ -61,8 +65,10 @@ sane-dl-package:
     done
     echo "sane-dl-package: $(wc -l < "$dir/files.txt") files, each a source, the build script, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
 
-# The boundaries of the layers, checked over every target's dependency
-# graph; that nothing links libsane; and what files may name.
+# Over every target's dependency graph, the layers' boundaries, and that
+# fake-libsane takes no dependency; that nothing links libsane; that
+# fake-libsane is never published or depended on; and what files may name.
+# The layers' boundaries, nothing linking libsane, fake-libsane, and names.
 gates:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -97,6 +103,16 @@ gates:
         done <<< "$list"
         echo "gates: $crate's graph read for the devices layer ($(wc -l <<< "$list") packages)"
     done
+    # fake-libsane takes no dependency at all: a shared object loaded into
+    # the process of the test that loads it, it carries nothing into it
+    # (image codecs least of all, which the page fixtures will take).
+    if ! fake_list=$(deps fake-libsane); then
+        fail "cargo tree couldn't list fake-libsane's dependencies"
+    elif [[ $fake_list != fake-libsane ]]; then
+        fail "fake-libsane takes dependencies: $(grep -vxF fake-libsane <<< "$fake_list" | tr '\n' ' ')"
+    else
+        echo "gates: fake-libsane's graph read: no dependency"
+    fi
     # Nothing links libsane: it's loaded at run time. No package declares it
     # as the native library it links...
     metadata=$(cargo metadata --locked --format-version 1)
@@ -112,11 +128,17 @@ gates:
         | if .profile.test then .executable
           elif (.target.kind | index("cdylib")) then (.filenames[] | select(test("\\.so$")))
           else empty end // empty' | sort -u)
+    # Each read whole before it's matched, so a binary readelf can't read
+    # fails the gate rather than passing unread.
     read_count=0
     while read -r binary; do
         [[ -n $binary ]] || continue
+        if ! dynamic=$(readelf -d "$binary"); then
+            fail "readelf couldn't read $binary"
+            continue
+        fi
         read_count=$((read_count + 1))
-        readelf -d "$binary" | grep -q 'NEEDED.*libsane' && fail "$binary links libsane"
+        grep -q 'NEEDED.*libsane' <<< "$dynamic" && fail "$binary links libsane"
     done <<< "$binaries"
     [[ $read_count -gt 0 ]] || fail "no binary was read for libsane"
     echo "gates: $read_count binaries read for libsane"
