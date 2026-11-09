@@ -464,15 +464,14 @@ here to what slice 9 meets of it.
 
 **The model** ("The model, for slice 3"): two traits, as SANE's library and handle are, and as a worker keeps
 one device open while its dialog is (section 9): a `Backend` lists and opens, and the `Device` it opens gives
-its caps and scans; both are `Send`, and a device is a `Box<dyn Device>`. `Device::scan(settings,
-first_sheet, events, progress)` blocks its own thread until the batch is done, sending `Applied`, `Sheet`,
-`Page` and `Status` events on a bounded channel (a `std::sync::mpsc::SyncSender<Event>`, its bound the
-caller's: a `send` waits while the channel is full, and one that fails, nobody listening, ends the batch as
-`Done::Cancelled`, no sheet started after it), with cancel and progress through `in-progress`'s `Progress`
-(section 7), not events or a handle of the model's own. The SANE backend runs on that thread directly; the
-TWAIN, WIA and ICA backends start the thread their API needs (an STA thread with a message loop or a run
-loop), hand it a clone of the `SyncSender`, which holds it back while the channel is full, and a child
-progress for each batch, and pass
+its caps and scans; both are `Send`, and a device is a `Box<dyn Device>`. `Device::scan(settings, first_sheet,
+events, progress)` blocks its own thread until the batch is done, sending `Applied`, `Sheet`, `Page` and
+`Status` events on a bounded channel (a `std::sync::mpsc::SyncSender<Event>`, its bound the caller's: a `send`
+waits while the channel is full, and one that fails, nobody listening, ends the batch as `Done::Cancelled`, no
+sheet started after it), with cancel and progress through `in-progress`'s `Progress` (section 7), not events
+or a handle of the model's own. The SANE backend runs on that thread directly; the TWAIN, WIA and ICA backends
+start the thread their API needs (an STA thread with a message loop or a run loop), hand it a clone of the
+`SyncSender`, which holds it back while the channel is full, and a child progress for each batch, and pass
 cancels and requests to it. `scan-worker` sees one shape for all of them. **TWAIN, by the spike:** events go out
 on a channel (`std::sync::mpsc`); requests come in as the application's own messages (`WM_APP` and up) posted to
 the TWAIN thread's window, taken in the loop and never forwarded to the DSM; the window procedure is
