@@ -40,6 +40,15 @@ the TWAIN Working Group's sample data source in both bitnesses, here and on `win
 synchronously, has one image, and can't jam, feed two sides or report extended image info; the hand checks
 (S0 slice 12) settle the rest. SANE's rows are as they were, for slice 2.
 
+**Revised 2026-11-08 by S0 slice 8, `twain-dsm`** (`slices/s0-8-twain-dsm.md`, "So far"), in sections 3, 8 and
+the unknowns, where building the crate changed what the spike had: `twain-dsm` serves requests in every state
+(another thread's `Remote<T>`, the caller's own request type; `Twain::wait`, `Enabled::next_event`,
+`take_request` between buffers), and hands the source's messages over first; it rolls back as the spike did,
+from a record of where the source is that it keeps apart from the states, so a state dropped or forgotten
+anywhere is stepped down, and what a drop couldn't do is kept for the backend (`drop_errors`); and it closes a
+source left open itself at the end, since the DSM's own closing stops before the last source it lists. Each
+failure carries both parties' condition codes, the DSM's read in the order its clearing needs.
+
 ## The rules it keeps
 
 - **The bindings say what their API says; the backends decide what it means.** `sane-dl` and `twain-dsm` expose
@@ -301,7 +310,8 @@ becomes.
 **Decided by the TWAIN spike:** `twain-dsm` hands over **tiles as TWAIN gives them** (each buffer's offsets,
 columns, rows, bytes per row and bytes written) and **the DIB's bytes as a block**; the `twain` backend
 assembles and decodes, checking each against its bounds before reading. The sample only ever sent full-row
-strips, in order; tiles in two dimensions, out of order, are handled (`twain-spike`'s `image` module, with an
+strips, in order; tiles in two dimensions, out of order, are handled (the spike's `image` module, in
+`twain-dsm`'s tests' support since slice 8, with an
 `Assembler` that places each buffer as it comes and holds nothing but the image) but shown only by unit tests
 on made-up data, and which drivers send them is slice 12's. The refusals (overlaps, gaps, 1-bit tiles that
 start or end within a byte, an 8-bit color palette) are the backend's policy, not the sample's behaviour.
@@ -482,11 +492,15 @@ loop waits for the source is kept, not dropped. **Cancel, as shown:** a cancel q
 kept by the loop that waited for `MSG_XFERREADY` and ended the batch before any transfer (`MSG_RESET` from
 state 6, the source then accepting `MSG_DISABLEDS`); one posted during a memory transfer, at a pause the TWAIN
 thread made after the page's first buffer, ended the batch after that page. Nothing is taken during a native
-transfer or while the thread is inside a DSM call; how the backend serves requests while a driver is busy is
-slices 8 and 9's. **The state the application records isn't the source's:** the sample is in state 6 as
+transfer or while the thread is inside a DSM call. **Slice 8:** `twain-dsm` serves requests in every state (a
+`Remote<T>` posts the backend's own commands; `Twain::wait` and `Enabled::next_event` hand them over, the
+source's queued messages first, and `take_request` between a memory transfer's buffers), and a cancel ends the
+batch at the next state-6 point (`MSG_RESET`), both deliveries tested; inside a DSM call nothing can be, which
+is slice 9's to live with. **The state the application records isn't the source's:** the sample is in state 6 as
 soon as it signals inside `MSG_ENABLEDS`, before the application has heard, so a walk down after a failure
-there must allow for it; `twain-spike` rolls back as `TWAIN.cs` does (on `TWCC_SEQERROR`, from state 7's first
-step), and never unloads the DSM while a source is open, since the source holds the DSM's entry points.
+there must allow for it; `twain-dsm` rolls back as `TWAIN.cs` does (on `TWCC_SEQERROR`, from state 7's first
+step, once), from a record it keeps apart from the states and moves to state 6 as `MSG_XFERREADY` arrives, and
+never unloads the DSM at all, since a source holds the DSM's entry points.
 
 ## 9. The driver's own window
 
@@ -850,7 +864,7 @@ Each section's "To settle", gathered, with what settles it:
 | Whether SANE can stop after the page in flight | **Settled on the `test` backend and the fake, S0 slice 2** (section 7): the page read to `EOF`, no next start, the batch ended, the sheets after left in the feeder. Whether a real feeder has pulled the next sheet in: S0 slice 6 |
 | Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | **Settled, S0 slice 7:** tiles and the DIB's block; the backend assembles, decodes and applies the palette (section 3) |
 | How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S0 slice 9 |
-| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). Serving requests while a driver is busy, slices 8 and 9 |
+| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). **S0 slice 8:** requests of the backend's own type served in every state, the source's messages first; inside a DSM call, none (slice 9) |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
 | Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
 | The cancel handle and progress through `in-progress` | **Taken by S0 slice 2, for review** (section 7; "The model, for slice 3"); the TWAIN thread's wake-up on a cancel, S0 slice 9 |

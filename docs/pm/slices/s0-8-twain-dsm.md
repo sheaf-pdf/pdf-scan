@@ -1,6 +1,7 @@
 # S0 slice 8: twain-dsm
 
-Status: planned and reviewed, on branch `s0-8-twain-dsm`, from 2026-11-08. Milestone:
+Status: running, on branch `s0-8-twain-dsm`, from 2026-11-08: planned, reviewed, its six steps built and
+pushed; the code review, fixes, CI on a pull request and approval close it. Milestone:
 `milestones/s0-devices.md`, slice 8. Run on the Windows machine, the same way as slice 7
 (`archive/slices/s0-7-twain-spike.md`): this plan, an adversarial review (below), the steps (each committed and
 pushed), parallel code reviews, a fix stage.
@@ -208,7 +209,7 @@ let report = twain_dsm::run::<Cmd, _>(|twain| -> Result<(), Error> {
   state.
 - **Hostile input:** the decoders (containers, extended image info, strings) take random input in a unit test
   (a fixed-seed generator, many thousand cases, every result `Ok` or `Err`, never a panic, on every runner,
-  i686 included); a `cargo-fuzz` target for them is TEST-7, for a slice with nightly at hand.
+  i686 included); a `cargo-fuzz` target for them is TEST-11, for a slice with nightly at hand.
 
 ### How the tests run
 
@@ -277,7 +278,7 @@ call; the diff and message scanned for local paths, the username, the downstream
 6. **The spike retired; what it found, written down.** `crates/twain-spike` deleted (its `image` module in
    `tests/support/`); CI's job renamed `twain-dsm` and its recipe `twain-dsm-sample`; README rows; the code and
    CI free of the spike, the docs citing it as history; `crates/twain-dsm.md` (as built, "For the seam"), the
-   seam note where it changed, the milestone, `status.md`, `decisions.md`, TEST-7, this plan's "So far".
+   seam note where it changed, the milestone, `status.md`, `decisions.md`, TEST-11, this plan's "So far".
    **Done when:** the core; every claim in the docs traced to a report or a line.
 
 **Closing:** the code review (parallel reviewers), the fixes, CI green, approval.
@@ -356,7 +357,7 @@ width; `DAT_CALLBACK`'s 32 bits). 20. The DIB locked for life, `Native::Cancelle
 `TWON_DONTCARE32`, `MinBufSize` checked. 21. 1205 numeric defines, 58 without a `TWAINH.cs` name: the
 generator committed with its rename map, the rest by hand, `TWTY_STR1024` and `TWTY_UNI512` decoded. 22.
 Function-pointer types `pub(crate)`. 23. `rust-version`, `[workspace.dependencies]`, an MSRV job, the decoders'
-random-input test and TEST-7, `App` given to `open`, `RunError`, `find-msvc-tools` direct. 24. Six steps, not
+random-input test and TEST-11, `App` given to `open`, `RunError`, `find-msvc-tools` direct. 24. Six steps, not
 five; step 6's "no trace" limited to code and CI; question 4 a borrow, not a brand.
 
 **Checked and sound** (the reviewer's list, kept): a state can't be returned from `run`'s closure or stored in a
@@ -535,3 +536,20 @@ in state 7; a `Dib` is `Send`.
   run `Events` after `Callback` on one connection.
 - **CI:** the TWAIN job sets `TWAIN_DSM_REQUIRE_SAMPLE=1`, which the plan had and step 1 left out.
 - **The check:** as step 4's; 65 tests in each bitness.
+
+**Step 6, the spike retired; what it found, written down** (2026-11-08):
+- **The spike gone:** `crates/twain-spike` deleted (its `image` module lives on in `tests/support/`, as step 4
+  put it there), with its workspace entry, its two recipes and its CI steps. CI's TWAIN job is `twain-dsm`
+  now, its recipe `twain-dsm-test` (the plan's `twain-dsm-sample`: the one recipe runs every test of the
+  crate, the sample's among them). The code, scripts and CI name the spike nowhere; the docs cite it as
+  history. The README's row is gone, `twain-dsm`'s rewritten; the crate's own doc describes it as built, with
+  an example, its Windows part included only on Windows so the docs and doctests build elsewhere.
+- **The pump, aligned with the plan:** the crate's own messages (its requests' and callback's posts) are
+  never offered to `MSG_PROCESSEVENT`, as the plan's design and the spike had it; step 4 offered them too.
+  Every test passes either way, in both bitnesses.
+- **Docs:** `crates/twain-dsm.md` rewritten as built, "For the seam" included; the seam note revised where the
+  crate changed it (sections 3 and 8, the unknowns' table, a paragraph saying so); the milestone's slice 8
+  entry and `status.md` say it's built; `slices/README.md` lists it running; TEST-11 (the decoders fuzzed with
+  `cargo-fuzz`) in `backlog/tests.md`. `decisions.md` is unchanged: no ruling was made during the slice; its
+  decisions taken alone, above, wait for review.
+- **The check:** as step 5's; 65 tests in each bitness.

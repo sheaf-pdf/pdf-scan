@@ -5,7 +5,6 @@ resolver = "3"
 members = [
     "crates/sane-dl",
     "crates/fake-libsane",
-    "crates/twain-spike",
     "crates/twain-dsm",
 ]
 

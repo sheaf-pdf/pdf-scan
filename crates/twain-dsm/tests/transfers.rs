@@ -5,7 +5,7 @@
 #![cfg(windows)]
 
 #[path = "support/image.rs"]
-#[allow(dead_code)] // the spike's, whole: not all of it is used here
+#[allow(dead_code)] // kept whole: not all of it is used here
 mod image;
 mod support;
 

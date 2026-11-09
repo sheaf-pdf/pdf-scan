@@ -123,6 +123,12 @@ S1 back: S1 can start once the Linux slices are done.
    against `twain.h` 2.5, the state
    machine, the STA thread and hidden top-level window, capabilities, transfers, condition codes; built for
    both targets. It exposes what the seam needs (`crates/twain-dsm.md`, "For the seam").
+   - **Built 2026-11-08** (`slices/s0-8-twain-dsm.md`), safe by construction (`decisions.md`): its six steps
+     on branch `s0-8-twain-dsm`, each pushed; generated bindings and a header contract in both bitnesses; the
+     DSM loaded only after its signer is checked; TWAIN's states as owned types on the caller's thread, a
+     record apart from them that the teardown trusts; capabilities, both transfers, both deliveries, cancels
+     and requests, tested through the sample source in both bitnesses. `twain-spike` is deleted, its record
+     kept. The code review, its fixes, CI green and approval close it.
 9. **scan-device's `twain` backend** and a 32-bit worker in CI (`i686-pc-windows-msvc`, the worker alone),
    the client's merge of both lists. The model's changes the backend asks for are made here, in
    `scan-device`, the `fake` and `sane` backends and the worker's protocol together. Checked: 10 images

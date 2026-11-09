@@ -81,12 +81,12 @@ jobs:
 
   # TWAIN through the TWAIN Working Group's sample data source, a virtual
   # scanner that reads its pages from a file: the DSM and the source installed
-  # by the script (the runner is elevated, so msiexec asks nothing), then the
-  # spike in both bitnesses; and twain-dsm's tests in both, its bindings
-  # checked against twain.h. Its own timeout, since a hung driver call would
-  # otherwise hold the runner for hours.
-  twain-spike:
-    name: TWAIN through the sample source
+  # by the script (the runner is elevated, so msiexec asks nothing), then
+  # twain-dsm's tests in both bitnesses, its bindings checked against twain.h.
+  # Its own timeout, since a hung driver call would otherwise hold the runner
+  # for hours.
+  twain-dsm:
+    name: twain-dsm through the sample source
     runs-on: windows-latest
     timeout-minutes: 15
     # The sample is installed below, so a twain-dsm test that can't find it
@@ -132,12 +132,6 @@ jobs:
         run: just twain-dsm-test x86_64-pc-windows-msvc
       - name: twain-dsm, 32-bit
         run: just twain-dsm-test i686-pc-windows-msvc
-      - name: Unit tests, 32-bit
-        run: just twain-spike-test i686-pc-windows-msvc
-      - name: TWAIN, 64-bit
-        run: just twain-spike x86_64-pc-windows-msvc
-      - name: TWAIN, 32-bit
-        run: just twain-spike i686-pc-windows-msvc
 
   # Without SANE installed: what the oldest Rust can break is compiling, and
   # the tests that need libsane say they skipped.

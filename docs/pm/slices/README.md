@@ -14,3 +14,6 @@ the seam note revised (three steps, docs only; its pull request to be stacked on
 
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).
+
+Running, on the Windows machine: [`s0-8-twain-dsm.md`](s0-8-twain-dsm.md), S0 slice 8, `twain-dsm` (its six
+steps built and pushed; the code review and its fixes next).

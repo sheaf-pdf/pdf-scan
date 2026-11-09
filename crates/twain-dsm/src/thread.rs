@@ -294,7 +294,8 @@ impl<T> Twain<T> {
     ///
     /// While a source is enabled, its messages are kept for
     /// [`Enabled::next_event`](crate::Enabled::next_event): each of the
-    /// thread's messages is offered to it first when it delivers by events.
+    /// thread's messages but the crate's own is offered to it first when it
+    /// delivers by events.
     pub fn wait(&self, timeout: Duration) -> Wake<T> {
         let mut request = None;
         let pumped = self.pump(Instant::now() + timeout, |twain| {
@@ -320,13 +321,17 @@ impl<T> Twain<T> {
                 if msg.message() == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                     return Pumped::Quit(msg.wparam() as i32);
                 }
+                // The crate's own messages (matched by window, not by number: a
+                // source's windows may use the same numbers) are never offered
+                // to the source.
                 let ours = msg.hwnd() == self.window.handle();
-                if self.offered_to_source(&mut msg) {
-                    // The source's: not dispatched.
-                } else if ours && msg.message() == WM_REQUEST {
+                if ours && msg.message() == WM_REQUEST {
                     // The request itself is in the channel.
                 } else if ours && msg.message() == WM_SOURCE {
                     self.callback_posted(&msg);
+                } else if self.offered_to_source(&mut msg) {
+                    // The source's, or the carrier of its message: not
+                    // dispatched.
                 } else {
                     msg.dispatch();
                 }

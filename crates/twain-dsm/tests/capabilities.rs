@@ -18,7 +18,7 @@ fn one(source: &Source<'_, ()>, cap: u16) -> Item {
     }
 }
 
-/// The sample's answers, as its code gives them and the spike saw them.
+/// The sample's answers, as its code gives them.
 fn the_samples_answers(source: &Source<'_, ()>) {
     // Set, then read back.
     let set = |cap, item: Item| {

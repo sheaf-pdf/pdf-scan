@@ -13,10 +13,10 @@ settles, and its upstream contributions.
 | bug (BUG) | `bugs.md` | 1 | 5 | 1 | | 7 | |
 | feature (FEAT) | `features.md` | 2 | 2 | 2 | 6 | 12 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 3 | 2 | 1 | 1 | 7 | |
+| test (TEST) | `tests.md` | 4 | 2 | 1 | 1 | 8 | |
 | question (Q) | `questions.md` | 1 | 1 | 2 | | 4 | |
 | upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
-| **all** | | **14** | **15** | **7** | **8** | **44** | **12** |
+| **all** | | **15** | **15** | **7** | **8** | **45** | **12** |
 
 ## Where to start
 
@@ -25,7 +25,8 @@ settles, and its upstream contributions.
   its bytes in `Debug`) with its next alpha; FEAT-5 (patch codes the driver reports) with the Windows backends;
   UP-7 to UP-11, defects slice 1 found in SANE's own `test` backend, `scanimage` and several backends'
   `sane_set_io_mode`, wait on review. TEST-3 (TWAIN's sample source) was done by slice 7
-  (`archive/backlog-done.md`). From slice 2: FEAT-12 (stored ids refused before `sane_open`), TEST-10 (the
+  (`archive/backlog-done.md`); from slice 8, TEST-11 (`twain-dsm`'s decoders fuzzed), for a slice with nightly
+  at hand. From slice 2: FEAT-12 (stored ids refused before `sane_open`), TEST-10 (the
   stored-id worker's configuration, tested without the system's) and Q-4 (a device's strings as bytes) in slice
   5; TEST-9 (what only the fi-6130 shows of names and cancels) in slice 6's hand check; UP-12 and UP-13
   (`scanimage`, sane-dll(5)) wait on review.
