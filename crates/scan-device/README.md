@@ -9,7 +9,7 @@ window where it has one. A batch sends its events (the settings applied, each sh
 warming up) on a bounded channel, so a backend waits while nobody takes its pages, and is cancelled through
 an [`in-progress`](https://crates.io/crates/in-progress) tracker between sheets, so the sheet in flight is
 finished, front and back. Pages come raw, in one stated layout that `RawImage::new` checks (its length, sizes
-in checked arithmetic against what the platform holds, the padding bits of black and white rows), or encoded
+in checked arithmetic against what one buffer can hold, the padding bits of black and white rows), or encoded
 in a form the app asked for. The types are plain data, so they can cross a pipe to a process that runs the
 drivers.
 

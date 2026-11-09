@@ -6,11 +6,14 @@ use crate::{Format, LayoutError, RawImage, Side};
 /// the same bytes on every run and every system, different for each sheet and side, in the raw
 /// layout (in [`Format::Bw1`], each row's bits past its last pixel 0).
 ///
-/// Its first row is bytes made from the sheet's number and the side, and each row after it is the
-/// row before turned left by one pixel (a byte, in `Bw1`), so drawing a page costs little more
-/// than copying its bytes. It's public so that a page carried elsewhere can be checked byte for
-/// byte against the one drawn here. The page's bytes are allocated at once: refused as
-/// [`RawImage::data_len`] refuses its size, it's otherwise drawn whatever that size.
+/// A row's worth of bytes is made from the sheet's number and the side, and each row is those
+/// bytes turned left by as many pixels as the row's number, counted from 0 at the top (bytes, in
+/// `Bw1`), and then, in `Bw1`, its bits past the last pixel cleared; so drawing a page costs little
+/// more than copying its bytes. Where a `Bw1` row has such bits, a row isn't the one before it
+/// turned: the bits cleared in one come back in the next. It's public so that a page carried
+/// elsewhere can be checked byte for byte against the one drawn here. The page's bytes are
+/// allocated at once: refused as [`RawImage::data_len`] refuses its size, it's otherwise drawn
+/// whatever that size.
 ///
 /// ```
 /// use scan_device::fake::pattern;
@@ -55,7 +58,7 @@ pub fn pattern(
 }
 
 /// `stride` bytes made from `sheet` and `side`, by Marsaglia's xorshift (its shifts 13, 7 and
-/// 17), each step's state giving eight bytes.
+/// 17), each step's state giving eight bytes, the last step's as many as are left.
 fn first_row(stride: usize, sheet: u32, side: Side) -> Vec<u8> {
     let side = match side {
         Side::Front => 0,
@@ -63,14 +66,16 @@ fn first_row(stride: usize, sheet: u32, side: Side) -> Vec<u8> {
     };
     // Never 0, which the steps would keep: the constant's high bits are set.
     let mut state = ((u64::from(sheet) << 1) | side) ^ 0x9e37_79b9_7f4a_7c15;
-    let mut row = Vec::with_capacity(stride + 8);
+    // No more than `stride`, which `RawImage::data_len` found a buffer can hold.
+    let mut row = Vec::with_capacity(stride);
     while row.len() < stride {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
-        row.extend_from_slice(&state.to_le_bytes());
+        let bytes = state.to_le_bytes();
+        let left = bytes.len().min(stride - row.len());
+        row.extend_from_slice(&bytes[..left]);
     }
-    row.truncate(stride);
     row
 }
 
@@ -80,6 +85,7 @@ mod tests {
 
     #[test]
     fn each_row_is_the_one_before_turned_left_a_pixel() {
+        // So at a width with no padding bits.
         for (format, pixel) in [
             (Format::Bw1, 1),
             (Format::Gray8, 1),
@@ -94,6 +100,68 @@ mod tests {
                 let mut turned = pair[0].to_vec();
                 turned.rotate_left(pixel);
                 assert_eq!(pair[1], turned, "{format:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_row_is_the_first_s_bytes_turned_by_its_number_then_its_padding_cleared() {
+        // As the docs say, at widths with padding bits in `Bw1` too, where a row isn't the one
+        // before it turned.
+        for (format, width, pixel, padding) in [
+            (Format::Bw1, 13, 1, 0b0000_0111),
+            (Format::Bw1, 9, 1, 0b0111_1111),
+            (Format::Bw1, 40, 1, 0),
+            (Format::Gray8, 13, 1, 0),
+            (Format::Rgb8, 5, 3, 0),
+        ] {
+            let page = pattern(format, width, 7, 2, Side::Front).unwrap();
+            let stride = page.stride();
+            let bytes = first_row(stride, 2, Side::Front);
+            for (number, row) in page.data().chunks_exact(stride).enumerate() {
+                let mut expected = bytes.clone();
+                expected.rotate_left(number * pixel % stride);
+                if let Some(last) = expected.last_mut() {
+                    *last &= !padding;
+                }
+                assert_eq!(row, expected, "{format:?} at {width}, row {number}");
+            }
+        }
+        // At 13 pixels, the bits cleared in the first row come back in the next.
+        let page = pattern(Format::Bw1, 13, 2, 2, Side::Front).unwrap();
+        let mut turned = page.data()[..2].to_vec();
+        turned.rotate_left(1);
+        assert_ne!(page.data()[2..], turned[..]);
+    }
+
+    #[test]
+    fn a_page_is_refused_as_its_size_is() {
+        // Past what a buffer can hold on any system: about 1.8e19 bytes.
+        let too_large = LayoutError::TooLarge {
+            width: u32::MAX,
+            height: u32::MAX,
+        };
+        assert_eq!(
+            pattern(Format::Gray8, u32::MAX, u32::MAX, 1, Side::Front),
+            Err(too_large)
+        );
+        assert_eq!(
+            pattern(Format::Rgb8, 0, 5, 1, Side::Front),
+            Err(LayoutError::Empty)
+        );
+        // Past a 32-bit system's `isize::MAX` and within its `usize`: refused there, where
+        // allocating it would panic. Here, drawn, so not tried on a 64-bit host.
+        if usize::BITS == 32 {
+            for (format, width, height) in [
+                (Format::Gray8, 65_535, 65_537),
+                (Format::Gray8, 65_536, 32_768),
+                (Format::Rgb8, 40_000, 20_000),
+            ] {
+                assert_eq!(
+                    pattern(format, width, height, 1, Side::Front),
+                    Err(LayoutError::TooLarge { width, height }),
+                    "{format:?} {width} by {height}"
+                );
             }
         }
     }

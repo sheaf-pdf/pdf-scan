@@ -42,7 +42,8 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
       `Range`'s `min` not past its `max`) stay the decoder's to check (slice 4), and the fake keeps them in
       what it makes.
     - `RawImage::new(format, width, height, data)` refuses, in order: a width or height of 0 (`Empty`); a row's
-      bytes or the image's past `u64`, in checked arithmetic, or past the platform's `usize` (`TooLarge`); a
+      bytes or the image's past `u64`, in checked arithmetic, or past what one buffer can hold on the platform,
+      `isize::MAX`, the most any allocation can be (`TooLarge`; `usize::MAX` until the code review); a
       `data` of any other length (`Length`); a `Bw1` row whose bits past its last pixel aren't 0 (`Padding`,
       the first such row named). `RawImage::data_len(format, width, height)` gives the bytes such an image
       holds, refused as `new` refuses it, so a reader caps a page before its bytes and allocates once. The
@@ -165,15 +166,17 @@ checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish =
 - **MSRV:** 1.89, the family's floor (`decisions.md`): the highest `rust-version` in its own graph (`cargo tree
   -p scan-device`, normal, build and dev, on every target; 25 packages) is 1.85, `in-progress` 0.1.0's and
   `getrandom` 0.4.3's (through `rusty-fork`'s `tempfile`). CI tests it on 1.89 (`scan-device-msrv`).
-- **Tests** (S0 slice 3; 112): units for the layout (each format's, `Empty`, `Length` short and long, the
-  padding bits, `TooLarge` past `u64` and past a 32-bit `usize` through the private limit, `data_len` agreeing
-  with `new`, `Debug` without a byte), the fake's clamping, page sizes and `pattern`'s bytes pinned; in
+- **Tests** (S0 slice 3; 115): units for the layout (each format's, `Empty`, `Length` short and long, the
+  padding bits, `TooLarge` past `u64`, past a 64-bit `isize` and past a 32-bit one through the private limit,
+  `data_len` agreeing with `new`, `Debug` without a byte), the fake's clamping, page sizes and `pattern`'s
+  bytes pinned, its rows as its docs say and its sizes refused as `data_len` refuses them; in
   `/crates/scan-device/tests/`, from outside the crate, `model.rs` (each constructor, what's `Send`, `Opened`,
   each error's message, a push-shaped device that moves a child progress and a `SyncSender` clone into a thread
   of its own and sees a cancel from a third) and `fake_devices.rs`, `fake_batches.rs` and `fake_faults.rs`
   (every rule above and every script of proposal 22, the crash and the exit in child processes through
-  `rusty-fork`); doctests, among them the crate's example through the fake. The layout's units ran once on a
-  real 32-bit `usize`, under WASI, before `rusty-fork` joined; running them there again is TEST-12.
+  `rusty-fork`); doctests, among them the crate's example through the fake. The layout's units ran on a real
+  32-bit `usize`, under WASI: in step 1, and again in the code review's fixes on a copy of the crate without
+  `rusty-fork`, whose `wait-timeout` doesn't build there; running them there in CI is TEST-12.
 - **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
   frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
   sheaf takes it no sooner (`sheaf/swaps.md`).

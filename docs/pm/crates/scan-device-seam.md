@@ -300,8 +300,9 @@ SANE row above).
 **`RawImage::new(format, width, height, data)` is the one way to make one** (its fields are private): `width` and
 `height` at least 1, `data` exactly `height` rows of the format's packed bytes, and a `Bw1` row's bits past its
 last pixel 0, so every `RawImage` holds the layout wherever it's made, the worker's client included. The length is
-worked out in `u64` with checked arithmetic, and a size past what `u64` or the platform's `usize` holds is refused,
-never wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize` (65,536 by 65,536 in `Rgb16` is 6 × 2^32
+worked out in `u64` with checked arithmetic, and a size past what `u64` counts or one buffer can hold on the
+platform (`isize::MAX`, the most any allocation can be; S0 slice 3's code review, where the platform's `usize`
+had been) is refused, never wrapped: in a 32-bit worker `u32` × `u32` × 6 overflows `usize` (65,536 by 65,536 in `Rgb16` is 6 × 2^32
 bytes, 0 once wrapped, which an empty buffer would match), and at `u32::MAX` by `u32::MAX` a format of two bytes a
 pixel or more overflows `u64` too (the spike's `image` module works its sizes out in `u64` for the same reason).
 Probe M1 tests each, the 32-bit cases on a 32-bit target too.

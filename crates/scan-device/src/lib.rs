@@ -71,9 +71,10 @@
 //! - 16-bit samples little-endian, whatever the host's byte order.
 //!
 //! [`RawImage::new`] checks what a buffer can get wrong: its length, and in `Bw1` the padding
-//! bits. The sizes are worked out in checked arithmetic against what the platform's `usize` holds,
-//! so a 32-bit process refuses what it can't hold rather than wrapping. [`RawImage::data_len`]
-//! gives the length before any byte is read, so a reader caps a page's size and allocates once.
+//! bits. The sizes are worked out in checked arithmetic against what one buffer can hold on the
+//! platform (`isize::MAX` bytes, the most any allocation can be), so a 32-bit process refuses what
+//! it can't hold rather than wrapping or failing to allocate. [`RawImage::data_len`] gives the
+//! length before any byte is read, so a reader caps a page's size and allocates once.
 //!
 //! # Features
 //!

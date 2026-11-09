@@ -54,7 +54,8 @@ pub enum LayoutError {
     /// A width or a height of 0.
     #[error("an image has at least one row and one column")]
     Empty,
-    /// More bytes than `u64` counts, or than this platform's `usize` holds.
+    /// More bytes than `u64` counts, or than one buffer can hold on this platform: `isize::MAX`,
+    /// the most any allocation can be, 2^31 − 1 bytes on a 32-bit system.
     #[error("{width} by {height} is more than this system can hold")]
     TooLarge {
         /// The width asked for, in pixels.
@@ -78,8 +79,9 @@ pub enum LayoutError {
     },
 }
 
-/// What this platform's `usize` holds, the most bytes an image's buffer can have here.
-const PLATFORM_LIMIT: u64 = usize::MAX as u64;
+/// The most bytes an image's buffer can have here: no allocation can pass `isize::MAX` bytes, so
+/// a `Vec` of more can't be made, though `usize` counts twice as far.
+const PLATFORM_LIMIT: u64 = isize::MAX as u64;
 
 /// A row's bytes in `format` at `width`: bits a pixel, rounded up to whole bytes.
 fn row_bytes(format: Format, width: u32) -> Option<u64> {
@@ -92,7 +94,7 @@ fn row_bytes(format: Format, width: u32) -> Option<u64> {
 /// A row's bytes and the image's, in `format` at `width` by `height`: [`LayoutError::Empty`]
 /// where either is 0, [`LayoutError::TooLarge`] where the image's bytes pass `u64` or `limit`.
 ///
-/// `limit` is the platform's ([`PLATFORM_LIMIT`]) but in tests, which pass a 32-bit `usize`'s on
+/// `limit` is the platform's ([`PLATFORM_LIMIT`]) but in tests, which pass a 32-bit system's on
 /// any host.
 fn layout(format: Format, width: u32, height: u32, limit: u64) -> Result<(u64, u64), LayoutError> {
     if width == 0 || height == 0 {
@@ -112,9 +114,10 @@ impl RawImage {
     /// docs say ("The raw layout").
     ///
     /// Refused, in this order: a width or a height of 0 ([`LayoutError::Empty`]); more bytes than
-    /// `u64` counts or than this platform's `usize` holds ([`LayoutError::TooLarge`]); `data` of
-    /// any other length than the format and the size make ([`LayoutError::Length`]); and in
-    /// [`Format::Bw1`], a row with a bit set past its last pixel ([`LayoutError::Padding`]).
+    /// `u64` counts or than one buffer can hold on this platform, `isize::MAX`
+    /// ([`LayoutError::TooLarge`]); `data` of any other length than the format and the size make
+    /// ([`LayoutError::Length`]); and in [`Format::Bw1`], a row with a bit set past its last pixel
+    /// ([`LayoutError::Padding`]).
     ///
     /// ```
     /// use scan_device::{Format, LayoutError, RawImage};
@@ -167,7 +170,9 @@ impl RawImage {
 
     /// The bytes a `RawImage` of `format`, `width` by `height` pixels holds, refused as
     /// [`RawImage::new`] refuses the size ([`LayoutError::Empty`], [`LayoutError::TooLarge`]):
-    /// for a reader to cap a page's size before it reads its bytes, and allocate once.
+    /// for a reader to cap a page's size before it reads its bytes, and allocate once. A length it
+    /// gives is one a `Vec` can be made with; whether the memory is there is the reader's cap to
+    /// say.
     ///
     /// ```
     /// use scan_device::{Format, RawImage};
@@ -240,8 +245,22 @@ mod tests {
         Format::Rgb16,
     ];
 
-    /// A 32-bit `usize`'s limit, passed to `layout` on any host.
-    const LIMIT_32: u64 = u32::MAX as u64;
+    /// A 32-bit system's limit, its `isize::MAX`, passed to `layout` on any host.
+    const LIMIT_32: u64 = i32::MAX as u64;
+
+    /// A 64-bit system's limit, its `isize::MAX`.
+    const LIMIT_64: u64 = i64::MAX as u64;
+
+    #[test]
+    fn the_platform_s_limit_is_what_a_buffer_can_hold() {
+        // No allocation passes `isize::MAX` bytes, so neither does an image's.
+        let limit = if usize::BITS == 64 {
+            LIMIT_64
+        } else {
+            LIMIT_32
+        };
+        assert_eq!(PLATFORM_LIMIT, limit);
+    }
 
     #[test]
     fn each_format_takes_its_whole_layout_and_no_other_length() {
@@ -369,22 +388,38 @@ mod tests {
             layout(Format::Bw1, u32::MAX, u32::MAX, u64::MAX),
             Ok((1 << 29, (1 << 29) * side))
         );
-        for format in [Format::Bw1, Format::Gray8] {
-            let refused = RawImage::new(format, u32::MAX, u32::MAX, Vec::new());
-            if usize::BITS == 64 {
-                assert!(
-                    matches!(refused, Err(LayoutError::Length { got: 0, .. })),
-                    "{refused:?}"
-                );
-            } else {
-                assert_eq!(
-                    refused,
-                    Err(LayoutError::TooLarge {
-                        width: u32::MAX,
-                        height: u32::MAX
-                    })
-                );
-            }
+        // Gray8's, about 1.8e19 bytes, is past what a 64-bit system's buffer holds, its
+        // `isize::MAX`, though not past its `usize`: refused everywhere.
+        let too_large = LayoutError::TooLarge {
+            width: u32::MAX,
+            height: u32::MAX,
+        };
+        assert_eq!(
+            layout(Format::Gray8, u32::MAX, u32::MAX, LIMIT_64),
+            Err(too_large.clone())
+        );
+        assert_eq!(
+            RawImage::data_len(Format::Gray8, u32::MAX, u32::MAX),
+            Err(too_large.clone())
+        );
+        assert_eq!(
+            RawImage::new(Format::Gray8, u32::MAX, u32::MAX, Vec::new()),
+            Err(too_large.clone())
+        );
+        // Bw1's, about 2.3e18 bytes, fits a 64-bit system's buffer, so the length refuses it
+        // there, and the limit on 32 bits.
+        assert_eq!(
+            layout(Format::Bw1, u32::MAX, u32::MAX, LIMIT_64),
+            Ok((1 << 29, (1 << 29) * side))
+        );
+        let refused = RawImage::new(Format::Bw1, u32::MAX, u32::MAX, Vec::new());
+        if usize::BITS == 64 {
+            assert!(
+                matches!(refused, Err(LayoutError::Length { got: 0, .. })),
+                "{refused:?}"
+            );
+        } else {
+            assert_eq!(refused, Err(too_large));
         }
     }
 
@@ -417,18 +452,34 @@ mod tests {
                 })
             );
         }
-        // The limit itself is held, and a byte past it refused.
+        // The limit itself is held, and a byte past it refused: 2^31 - 1 bytes, a prime, is one
+        // row that long in Gray8, and 2^31 bytes 65,536 by 32,768.
         assert_eq!(
-            layout(Format::Gray8, 65_535, 65_537, LIMIT_32),
-            Ok((65_535, LIMIT_32))
+            layout(Format::Gray8, i32::MAX as u32, 1, LIMIT_32),
+            Ok((LIMIT_32, LIMIT_32))
         );
-        assert_eq!(
-            layout(Format::Gray8, 65_536, 65_536, LIMIT_32),
-            Err(LayoutError::TooLarge {
-                width: 65_536,
-                height: 65_536
-            })
-        );
+        // Past a 32-bit `isize`, so refused there, though a 32-bit `usize` counts them: no
+        // buffer could be made to read them into.
+        for (format, width, height) in [
+            (Format::Gray8, 65_536, 32_768),
+            (Format::Gray8, 65_535, 65_537),
+            (Format::Rgb8, 40_000, 20_000),
+            (Format::Gray8, 65_536, 65_536),
+        ] {
+            let too_large = LayoutError::TooLarge { width, height };
+            assert_eq!(
+                layout(format, width, height, LIMIT_32),
+                Err(too_large.clone()),
+                "{format:?} {width} by {height}"
+            );
+            if usize::BITS == 32 {
+                assert_eq!(
+                    RawImage::data_len(format, width, height),
+                    Err(too_large),
+                    "{format:?} {width} by {height}"
+                );
+            }
+        }
         // And at the largest sizes, every format past u64 or past the 32-bit limit.
         for format in FORMATS {
             assert_eq!(
