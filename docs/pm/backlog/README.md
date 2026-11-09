@@ -13,17 +13,20 @@ settles, and its upstream contributions.
 | bug (BUG) | `bugs.md` | | 5 | 1 | 1 | 7 | |
 | feature (FEAT) | `features.md` | 2 | 2 | 2 | 7 | 13 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 5 | 2 | 1 | 1 | 9 | |
-| question (Q) | `questions.md` | 1 | 1 | 2 | | 4 | |
-| upstream (UP) | `upstream.md` | 7 | 4 | 1 | 1 | 13 | 12 |
-| **all** | | **15** | **15** | **7** | **10** | **47** | **12** |
+| test (TEST) | `tests.md` | 6 | 2 | 1 | 1 | 10 | |
+| question (Q) | `questions.md` | 2 | 1 | 2 | | 5 | 1 |
+| upstream (UP) | `upstream.md` | 8 | 4 | 1 | 1 | 14 | 13 |
+| **all** | | **18** | **15** | **7** | **10** | **50** | **14** |
 
 ## Where to start
 
 - **S0:** TEST-7 (Homebrew's SANE on macOS, and since slice 1a the fake's tests there through
   `DYLD_LIBRARY_PATH`) when a slice next touches `sane-dl`'s CI (TEST-2 and TEST-8, slice 1's, closed by CI's
-  run of its pull request: `archive/backlog-done.md`); TEST-12 (`twain-dsm`'s public API through the gate, on
-  Windows) when a slice next touches `twain-dsm`'s CI; FEAT-5 (patch codes the driver reports) with the Windows
+  run of its pull request: `archive/backlog-done.md`); TEST-15 (slice 1a's code on CI's three systems), closed
+  by CI's run of its pull request; Q-7 (whether `Sane::load` refuses an empty or relative entry of the loader's
+  search path) and UP-14 (SANE's `dll` and the library path in a set-id process), slice 1a's code review's,
+  wait on review; TEST-14 (`twain-dsm`'s public API through the gate, on Windows; TEST-12 on slice 1a's
+  branch) when a slice next touches `twain-dsm`'s CI; FEAT-5 (patch codes the driver reports) with the Windows
   backends;
   UP-7 to UP-11, defects slice 1 found in SANE's own `test` backend, `scanimage` and several backends'
   `sane_set_io_mode`, wait on review. TEST-3 (TWAIN's sample source) was done by slice 7

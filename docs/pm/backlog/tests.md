@@ -1,6 +1,7 @@
 # Tests: checks still to build, spikes and measurements
 
-IDs TEST-1 to TEST-12; the next new one is **TEST-13**. Format and rules: `README.md`.
+IDs TEST-1 to TEST-15 (TEST-12 and TEST-13 are S0 slice 3's, on `master`); the next new one is **TEST-16**.
+Format and rules: `README.md`.
 
 From the prior-art survey's "What is still unverified" (`research/prior-art/README.md`,
 2026-11-08): what settles each is an experiment, not more reading.
@@ -24,7 +25,9 @@ From the prior-art survey's "What is still unverified" (`research/prior-art/READ
 
 - **TEST-11** · twain-dsm · S0 · open — **twain-dsm's decoders fuzzed.** A `cargo-fuzz` target (nightly) for each pure decoder a driver's bytes reach: capability containers (`Container::decode`, every container and item type), extended image info answers (`ext_info::parse` and `decode`, inline and from a block), the PE reader; seeded with what the sample source sends. Slice 8 has a fixed-seed random-input test of each in the unit tests (`plan.md`'s rule that decoders are fuzzed), run everywhere, i686 included; this is the coverage-guided pass, for a slice with nightly at hand (the decoders `pub(crate)` until then, so the target reaches them through a `doc(hidden)` entry or lives in the crate). *(S0 slice 8, its plan's review, finding 23)*
 
-- **TEST-12** · twain-dsm · S0 · open — **`twain-dsm`'s public API through the gate, on Windows.** `just public-api` (S0 slice 1a) reads each listed crate's public items from rustdoc's JSON on a pinned nightly and fails on an `unsafe` function, method or trait, an unsafe function pointer, a raw pointer in a public signature, or another crate's item re-exported. Its list holds `sane-dl` alone, run on Linux: `twain-dsm`'s items are Windows's, which a Linux run can't see, and slice 8 read them by hand. Add `twain-dsm` to the recipe's list, with a floor for its own items, and run the recipe in a CI job on `windows-latest` on the same pinned nightly; its public `Dib`'s `unsafe impl Send` and `Sync` are listed, not failed (the crate's promise, not its caller's). For the slice that next touches `twain-dsm`'s CI. *(S0 slice 1a, the gate)*
+- **TEST-14** · twain-dsm · S0 · open — **`twain-dsm`'s public API through the gate, on Windows.** `just public-api` (S0 slice 1a) reads each listed crate's public items from rustdoc's JSON on a pinned nightly and fails on an `unsafe` function, method or trait, an unsafe function pointer, a raw pointer in a public signature, or another crate's item re-exported. Its list holds `sane-dl` alone, run on Linux: `twain-dsm`'s items are Windows's, which a Linux run can't see, and slice 8 read them by hand. Add `twain-dsm` to the recipe's list, with a floor for its own items, and run the recipe in a CI job on `windows-latest` on the same pinned nightly; its public `Dib`'s `unsafe impl Send` and `Sync` are listed, not failed (the crate's promise, not its caller's). For the slice that next touches `twain-dsm`'s CI. *(S0 slice 1a, the gate; TEST-12 on its branch, renumbered when S0 slice 3 merged first with its own)*
+
+- **TEST-15** · sane-dl, fake-libsane · S0 · open — **S0 slice 1a's code on CI's three systems.** Built and checked on Linux, with `clippy` and `doc` for `x86_64-pc-windows-gnu`, `x86_64-apple-darwin` and `x86_64-unknown-freebsd`; what only CI shows: on Windows, the 98 tests that load the fake ignored with their reason, none failing, and `Sane::load()` `NoDefault`; on macOS, the fake's tests through `DYLD_LIBRARY_PATH` (TEST-7's run); on Ubuntu, the process slot's tests (its `prlimit`, `/proc`, abstract namespace and AppArmor), `a_load_waits_out_a_child_spawned_meanwhile` among them, on a runner slower than this machine; the `public-api` job on CI's pinned nightly, with `jq`; the MSRV job's real-libsane tests skipping; the package job. Close it once CI's run of the slice's pull request is green on every job. *(S0 slice 1a, code review)*
 
 ## Later
 

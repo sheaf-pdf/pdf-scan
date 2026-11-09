@@ -151,4 +151,6 @@ Rulings this plan builds on, with where each was made: sheaf's and pdf-lint's fi
   try to define safe apis where possible". `sane-dl` follows it (S0 slice 1a, `slices/s0-1a-sane-dl-safe-api.md`):
   `Sane::load_from` removed, the library the system loader's choice alone; on Linux a slot for the whole
   process keeping SANE to one per process across copies of the crate; no public item `unsafe`, held by a gate
-  over its public API (`just public-api`).
+  over its public API (`just public-api`). The one rule left to a program is the environment's, said in
+  `Sane::load`'s docs and named for review (the slice's decision 33): its loader's search path absolute, and
+  never changed inside a process using SANE, whose `dll` reads it as it loads each backend.

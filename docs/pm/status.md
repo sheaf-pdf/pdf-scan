@@ -10,7 +10,9 @@ fixed. **S0 slice 7, the TWAIN spike,** ran on the Windows machine and is merged
 repository at github.com/sheaf-pdf/pdf-scan (public; `master`). **S0 slice 2, the seam note revised, is done on
 `s0-2-seam-note`,** stacked on slice 1's branch, waiting on review, the push and its pull request; S0 slice 3
 next, once that's open. **S0 slice 8, `twain-dsm`, is done on its branch, `s0-8-twain-dsm`,** on the Windows
-machine, code-reviewed and fixed, in pull request #4, rebased onto `master` after #2 and #3.
+machine, code-reviewed and fixed, in pull request #4, rebased onto `master` after #2 and #3. **S0 slice 1a,
+`sane-dl`'s public API made safe, is done on `s0-1a-sane-dl-safe-api`,** code-reviewed and fixed, waiting on
+review, the push and its pull request (below).
 
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
@@ -69,19 +71,17 @@ machine, code-reviewed and fixed, in pull request #4, rebased onto `master` afte
   raw layout fixed, and the model written down for slice 3, then revised by its code review (25 findings
   fixed, BUG-7 deferred). Waits on the maintainer's review, the push and its pull request, stacked on slice
   1's; CI's run on the three systems then shows nothing of its own (docs only).
-- **Built on its branch: S0 slice 1a, `sane-dl`'s public API made safe** (`slices/s0-1a-sane-dl-safe-api.md`;
-  `s0-1a-sane-dl-safe-api`, from `3f33be5`), through the `scan-slice` workflow (local), beside slice 3: four
-  steps, each checked. No public item of `sane-dl` is `unsafe` (`decisions.md`'s ruling, confirmed
-  2026-11-09): `Sane::load_from` is gone, the library the system loader's choice alone, another SANE loaded
-  through the loader's own search path as a process starts; the tests load `fake-libsane` through
-  `Sane::load()` (ignored on Windows, saying why); `ffi`'s function types inside the crate; on Linux one SANE
-  per process across copies of the crate built apart; `Image`'s `Debug` by hand (BUG-7 done); `just
-  public-api`, a gate over every public item. New: BUG-8, FEAT-13, TEST-12. Waits on its code review (the
-  milestone's soundness review) and fixes, then review of its "Decisions taken alone, for review" and "For
-  review (security)", the push, its pull request and CI's run (macOS's fake tests above all: TEST-7).
+- **Done on its branch: S0 slice 1a, `sane-dl`'s public API made safe** (`slices/s0-1a-sane-dl-safe-api.md`;
+  `s0-1a-sane-dl-safe-api`, from `3f33be5`, the code to `1a94bee`), through the `scan-slice` workflow (local):
+  four steps, each checked, and the code review's 22 findings all fixed. No public item of `sane-dl` is
+  `unsafe`: `Sane::load_from` gone, the library the system loader's choice; on Linux one SANE per process across
+  copies of the crate, a spawned child's moment waited out; `just public-api` over every public item; BUG-7
+  done. `Sane::load`'s safety rests on two rules of the environment, now in its docs (decision 33). **Waits
+  on:** review (40 decisions, 11 security items; Q-7, UP-14), then the push, its pull request against `master`
+  and CI's run on Ubuntu, Windows and macOS (TEST-15, TEST-7). Its TEST-12 is TEST-14 (slice 3 merged first).
 - **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
   (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 2 (41 and 6); S0 slice
   8 (11 and 3). Also: `asks.md`, ask 5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the
   maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 3, `scan-device` provisional, once slice 2's pull request is open; then slice 4 on
-  Linux. On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.
+- **Next:** S0 slice 4, `scan-worker`, on Linux, on slice 3's model and fake (slice 3 merged on `master`, pull
+  request #6). On Windows, slice 9 (the `twain` backend), once slices 3 and 4 are done.

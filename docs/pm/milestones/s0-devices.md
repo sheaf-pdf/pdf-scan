@@ -54,17 +54,22 @@ and `SAFETY:` comment, the private loader's contract and its call sites, each pu
 the public API (no `unsafe` function, method or trait, and no raw or unsafe function pointer in a public
 signature), made to fail on violations made for the check; the publish dry run. Plan:
 `slices/s0-1a-sane-dl-safe-api.md`.
-**Built on the branch** (2026-11-09; `slices/s0-1a-sane-dl-safe-api.md`): branch `s0-1a-sane-dl-safe-api`, from
-`3f33be5`, four steps, each checked. No public item of `sane-dl` is `unsafe`: `Sane::load_from` is gone, the
-library the system loader's choice alone (shape 1 of the eight weighed), another SANE loaded through the
-loader's own search path; the tests load `fake-libsane` through `Sane::load()`, the fake's tests ignored on
-Windows, saying why; `ffi`'s function types inside the crate; on Linux a process-wide slot (an abstract socket
-named for the process) keeping SANE to one per process across copies of the crate built apart, a probe with two
-copies showing it; `Image`'s `Debug` by hand (BUG-7 done); `just public-api`, the gate over every public item,
-in `ci` and a CI job of its own. Waits on: the code review, whose soundness lens is this entry's soundness
-review, and its fixes; then review of the plan's "Decisions taken alone, for review" and "For review
-(security)", the push, its pull request and CI's run on the three systems (macOS's fake tests through
-`DYLD_LIBRARY_PATH` above all: TEST-7).
+**Done on the branch** (2026-11-09; `slices/s0-1a-sane-dl-safe-api.md`): branch `s0-1a-sane-dl-safe-api`, from
+`3f33be5`, the code to `1a94bee`: four steps, each checked, then the code review's 22 findings, all fixed. No
+public item of `sane-dl` is `unsafe`: `Sane::load_from` is gone, the library the system loader's choice alone
+(shape 1 of the eight weighed), another SANE loaded through the loader's own search path; the tests load
+`fake-libsane` through `Sane::load()`, the fake's tests ignored on Windows, saying why; `ffi`'s function types
+inside the crate; on Linux a process-wide slot (an abstract socket named for the process, its name published)
+keeping SANE to one per process across copies of the crate built apart, waiting out a spawned child's moment
+between fork and exec, a probe with two copies showing it; `Image`'s `Debug` by hand (BUG-7 done); `just
+public-api`, the gate over every public item, widened by the code review, in `ci` and a CI job of its own. The
+code review found what `Sane::load`'s safety rests on beyond the loader: the process's
+environment, kept to two rules its docs now give (the search path's entries absolute; the library path's
+variables never changed inside a process using SANE, whose `dll` reads them at each backend load). To review:
+the plan's "Decisions taken alone, for review" (40; decision 33, that environment rule, above all) and "For
+review (security)" (11), Q-7 and UP-14; then the push, its pull request and CI's run on the three systems
+(TEST-15; macOS's fake tests through `DYLD_LIBRARY_PATH`, TEST-7). Its TEST-12 is TEST-14, slice 3 having merged
+first.
 
 2. **The seam note revised** (`crates/scan-device-seam.md`, first written 2026-11-08 from the survey and M5
    proposals 4 to 10): what slice 1 showed of SANE folded in, its SANE unknowns answered (names that change

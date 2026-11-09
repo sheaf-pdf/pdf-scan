@@ -1,7 +1,9 @@
 # S0 slice 1a: sane-dl's public API made safe
 
-Status: running, on branch `s0-1a-sane-dl-safe-api`, from `master` at `3f33be5`, since 2026-11-09. Milestone:
-`milestones/s0-devices.md`, slice 1a (added there by step 1, after slice 1).
+Status: done on branch `s0-1a-sane-dl-safe-api` (from `master` at `3f33be5`; the code to `1a94bee`), 2026-11-09:
+four steps, each checked, and the code review's 22 findings fixed. Waits on review ("Decisions taken alone, for
+review", "For review (security)"), then the push, its pull request and CI's run on the three systems.
+Milestone: `milestones/s0-devices.md`, slice 1a (added there by step 1, after slice 1).
 
 Paths: `docs/pm/` files from `docs/pm/`, as everywhere here; the code's from the repository's root, written
 with a leading `/` (`/crates/sane-dl/`, `/justfile`); `scratch/` from the root, local and never tracked.
@@ -61,12 +63,13 @@ its docs, for a rule its caller must keep:
 |---|---|---|
 | `Sane::load_from(path)` | the library is one the process may run, its SANE functions of `sane.h`'s types (`unsafe fn`) | Removed: the loader chooses (below) |
 | `Sane::load()` | that a library found under SANE's name is SANE | Said, as a build-time link's argument (below); no caller's rule |
-| `Sane::load()` | one copy of the crate in the process | `links` within a build; on Linux a process-wide slot (step 3); on macOS and the BSDs the program's rule still, named (decision 9, BUG-8) |
+| `Sane::load()` | one copy of the crate in the process | `links` within a build; on Linux a process-wide slot (step 3); on every other system the program's rule still, named (decision 9, BUG-8) |
+| `Sane::load()` | the environment the library is found by (the code review) | Said, as two rules of the process's (decision 33): the search path's entries absolute; `LD_LIBRARY_PATH`, `SHLIB_PATH` and `LIBPATH` never changed inside a process using SANE |
 | `Sane`, `Handle`, `CancelToken` | calls never overlap; a handle on one thread at a time; no cancel on a closed handle | Types and locks, as built: `Handle` is `Send` and not `Sync`, the call token, the alive flag |
 | `Handle::select_fd()` | the descriptor is the backend's, valid until the next start, cancel or frame's end; never closed | Plain data: a `RawFd`, any use of which is the caller's own `unsafe`. A `BorrowedFd<'_>` tied to the handle would be unsound: a token's cancel on another thread may end the descriptor while it's borrowed (decision 8) |
 | `ConfigDir`, `CONFIG_DIR_VARIABLE` | give the value to the process spawned; run it from a trusted directory | No soundness at stake: in-process `set_var` is std's own `unsafe fn`; the directory is advice (security) |
 | `ffi`'s 14 function types, `SANE_Auth_Callback` | unsafe to call | `pub(crate)` (step 2): nothing public hands one out, and none stays in the public API |
-| `ffi`'s structs | raw pointers in their fields | Plain data, as `twain-dsm`'s: nothing public takes or returns one, and reading through a field is the reader's own `unsafe` |
+| `ffi`'s structs, and its union `SANE_Constraint` | raw pointers in their fields; a union's field read only in `unsafe` | Plain data, as `twain-dsm`'s: nothing public takes or returns one (the gate fails one that does, since the code review), and reading through a field, or a union's field, is the reader's own `unsafe` |
 | `Image` (and `Page`) | (`Debug` prints every byte: BUG-7) | `Debug` by hand (step 4) |
 
 ### Loading: the shapes weighed
@@ -78,7 +81,11 @@ dlopen(3): the calling object's `DT_RPATH` where it has no `DT_RUNPATH`, `LD_LIB
 the calling object's `DT_RUNPATH`, the loader's cache, the default directories); the soname is the name of SANE
 1's ABI, which the bindings are checked against (the header contract). On macOS it's the package managers'
 absolute paths, which dyld searches after `DYLD_LIBRARY_PATH` (as it was at launch) under the same leaf name
-(Apple's dlopen(3)). The program's code chooses nothing. Whoever starts the process chooses through those
+(Apple's dlopen(3)). The program's code chooses nothing, while the environment keeps the two rules the code
+review found this rests on (decision 33): every entry of the search path absolute, since glibc looks an empty
+or relative one up from the working directory as the library loads, which safe code can change; and
+`LD_LIBRARY_PATH`, `SHLIB_PATH` and `LIBPATH` never changed inside a process using SANE, since SANE's `dll`
+reads the first set with `getenv` each time it loads a backend. Whoever starts the process chooses through those
 variables every library it loads by name, as they do with `LD_PRELOAD`: outside what any Rust crate can promise,
 as for every library linked at build time, which safe Rust uses through every `-sys` crate; and the loader
 ignores them in a set-id process (glibc's secure-execution mode) and in a macOS process dyld restricts (set-id,
@@ -122,7 +129,10 @@ and against whether its safety argument is honest or a promise renamed.
    `load()` runs, not as the process starts, so code in the process can set it first (`set_var` is `unsafe` only
    from edition 2024, and its contract is about threads, not values), and it isn't ignored in a set-id process as
    the loader's own variables are, unless the crate re-implements that check (more `unsafe`, per system). Weaker
-   than (1), for nothing (1) lacks.
+   than (1), for nothing (1) lacks. (Re-weighed after the code review, which found SANE's `dll` reading
+   `LD_LIBRARY_PATH` with `getenv` as it loads each backend, so (1) too leaves the backends open to a value set
+   inside the process, a rule said rather than bound: decision 33. What's left against (4) is that it opens
+   libsane itself to the same, and to a set-id process's starter. Still rejected.)
 5. **A `ConfigDir`-like route through SANE's own `dll`:** the system's libsane loading the fake as a backend
    (`libsane-<name>.so.1`, its functions prefixed `sane_<name>_`). Rejected for the fake: `dll` would sit between
    `sane-dl` and the fake, which would then see `dll`'s calls rather than `sane-dl`'s (its rule checks and
@@ -168,15 +178,17 @@ order (the application's directory, the current one after the system's, `PATH`) 
   (`std::os::linux::net::SocketAddrExt::from_abstract_name`, `UnixDatagram::bind_addr`, both stable since 1.70,
   so within 1.89). It's bound before the library opens and held until after `sane_exit` (dropped with the
   instance's last reference, as the atomic is), and the kernel frees it when the process ends, however it ends.
-  std makes the socket close-on-exec, so a spawned program never holds it; a child forked without an exec holds
-  the parent's name until it exits or execs, and the parent's next load meanwhile is `AlreadyLoaded`, a refusal
+  std makes the socket close-on-exec, so a program the process runs holds it only from its fork until its exec
+  (a load waits that out, retrying for 100 ms: the code review, decision 34); a child forked without an exec holds
+  the parent's name until it exits or execs, and the parent's next load meanwhile is `SlotTaken`, a refusal
   (a probe here, `scratch/work/s0-1a/plan-review/abstract.rs`, built on 1.89: a second bind `AddrInUse`, a bind
   after the first's drop free). The name is fixed for good, a comment says so, so every version of the crate
   finds every other. Bound already: `LoadError::AlreadyLoaded`, its docs saying "by this or another copy of this
-  crate". The system refusing the
+  crate" (split by the code review: `AlreadyLoaded` this copy's own `Sane`, `SlotTaken` the name held elsewhere,
+  decision 35). The system refusing the
   socket for another reason: a new `LoadError` variant carrying the `io::Error` (named by the step; `LoadError` is
   `#[non_exhaustive]`), refused rather than loaded unguarded. No `unsafe`; a module of its own. Nothing to do on
-  Windows (`load()` is `NoDefault` before any slot), and on macOS and the BSDs the per-copy atomic and `links`
+  Windows (`load()` is `NoDefault` before any slot), and on every other system the per-copy atomic and `links`
   stay, the case of two copies built apart named (decision 9).
 - **`Image`'s `Debug`** (step 4) by hand: its format, depth, width, height, stride, frames, and its data's length
   (`data: <n> bytes`), never the bytes; a `#[derive(Debug)]` already gives `Image` an `impl Debug`, so the
@@ -268,7 +280,7 @@ pinned nightly:
   public `fn` returning `ffi::SANE_Handle` would pass unseen. Raw pointers in public struct fields are allowed
   (`ffi`'s plain data, as `twain-dsm`'s are). **An `unsafe impl`** (`Send`, `Sync`, or another crate's unsafe
   trait) is listed, not failed: it's the crate's own promise, never one its caller keeps, and `twain-dsm`'s
-  public `Dib` has two (`unsafe impl Send` and `Sync`), which TEST-12 would otherwise fail on.
+  public `Dib` has two (`unsafe impl Send` and `Sync`), which TEST-14 would otherwise fail on.
 - **It checks the JSON's shape first:** its `format_version` is the one the recipe was written against (61), every
   function item holds a boolean `header.is_unsafe`, and the crate's own items number more than a floor; else it
   fails saying rustdoc's JSON changed shape, so a moved pin, or a field renamed, fails the gate rather than
@@ -281,7 +293,7 @@ pinned nightly:
 - On the host's target only: the pinned nightly here has only `x86_64-unknown-linux-gnu`, and so does CI's job.
   Of `sane-dl`'s items only constants differ by system (`DEFAULT_LIBRARIES`), and `select_fd` is Unix's.
   `twain-dsm` isn't in its list: its items are Windows's, which a Linux run can't see, and slice 8 read them by
-  hand; its run on Windows is TEST-12 (new, below).
+  hand; its run on Windows is TEST-14 (new, below; TEST-12 until slice 3 merged first).
 - Not `cargo public-api`: a maintained tool over the same JSON, but one more thing to install on every CI run,
   for facts `jq` reads directly (decision 10).
 - CI's job goes after `sane-dl-package`, the workflow's last job today, away from where slice 3 adds its
@@ -416,7 +428,7 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
   hardened runtime every notarized app has, where dyld ignores `DYLD_LIBRARY_PATH`): a path fixed relative to
   the executable, chosen by the crate (`@executable_path/../Frameworks/libsane.1.dylib`), trusted as the program
   is. Only if such an app comes.
-- **TEST-12** · twain-dsm · S0: `just public-api` over `twain-dsm` on Windows, on the gate's pinned nightly, in a
+- **TEST-14** (TEST-12 until slice 3 merged first with its own) · twain-dsm · S0: `just public-api` over `twain-dsm` on Windows, on the gate's pinned nightly, in a
   CI job there, where its items compile (its public `Dib`'s `unsafe impl Send` and `Sync` listed, not failed);
   for the slice that next touches `twain-dsm`'s CI.
 
@@ -469,14 +481,17 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
 6. **`ffi` stays public, types and constants only; its function types and `SANE_Auth_Callback` are
    `pub(crate)`,** as `twain-dsm`'s are, and the header contract takes `ffi.rs` by `#[path]`. Making `ffi` private
    was weighed (less API to keep stable): kept public for SANE's raw names (slice 1's decision 20) and the family's
-   one practice.
+   one practice. Its structs and its union, `SANE_Constraint`, are plain data, whose pointers and union fields
+   only the reader's own `unsafe` reads; since the code review the gate fails a public function that takes or
+   gives one, and lists the union, marked (decision 39).
 7. **The fake is found as SANE by a copy under SANE's leaf name,** per test binary, written then renamed; its log
    checked after every load of it, so a fake test can't pass on the system's libsane.
 8. **`select_fd` keeps returning `RawFd`:** a `BorrowedFd` tied to the handle would be unsound, since a token's
    cancel on another thread may end the descriptor while it's borrowed; a `RawFd`'s every use is the caller's own
    `unsafe`.
 9. **The slot across copies on Linux only:** an abstract socket named for the process (pid namespace and pid),
-   std alone, freed by the kernel. On macOS and the BSDs the program's rule stays, said in the docs (BUG-8),
+   std alone, freed by the kernel. On every other system (written "macOS and the BSDs" until the code review)
+   the program's rule stays, said in the docs (BUG-8),
    since no exact shape was found there in std; on Linux it stays only across what the slot can't see, a change
    of the process's network namespace or of its view of `/proc` between two copies' loads (security item 7),
    said in `Sane`'s docs, the README and `sane_init`'s `SAFETY:` comment. Those two are the exceptions the slice
@@ -486,7 +501,7 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
     unpinned nightly, whose error codes rarely move), one justfile variable and CI's pin kept in step; its
     `format_version` and shape checked, so a moved pin or a renamed field fails it until the `jq` is read again;
     hidden items included; `jq`, not `cargo public-api`; a recipe and CI job of their own rather than in `gates`
-    (a second toolchain in the gates job would change its default); `sane-dl` alone in its list (TEST-12 for
+    (a second toolchain in the gates job would change its default); `sane-dl` alone in its list (TEST-14 for
     `twain-dsm`). Raw pointers allowed in public fields, not in public signatures, the crate's own aliases
     followed.
 11. **The version stays 0.1.0-alpha.1,** its unreleased changelog entry rewritten, with one line on what changed
@@ -561,11 +576,56 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
     `a_socket_the_system_refuses_refuses_the_load` leaves out its checks of the fake's log then; and "the limit
     doesn't take" is a skip, not an `assert!`, as decision 29 had it. Every other caller ignores the value: no
     other test has checks of its own after a child that can skip.
+33. **`Sane::load` stays safe, its argument's two rules of the environment said, not checked** (the code review;
+    the exception the ruling allows, named): every entry of the search path absolute, and `LD_LIBRARY_PATH`,
+    `SHLIB_PATH` and `LIBPATH` never changed inside a process using SANE (security items 10 and 11). Not
+    `unsafe`: a change after `load` reaches `open` and `devices` too, so an `unsafe load` would move no hazard
+    unless every call that can load a backend were `unsafe` as well; the rules are the process's environment's,
+    which every library that loads modules by its variables shares (the Vulkan loader under ash's linked entry
+    and wgpu's instance, both safe; glibc's own lookups under std's, open to relative entries alike); and from
+    edition 2024 `set_var` is `unsafe`. No refusal at load of an empty or relative entry, which Linux could read
+    from `/proc/self/environ`: it would deny SANE to a common misconfiguration whose hazard needs the program's
+    own change of directory, and couldn't cover the second rule; Q-7 asks it of the review. `SANE_CONFIG_DIR`
+    isn't a third rule: it says which of the backends found `dll` loads at a listing (an open loads the one its
+    device name names anyway), a choice among SANE's own.
+34. **A load waits up to 100 ms for the process's slot, trying every millisecond** (the code review), rather
+    than telling who holds it by reading `/proc/net/unix` against `/proc/self/fd`: a spawned child holds it only
+    from its fork until its exec, far less. Probes (`scratch/work/s0-1a/fix/`): with one and four threads
+    spawning `/bin/true`, 20,000 loads each, none refused (5,727 and 11,830 before); with sixteen, 2,000 loads,
+    none. A squatter, a forked child or another copy's live SANE now costs a refused load 100 ms.
+35. **`LoadError::SlotTaken`, new; `AlreadyLoaded` this copy's own live `Sane` alone** (the code review, while
+    `LoadError` is `#[non_exhaustive]` and unpublished): the process's slot held elsewhere has three causes (another
+    copy, a forked child, another process) that can't be told apart without `/proc`, so its message names all
+    three, and `AlreadyLoaded`'s "SANE is already loaded in this process" is now always true. The seam note's
+    list names both (`crates/scan-device-seam.md`: `Driver`, as before).
+36. **The slot's name is published** (the code review): its form in `Sane`'s docs, `SlotRefused`'s, the README
+    and the changelog, a promise across versions as decision 14 made it, with AppArmor's `@sane-dl/slot/**`.
+37. **Apple's systems other than macOS have no default library** (the code review): iOS, tvOS, watchOS,
+    visionOS and Mac Catalyst (`target_os = "ios"`, run on macOS's dyld), by `target_vendor = "apple"`, since
+    dyld would look for the bare `libsane.so.1` in the working directory there too, and SANE has no installed
+    path; `NoDefault`, as on Windows. Not built here (no Apple target installed); the cfg read from `rustc
+    --print cfg` for each.
+38. **The slot stays Linux's; the docs say "every system but Linux"** (the code review): Android has the same std
+    API (`std::os::android::net::SocketAddrExt`, stable since 1.70), but SANE isn't Android's and nothing here
+    could run it there; BUG-8 says so.
+39. **The gate, widened** (the code review): it now fails a `pub extern crate`, an own type alias of another
+    crate's (not core's, alloc's or std's) item, a `static mut` or an extern static, a `#[target_feature]`
+    function, and a raw pointer or `NonNull` reached through the public fields of the crate's own structs,
+    unions and enums a signature names (followed transitively, each item once), leaving out the functions of
+    impls derived for core's, alloc's and std's traits (`derive(PartialEq)` names its type); it lists a union,
+    marked, and marks and counts the derived `unsafe impl TrivialClone`; it removes the last list before a run,
+    and prints the blanket impls it counts. A union isn't failed: plain data, as raw-pointer fields are
+    (decision 6). Its one limit, said in its header: a method's `self` isn't followed, since derived impls name
+    `Self`.
+40. **This slice's TEST-12 is TEST-14** (bookkeeping, as decision 18 foresaw): slice 3 merged first (`master` at
+    `5a4bff2`, pull request #6) with its own TEST-12 and TEST-13, and Q-5 and Q-6; this slice's new items take
+    the next IDs past both branches' (TEST-15, Q-7, UP-14). Crate code and docs cite none.
 
 ## For review (security)
 
 1. **Which library loads** (supersedes slice 1's items 1 and 9): only what the loader finds under SANE's name (on
-   macOS at the package managers' paths), in the environment the process started with; no code chooses it.
+   macOS at the package managers' paths), in the environment the process started with; no code chooses it, while
+   the environment keeps the two rules of item 10 (the code review).
    Whoever sets that environment (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`) chooses every library the process
    loads by name, as with `LD_PRELOAD`; the loader ignores those variables in a set-id process and in a macOS
    process dyld restricts (the hardened runtime). Run paths are the builder's. The docs advise a variable naming
@@ -575,18 +635,20 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
    `sane.h`'s types, as a build-time link would. The fake is SANE in that sense: its exports are asserted at
    compile time to have the bindings' types, which the header contract checks against `sane.h`.
 3. **Two copies of the crate in one process** (supersedes slice 1's item 10): cargo refuses them within a build
-   (`links`); on Linux the process-wide slot refuses a second copy built apart; on macOS and the BSDs that's the
-   program's rule (BUG-8).
+   (`links`); on Linux the process-wide slot refuses a second copy built apart; on every other system that's the
+   program's rule (BUG-8), as is another user of libsane in the process, which the slot never sees (the code
+   review).
 4. **The slot's name can be taken first** by any local user in the same network namespace, who can work out a
-   process's pid and pid namespace: the process then gets `AlreadyLoaded`, a denial of SANE, never two copies
-   in. Two processes with one pid in pid namespaces sharing a network namespace would collide only if the
-   namespace's inode can't be read, the same refusal. A child forked without an exec holds its parent's name
-   until it exits or execs (the socket is close-on-exec), so the parent's next load meanwhile is refused, the
-   same refusal.
+   process's pid and pid namespace: the process then gets `SlotTaken` after its 100 ms wait, a denial of SANE,
+   never two copies in. Two processes with one pid in pid namespaces sharing a network namespace would collide
+   only if the namespace's inode can't be read, the same refusal. A child forked without an exec holds its
+   parent's name until it exits or execs (the socket is close-on-exec), so the parent's next load meanwhile is
+   refused, the same refusal; a child std's `Command` spawns holds it from its fork until its exec, which the
+   wait rides out (the code review: decision 34).
 5. **The unit tests open the system's C library in their own process:** already loaded there, so no initialiser
    runs, and nothing of it is called.
 6. **The gate reads the host's view only:** items behind another system's `cfg` aren't in its JSON (in `sane-dl`,
-   constants); `twain-dsm`'s Windows items wait on TEST-12.
+   constants); `twain-dsm`'s Windows items wait on TEST-14.
 7. **What the slot can't see** (step 3): the name lives in the process's network namespace and is formed from
    what `/proc` shows it, so a process that moves itself to another network namespace (`unshare`, `setns`)
    between two copies' loads, or loses `/proc` (a `chroot`, a mount namespace) so its second copy forms the
@@ -600,7 +662,21 @@ as `master` has them at `3f33be5`, and slice 3 may take them first; each read ag
    until it closes.
 9. **A sandbox that mediates socket names** (step 3): AppArmor can deny binding an abstract name, and a strictly
    confined snap's profile may deny this one. The load is then `SlotRefused` (the error isn't `AddrInUse`),
-   never SANE unguarded, until the profile allows `@sane-dl/slot/**`. Untried here.
+   never SANE unguarded, until the profile allows `@sane-dl/slot/**`. Untried here. Since the code review the
+   name's form and that rule are in the public docs (`SlotRefused`'s, `Sane`'s, the README, the changelog).
+10. **The environment `load` rests on** (the code review; decision 33): every entry of the loader's search path
+    absolute, since glibc looks an empty or relative entry up from the working directory as the library loads,
+    and safe code can change that (a probe here: `LD_LIBRARY_PATH=/opt/sane/lib:` and `set_current_dir` made a
+    `forbid(unsafe_code)` program map a `libsane.so.1` of its working directory and segfault in its
+    `sane_init`); and `LD_LIBRARY_PATH`, `SHLIB_PATH` and `LIBPATH` never changed inside a process using SANE,
+    since SANE's `dll` reads the first set with `getenv` each time it loads a backend (a probe here: `set_var`
+    after `load`, then `open("probe:…")`, ran a `libsane-probe.so.1` of the program's choosing). Said in
+    `Sane::load`'s docs, the README and the changelog; neither checked (Q-7).
+11. **A set-id program and SANE** (found verifying item 10): glibc clears `LD_LIBRARY_PATH` in a set-id process,
+    but `dll` then reads `SHLIB_PATH` and `LIBPATH`, which nothing clears (both fallbacks loaded a backend in a
+    probe here, set at the start), so the untrusted starter would choose backend libraries that run with the
+    process's privileges. The docs tell a set-id program to run SANE in a process it starts with an environment
+    of its own choosing; the fix is upstream's (UP-14, waiting on review).
 
 ## Risks
 
@@ -1012,3 +1088,104 @@ the changed `SAFETY:` comment read against its call. What only CI shows, after t
 through `DYLD_LIBRARY_PATH` (Risk 1, TEST-7); Windows's fake tests ignored with their reason, none failing; the
 `public-api` job on CI's pinned nightly; the slot's tests on CI's Ubuntu; the MSRV job's real-libsane tests
 skipping; the package job.
+
+**Step 4's check** (2026-11-09, at `1f6d3f6`, by the checking agent; its record is local, `scratch/work/s0-1a/flow/
+checks.md`): passed. `just ci` with both require variables green (255 tests, nothing skipped; the gate: 1,653
+items, none unsafe; the package's 17 files; `sane-dl` and `twain-dsm` on 1.89); the test list 253 to 255, the two
+`Debug` tests new, none lost; the slice-end checks: the publish dry run in a fresh `scratch/work/s0-1a/package/`
+(17 files, as step 3's), the derived `Debug` put back and both new tests failing (a 3.6 KB log), the gate's list
+the same 760 lines as step 3's, the branch's commit messages and the maintainer's name clean, the backlog's IDs
+and counts right; step 3's check's prlimit findings rerun apart (each skip skips and passes); cross `clippy` and
+`doc` green. For the code review: the doc on `Image`'s `Debug` showing `frames: [..]` (taken: finding 16 below);
+and, reachable only through `unsafe` (`fork`), a child forked without an exec from a process holding two copies,
+whose copy B could pass both slots and call `sane_init` on the library copy A started. That second one stays as
+it is: `fork` is `unsafe`, and its contract (in a process with threads, nothing but async-signal-safe calls
+before an exec) keeps such a child from SANE; the soundness lens didn't raise it.
+
+## Code review
+
+2026-11-09, at `1f6d3f6`, through four lenses (behaviour, the API as a published library, the repository's
+hygiene, soundness), each finding verified here against the code, and the behavioural ones reproduced, before it
+was acted on; the lenses' records and probes are local (`scratch/work/s0-1a/flow/review-*.json`,
+`scratch/work/s0-1a/review-*/`). All 22 held, and all 22 are fixed, in four commits: `5724b92` (the gate),
+`d73aa77` (the slot and loading's docs), `3a442ef` (tidy-ups), `1a94bee` (the set-id case, found verifying finding
+4, and the gate's one limit). None refuted; none deferred: what stays open is the review's to settle (Q-7, UP-14)
+or CI's to show (TEST-15).
+
+**Major:**
+
+1. Behaviour: **a load racing a `Command::spawn` on another thread was a spurious `AlreadyLoaded`,** since every
+   child holds the slot's socket from its fork until its exec; brought in by step 3 (0 of 3,000 at `3f33be5`,
+   1,402 of 3,000 at `1f6d3f6`). Reproduced. Fixed in `d73aa77`: the load retries for 100 ms (decision 34), the
+   docs that said a spawned program never holds the socket corrected, and a Linux test,
+   `a_load_waits_out_a_child_spawned_meanwhile`, loads the fake 200 times beside a spawning thread, none refused
+   (with the wait made zero on a worktree, 87 of 200 refused).
+2. Soundness: **the same race,** 5,727 and 11,830 of 20,000 reloads refused with one and four spawning threads.
+   Fixed with 1 (`d73aa77`); the probe rerun after the fix: none refused, with one, four or sixteen threads.
+3. API: **SANE's `dll` reads `LD_LIBRARY_PATH` each time it loads a backend,** so a value set inside the process
+   chose a library that ran in it (reproduced: a `forbid(unsafe_code)` program's `set_var` after `load`, then
+   `open("probe:…")`, ran its `libsane-probe.so.1`), and the docs said such a value comes too late. Fixed in
+   `d73aa77` and `1a94bee`: the docs (`Sane::load`, the README, the changelog, `crates/sane-dl.md`) give the rule
+   that nothing in the process changes it, or the `SHLIB_PATH` and `LIBPATH` it falls back to (both shown to
+   load a backend here); shape 4 re-weighed; decision 33, security items 10 and 11 (the set-id case: glibc
+   clears only `LD_LIBRARY_PATH`), UP-14.
+4. Soundness: **an empty or relative entry of the loader's search path let the program's own safe code choose
+   the library** through `set_current_dir` (reproduced: `LD_LIBRARY_PATH=/opt/sane/lib:` mapped the working
+   directory's `libsane.so.1`). Fixed in `d73aa77`: the docs, `Api::load`'s contract and `load`'s `SAFETY:`
+   comment say every entry must be absolute; shape 1, decision 33, security item 10; a refusal at load left to
+   the review (Q-7).
+5. Hygiene: **the gate passed `pub extern crate`** (and an own alias of another crate's type). Fixed in
+   `5724b92` (decision 39).
+
+**Minor:**
+
+6. Behaviour: the gate passed a union's fields, a `static mut` and a `#[target_feature]` function. Fixed in
+   `5724b92`: the last two fail, a union is listed, marked; `SANE_Constraint` added to the table above and to
+   decision 6.
+7. Behaviour: Apple's systems other than macOS got the bare `libsane.so.1`, which dyld seeks in the working
+   directory too. Fixed in `d73aa77` (decision 37).
+8. API: `AlreadyLoaded` covered a forked child and a squatter under a message saying SANE was loaded in this
+   process. Fixed in `d73aa77`: `SlotTaken` (decision 35), the seam note's list.
+9. API: the slot's name, which a sandbox must allow, was in no public doc. Fixed in `d73aa77` (decision 36).
+10. API: the gate passed functions over `ffi`'s pointer-holding structs, a struct wrapping a raw pointer,
+    `NonNull`, and a `static mut`. Fixed in `5724b92`.
+11. API: "build a run path into the program" was wrong where the crate sits in a shared library (glibc searches
+    the calling object's). Fixed in `d73aa77`.
+12. API: `Image`'s `Debug` named its fields one by one. Fixed in `3a442ef`: taken apart first.
+13. API: docs that claimed more than held: `ffi`'s "nothing here can be called" (it has eight `const fn`s),
+    "macOS and the BSDs", and the slot's reach (copies of this crate only). Fixed in `d73aa77`.
+14. Hygiene: the gate passed a `static mut` and `NonNull`; the derived `unsafe impl TrivialClone` unmarked; a
+    failed run left the last list. Fixed in `5724b92` (a shape failure on a worktree left no list).
+15. Hygiene: `build.rs` still said `links` keeps a program to one copy. Fixed in `d73aa77`.
+16. Hygiene: two `#[cfg(unix)]` tests carried a `cfg_attr(not(unix), ignore)` that couldn't apply. Fixed in
+    `3a442ef`: 57 marked `#[test]` attributes now, not 59.
+17. Hygiene: `fake_library()` returned a directory. Fixed in `3a442ef`: `fake_library_dir()`.
+18. Hygiene: `Image`'s `Debug` doc showed `frames: [..]`. Fixed in `3a442ef`: the form printed.
+19. Hygiene: a 102-column line in `/crates/sane-dl/tests/header_contract.rs`. Fixed in `3a442ef`.
+20. Hygiene: the pinned nightly spelled out a third time in the justfile's header. Fixed in `5724b92`.
+21. Hygiene: the jq counted blanket impls that nothing printed. Fixed in `5724b92`: printed.
+22. Soundness: the one-copy exception named only macOS and the BSDs. Fixed in `d73aa77`: "every system but
+    Linux" in `Sane`'s docs, the README, the changelog, decision 9, security item 3 and BUG-8; the slot not
+    built for Android (decision 38).
+
+**Checked** (records in `scratch/work/s0-1a/fix/`), on the committed fixes: `just ci` with both require
+variables at `3a442ef` and again at `1a94bee`, green (256 tests, nothing skipped; `fmt`, `clippy`, `doc`, the
+gates; the gate: 1,654 items, none unsafe, 21 derived `unsafe impl`s and one union listed; the package's 17
+files; `sane-dl` and `twain-dsm` on 1.89). The test list 255 to 256, the spawn test new, the README's doctest at
+line 190, none lost. The gate's list as step 4's but `variant SlotTaken` and the new markings. The gate's
+make-fails on a worktree of `3a442ef` (removed after, the branch unchanged): the review's eleven plants in
+`sane-dl` (`pub extern crate` plain and hidden, an alias of `libloading::Library`, a `static mut`, an extern
+static, a `#[target_feature]` fn, `NonNull`, a struct wrapping a pointer, `&ffi::SANE_Device`,
+`ffi::SANE_Constraint`, `*const u8`) each named, `ffi::SANE_Range` passed; then the format changed, and no list
+left behind; and a probe crate apart with the same cases and their controls (a struct with a private pointer, a
+recursive struct, an alias of std's, a foreign type by reference, a plain static), only the cases named. The
+slot's make-fails on the same worktree: the wait made zero (the spawn test fails, 87 of 200 refused), and
+`SlotTaken` made `AlreadyLoaded` (the two slot tests that bind the name fail). The two-copies probe rerun: the
+second copy `SlotTaken`, the fake's log one `sane_init`. The spawn probe: none refused with 1, 4 or 16 spawning
+threads. `cargo clippy --all-targets` and `cargo doc`, `-D warnings`, for `x86_64-pc-windows-gnu`,
+`x86_64-apple-darwin` and `x86_64-unknown-freebsd`, and `cargo check` for `aarch64-linux-android`: green. The
+publish dry run in a fresh `scratch/work/s0-1a/package-fix/`: 17 files, as step 4's, its `.cargo_vcs_info.json`
+naming `3a442ef`. Left out, with why: `cargo tree` and an MSRV probe (no manifest or lock changed; 1.89 built and
+tested in `just ci`); the header contract's make-fail (`ffi.rs` changed in its module doc alone); TSan on the
+cancel tests (no synchronization changed: the slot's wait is a sleep in one thread); the harness (nothing cut
+from sheaf); an Apple build for decision 37 (no Apple target installed). What only CI shows: TEST-15 and TEST-7.
