@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::Fake;
-use sane_dl::{Call, Device, DeviceName, Error, LoadError, Sane, Status};
+use sane_dl::{Call, Device, DeviceName, Error, LimitKind, LoadError, Sane, Status};
 
 /// Waits until a late listing has given the library back, then lists again.
 fn list_once_free(sane: &Sane) -> Result<Vec<Device>, Error> {
@@ -451,7 +451,14 @@ fn a_list_past_the_cap_is_refused() {
         assert_eq!(sane.limits().devices, 1024);
         let error = sane.devices(false, Duration::from_secs(10)).unwrap_err();
         assert!(
-            matches!(&error, Error::BadDeviceList { reason } if reason == "it lists more than 1024 devices"),
+            matches!(
+                &error,
+                Error::LimitExceeded {
+                    limit: LimitKind::Devices,
+                    value: 1025,
+                    cap: 1024
+                }
+            ),
             "{error:?}"
         );
         let mut limits = sane.limits();

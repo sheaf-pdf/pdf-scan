@@ -49,13 +49,16 @@ version is published.
   interleaved, samples as SANE encodes them), with progress told between reads; `Page::NoDocs` from either
   call that can say so, with the pages delivered; `sane_cancel` however a batch ends.
 - **Strict frames.** Parameters no frame can have are `BadParameters`, carrying them; frames that end
-  short or run long, and a partial last row, are `ShortFrame`, `LongFrame` and `PartialRow`; a stream past
-  its cap is `FrameTooLarge`, its reading stopped.
+  short or run long, a frame of unknown height with no row, and a partial last row, are `ShortFrame`,
+  `LongFrame` and `PartialRow`.
 - **Cancel from any thread.** `CancelToken` calls `sane_cancel` at once, under the handle's own lock and
   only while it's open, so a late cancel never reaches a closed handle; and flags the cancel, so the next
   start or read, and a read in flight, return `Error::Cancelled`, even from a backend that ignores it.
+  `Handle::clear_cancel` takes back a cancel no call has answered, before a new batch.
 - **Caps.** `Limits` on devices, strings, options, list entries, option values, frames, lines and the read
-  chunk, each checked before the work it caps; set with `Sane::set_limits`.
+  chunk, each checked before the work it caps; set with `Sane::set_limits`. A list of devices, a count of
+  options, a frame or a line past its cap is `Error::LimitExceeded` (`LimitKind`, what SANE gave, the cap),
+  a frame's reading stopped there.
 - **The package** holds the sources, the build script, this changelog and the README, whose licence links
   are the repository's URLs, a test holding them so. The tests stay in the repository: they build a
   stand-in libsane from the workspace and load it, beside SANE's own `test` and `pnm` backends.

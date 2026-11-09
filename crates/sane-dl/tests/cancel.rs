@@ -146,6 +146,38 @@ fn a_cancel_between_pages_stops_the_next_one() {
 }
 
 #[test]
+fn a_cancel_left_from_the_last_batch_can_be_cleared() {
+    let fake = Fake::new(
+        "a_cancel_left_from_the_last_batch_can_be_cleared",
+        &script("sheets 2\n"),
+    );
+    in_child!(
+        a_cancel_left_from_the_last_batch_can_be_cleared,
+        fake.child(),
+        || {
+            let sane = common::load_fake();
+            let mut handle = sane.open("fake:0").unwrap();
+            let token = handle.cancel_token();
+            let mut batch = handle.batch();
+            assert!(matches!(batch.next_page(|_| {}), Ok(Page::Image(_))));
+            // The cancel comes as the batch ends, too late for it.
+            token.cancel();
+            drop(batch);
+            assert!(handle.clear_cancel());
+            assert!(!token.is_requested());
+            assert!(!handle.clear_cancel(), "nothing left to clear");
+            // The next batch starts afresh.
+            let mut batch = handle.batch();
+            let Ok(Page::Image(image)) = batch.next_page(|_| {}) else {
+                panic!()
+            };
+            assert_eq!(image.data, common::fake_pixels(2, false, 0, 16, 4));
+        }
+    );
+    fake.log().assert_no_violations();
+}
+
+#[test]
 fn a_cancel_racing_close_never_reaches_a_closed_handle() {
     const ROUNDS: usize = 10_000;
     let fake = Fake::new(

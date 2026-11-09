@@ -11,7 +11,8 @@ mod common;
 
 use common::Fake;
 use sane_dl::{
-    Call, Error, FrameFormat, Image, Limits, Page, Parameters, Progress, ReadOutcome, Status,
+    Call, Error, FrameFormat, Image, LimitKind, Limits, Page, Parameters, Progress, ReadOutcome,
+    Status,
 };
 
 /// The device every script lists.
@@ -573,7 +574,11 @@ fn an_endless_stream_stops_at_a_small_cap() {
         sane.set_limits(limits);
         let mut handle = sane.open("fake:0").unwrap();
         match handle.batch().next_page(|_| {}) {
-            Err(Error::FrameTooLarge { limit: given }) if given == limit => {}
+            Err(Error::LimitExceeded {
+                limit: LimitKind::FrameBytes,
+                value,
+                cap,
+            }) if cap == limit && value > limit as u64 => {}
             other => panic!("{other:?}"),
         }
         // The frame's rows, and no more, were held.
@@ -745,12 +750,15 @@ failing_page!(
     |error| bad(error, (0, 1, 16, 16, -2, 8), "it has -2 lines")
 );
 failing_page!(
-    lines_past_the_cap_is_bad_parameters,
+    lines_past_the_cap_are_a_cap_exceeded,
     "frame GRAY 1 16 16 70000000 8\n",
-    |error| bad(
+    |error| matches!(
         error,
-        (0, 1, 16, 16, 70_000_000, 8),
-        "its 70000000 lines of 16 bytes"
+        Error::LimitExceeded {
+            limit: LimitKind::FrameBytes,
+            value: 1_120_000_000,
+            cap: 1_073_741_824
+        }
     )
 );
 failing_page!(

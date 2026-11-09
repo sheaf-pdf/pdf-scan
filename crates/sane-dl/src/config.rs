@@ -109,7 +109,7 @@ impl ConfigDir {
             conf.push('\n');
         }
         let snippets = dir.join("dll.d");
-        let snippets_there = check_dll_d(&snippets)?;
+        let snippets_there = check_dll_d(&dir, &snippets)?;
         let conf_path = dir.join("dll.conf");
         fs::write(&conf_path, conf).map_err(|source| ConfigError::Io {
             path: conf_path,
@@ -120,7 +120,7 @@ impl ConfigDir {
                 Ok(()) => {}
                 // Made meanwhile by someone else: still refused unless empty.
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    check_dll_d(&snippets)?;
+                    check_dll_d(&dir, &snippets)?;
                 }
                 Err(source) => {
                     return Err(ConfigError::Io {
@@ -155,27 +155,31 @@ impl ConfigDir {
     }
 }
 
-/// Whether `dll.d` is there: refused, as an `Io` error, if it holds anything
-/// or can't be read.
-fn check_dll_d(snippets: &Path) -> Result<bool, ConfigError> {
+/// Whether `dir`'s `dll.d` (`snippets`) is there: refused if it isn't an
+/// empty directory ([`ConfigError::BadPath`], for `dir`), or can't be read
+/// ([`ConfigError::Io`]).
+fn check_dll_d(dir: &Path, snippets: &Path) -> Result<bool, ConfigError> {
     let io_error = |source| ConfigError::Io {
         path: snippets.to_owned(),
         source,
     };
-    let refused = |why| io_error(io::Error::new(io::ErrorKind::AlreadyExists, why));
+    let refused = |reason| ConfigError::BadPath {
+        path: dir.to_owned(),
+        reason,
+    };
     // Looked at before it's listed, so a file in its place is refused alike
     // on every system, whatever listing a file answers there.
     match fs::metadata(snippets) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(source) => return Err(io_error(source)),
         Ok(metadata) if !metadata.is_dir() => {
-            return Err(refused("dll.d is there already, and isn't a directory"));
+            return Err(refused("its dll.d is there already, and isn't a directory"));
         }
         Ok(_) => {}
     }
     match fs::read_dir(snippets).map_err(io_error)?.next() {
         None => Ok(true),
-        Some(_) => Err(refused("dll.d is there already, and isn't empty")),
+        Some(_) => Err(refused("its dll.d is there already, and isn't empty")),
     }
 }
 
@@ -190,7 +194,8 @@ pub enum ConfigError {
         /// The name given.
         name: String,
     },
-    /// The directory's path can't be given to SANE.
+    /// The directory can't be given to SANE: its path, or a `dll.d` in it
+    /// already that isn't an empty directory. Nothing was written.
     #[error("{} can't be SANE's configuration directory: {reason}", path.display())]
     BadPath {
         /// The path given.
@@ -198,7 +203,7 @@ pub enum ConfigError {
         /// Why not.
         reason: &'static str,
     },
-    /// A file couldn't be written, or `dll.d` read.
+    /// The system refused to write a file, or to read `dll.d`.
     #[error("couldn't write {}", path.display())]
     Io {
         /// The file or directory.

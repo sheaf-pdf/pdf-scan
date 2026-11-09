@@ -104,7 +104,7 @@ mod status;
 
 pub use config::{CONFIG_DIR_VARIABLE, ConfigDir, ConfigError, Search, backend_of};
 pub use device::{Device, DeviceName};
-pub use error::{Call, Error, LoadError};
+pub use error::{Call, Error, LimitKind, LoadError};
 pub use library::{CancelToken, Handle, Sane};
 pub use options::{
     Capabilities, Constraint, Fixed, OptionDescriptor, SaneString, SetInfo, Unit, Value, ValueType,

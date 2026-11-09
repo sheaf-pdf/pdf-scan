@@ -11,7 +11,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use crate::{Call, Error, FrameFormat, Handle, Limits, Status, ffi};
+use crate::{Call, Error, FrameFormat, Handle, LimitKind, Limits, Status, ffi};
 
 /// The longest pause between reads that gave no bytes, in a page's reading
 /// ([`Batch::next_page`]).
@@ -128,20 +128,43 @@ impl Parameters {
     /// Whether these parameters can stand for a frame, within `limits`: a
     /// format SANE 1 defines (not one of the reserved ones), `last_frame` 0
     /// or 1 and 1 for a gray or RGB frame, a depth of 1, 8 or 16, at least
-    /// one pixel a line, at least the bytes a line's pixels need and no
-    /// more than [`Limits::line_bytes`], and `lines` -1 or at least 1, a
-    /// known frame's bytes within [`Limits::frame_bytes`]. Anything else is
-    /// [`Error::BadParameters`], carrying them and saying what's wrong.
+    /// one pixel a line, at least the bytes a line's pixels need, and
+    /// `lines` -1 or at least 1; anything else is [`Error::BadParameters`],
+    /// carrying them and saying what's wrong. Then the caps: no more bytes
+    /// a line than [`Limits::line_bytes`], and a known frame's bytes no more
+    /// than [`Limits::frame_bytes`], else [`Error::LimitExceeded`].
     pub fn check(&self, limits: &Limits) -> Result<(), Error> {
-        self.problem(limits).map_or(Ok(()), |reason| {
-            Err(Error::BadParameters {
+        if let Some(reason) = self.problem() {
+            return Err(Error::BadParameters {
                 parameters: *self,
                 reason,
-            })
-        })
+            });
+        }
+        // Checked: at least the pixels' bytes, so not negative.
+        let bytes_per_line = u64::try_from(self.bytes_per_line).unwrap_or(u64::MAX);
+        if bytes_per_line > limits.line_bytes as u64 {
+            return Err(Error::LimitExceeded {
+                limit: LimitKind::LineBytes,
+                value: bytes_per_line,
+                cap: limits.line_bytes,
+            });
+        }
+        if let Some(Height::Known(lines)) = self.height() {
+            // Each below 2^31, so the product fits.
+            let bytes = lines as u64 * bytes_per_line;
+            if bytes > limits.frame_bytes as u64 {
+                return Err(Error::LimitExceeded {
+                    limit: LimitKind::FrameBytes,
+                    value: bytes,
+                    cap: limits.frame_bytes,
+                });
+            }
+        }
+        Ok(())
     }
 
-    fn problem(&self, limits: &Limits) -> Option<String> {
+    /// What makes these parameters no frame's, if anything.
+    fn problem(&self) -> Option<String> {
         if self.channels().is_none() {
             return Some(if self.format.is_reserved() {
                 format!("its format, {}, is reserved for a later SANE", self.format)
@@ -181,28 +204,12 @@ impl Parameters {
                 self.bytes_per_line
             ));
         }
-        let bytes_per_line = usize::try_from(self.bytes_per_line).unwrap_or(usize::MAX);
-        if bytes_per_line > limits.line_bytes {
-            return Some(format!(
-                "it has {bytes_per_line} bytes a line, more than the limit of {}",
-                limits.line_bytes
-            ));
-        }
         match self.height() {
             None => Some(format!(
                 "it has {} lines, where SANE allows -1 or at least 1",
                 self.lines
             )),
-            Some(Height::Known(lines)) => {
-                let bytes = (lines as u128) * (bytes_per_line as u128);
-                (bytes > limits.frame_bytes as u128).then(|| {
-                    format!(
-                        "its {lines} lines of {bytes_per_line} bytes are more than the limit of {} a frame",
-                        limits.frame_bytes
-                    )
-                })
-            }
-            Some(Height::Unknown) => None,
+            Some(_) => None,
         }
     }
 
@@ -444,7 +451,7 @@ impl Assembly {
     }
 
     /// A read's bytes, kept but for each row's padding: [`Error::LongFrame`]
-    /// past a known frame's bytes, [`Error::FrameTooLarge`] past
+    /// past a known frame's bytes, [`Error::LimitExceeded`] past
     /// [`Limits::frame_bytes`].
     pub(crate) fn take(&mut self, mut chunk: &[u8]) -> Result<(), Error> {
         let Some(frame) = &mut self.current else {
@@ -457,8 +464,10 @@ impl Assembly {
             return Err(Error::LongFrame { expected });
         }
         if frame.read + length > self.limits.frame_bytes as u64 {
-            return Err(Error::FrameTooLarge {
-                limit: self.limits.frame_bytes,
+            return Err(Error::LimitExceeded {
+                limit: LimitKind::FrameBytes,
+                value: frame.read + length,
+                cap: self.limits.frame_bytes,
             });
         }
         while !chunk.is_empty() {
@@ -590,6 +599,12 @@ pub struct Batch<'a> {
 
 impl Handle {
     /// A batch of pages ([`Batch`]).
+    ///
+    /// A [`CancelToken`](crate::CancelToken)'s cancel that no call has
+    /// returned [`Error::Cancelled`] for yet stops the batch's first page:
+    /// one that raced the last batch's end, as its last page or its
+    /// `NO_DOCS` came, is still waiting. [`clear_cancel`](Self::clear_cancel)
+    /// first starts the batch afresh.
     pub fn batch(&mut self) -> Batch<'_> {
         Batch {
             handle: self,
@@ -629,7 +644,7 @@ impl Batch<'_> {
     /// backend that ignores `sane_cancel` and goes on answering; and the
     /// frame errors ([`Error::BadParameters`], [`Error::ShortFrame`],
     /// [`Error::LongFrame`], [`Error::PartialRow`],
-    /// [`Error::FrameTooLarge`], [`Error::BadReadLength`]), a frame of
+    /// [`Error::LimitExceeded`], [`Error::BadReadLength`]), a frame of
     /// unknown height that ends before its first row among them
     /// (`ShortFrame`), so no page has no rows. After any of them
     /// `sane_cancel` has been called.
@@ -922,30 +937,53 @@ mod tests {
         };
         assert!(gray(100, 100, 10, 8).check(&limits).is_ok());
         assert!(gray(100, 100, -1, 8).check(&limits).is_ok());
-        let Err(Error::BadParameters { reason, .. }) = gray(101, 100, 1, 8).check(&limits) else {
-            panic!()
+        let over = |parameters: Parameters, limits: &Limits| match parameters.check(limits) {
+            Err(Error::LimitExceeded { limit, value, cap }) => (limit, value, cap),
+            other => panic!("{parameters}: {other:?}"),
         };
         assert_eq!(
-            reason,
-            "it has 101 bytes a line, more than the limit of 100"
+            over(gray(101, 100, 1, 8), &limits),
+            (LimitKind::LineBytes, 101, 100)
         );
-        let Err(Error::BadParameters { reason, .. }) = gray(100, 100, 11, 8).check(&limits) else {
-            panic!()
-        };
         assert_eq!(
-            reason,
-            "its 11 lines of 100 bytes are more than the limit of 1000 a frame"
+            over(gray(100, 100, 11, 8), &limits),
+            (LimitKind::FrameBytes, 1100, 1000)
         );
-        // The default caps: 16 MiB a line, 1 GiB a frame.
+        assert_eq!(
+            Error::LimitExceeded {
+                limit: LimitKind::FrameBytes,
+                value: 1100,
+                cap: 1000
+            }
+            .to_string(),
+            "SANE gave 1100 bytes in a frame, past the cap of 1000"
+        );
+        // What no frame can have is said first, whatever the caps.
+        assert!(matches!(
+            gray(101, 100, 0, 8).check(&limits),
+            Err(Error::BadParameters { .. })
+        ));
+        // The default caps: 16 MiB a line, 1 GiB a frame. A4 at 2400 dpi in
+        // 16-bit color passes the frame's.
         let defaults = Limits::default();
         assert!(gray(16 << 20, 16 << 20, 64, 8).check(&defaults).is_ok());
-        assert!(
-            gray((16 << 20) + 1, 16 << 20, 1, 8)
-                .check(&defaults)
-                .is_err()
+        assert_eq!(
+            over(gray((16 << 20) + 1, 16 << 20, 1, 8), &defaults).0,
+            LimitKind::LineBytes
         );
-        assert!(gray(16 << 20, 16 << 20, 65, 8).check(&defaults).is_err());
-        assert!(gray(i32::MAX, 16, i32::MAX, 8).check(&defaults).is_err());
+        assert_eq!(
+            over(gray(16 << 20, 16 << 20, 65, 8), &defaults).0,
+            LimitKind::FrameBytes
+        );
+        let a4 = frame(FrameFormat::RGB, 1, 119_052, 19_842, 28_062, 16);
+        assert_eq!(
+            over(a4, &defaults),
+            (LimitKind::FrameBytes, 3_340_837_224, 1 << 30)
+        );
+        assert_eq!(
+            over(gray(i32::MAX, 16, i32::MAX, 8), &defaults),
+            (LimitKind::LineBytes, i32::MAX as u64, 16 << 20)
+        );
     }
 
     #[test]
@@ -1265,7 +1303,11 @@ mod tests {
         assembly.take(&[0; 6]).unwrap();
         assembly.take(&[0; 4]).unwrap();
         match assembly.take(&[0]) {
-            Err(Error::FrameTooLarge { limit: 10 }) => {}
+            Err(Error::LimitExceeded {
+                limit: LimitKind::FrameBytes,
+                value: 11,
+                cap: 10,
+            }) => {}
             other => panic!("{other:?}"),
         }
     }

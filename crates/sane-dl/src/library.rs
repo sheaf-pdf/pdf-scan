@@ -48,8 +48,8 @@ use crate::options::{
     constraint_member, option_count, prepare, read_value, still_current, word_list_length,
 };
 use crate::{
-    Call, Device, DeviceName, Error, Limits, LoadError, OptionDescriptor, Parameters, ReadOutcome,
-    SetInfo, Status, Value, Version, ffi,
+    Call, Device, DeviceName, Error, LimitKind, Limits, LoadError, OptionDescriptor, Parameters,
+    ReadOutcome, SetInfo, Status, Value, Version, ffi,
 };
 
 /// SANE's 14 functions, looked up in a library that's never unloaded, so
@@ -272,8 +272,8 @@ impl CancelState {
 /// a read in flight when it returns. The flag stays set until a call
 /// returns `Cancelled` for it, so a cancel between pages stops the next
 /// one, and a cancel after a batch has ended stops the next batch's first
-/// page. Stopping after the page in flight is the caller's: it starts no
-/// next page.
+/// page, unless [`Handle::clear_cancel`] takes it back first. Stopping
+/// after the page in flight is the caller's: it starts no next page.
 #[derive(Clone)]
 pub struct CancelToken {
     state: Arc<CancelState>,
@@ -576,10 +576,11 @@ unsafe fn copy_device_list(
             return Ok(devices);
         }
         if index == limits.devices {
-            return Err(bad(format!(
-                "it lists more than {} devices",
-                limits.devices
-            )));
+            return Err(Error::LimitExceeded {
+                limit: LimitKind::Devices,
+                value: index as u64 + 1,
+                cap: limits.devices,
+            });
         }
         // SAFETY: a non-null entry points to a valid `SANE_Device` (the
         // caller's contract), copied here as plain pointers.
@@ -1016,9 +1017,10 @@ impl Sane {
     /// this `Sane` is dropped too, that thread ends SANE after those closes.
     ///
     /// A malformed list ([`Error::BadDeviceList`]) is refused whole: null, a
-    /// device with a null name, more devices than [`Limits::devices`], or a
-    /// string longer than [`Limits::string_bytes`]. A null vendor, model or
-    /// type is empty.
+    /// device with a null name, or a string longer than
+    /// [`Limits::string_bytes`]; and so is one of more devices than
+    /// [`Limits::devices`] ([`Error::LimitExceeded`]). A null vendor, model
+    /// or type is empty.
     pub fn devices(&self, local_only: bool, deadline: Duration) -> Result<Vec<Device>, Error> {
         let until = Instant::now().checked_add(deadline);
         let guard = self.shared.acquire(until)?;
@@ -1429,6 +1431,19 @@ impl Handle {
         if self.scanning {
             self.cancel();
         }
+    }
+
+    /// Takes back a token's cancel that no call has returned
+    /// [`Error::Cancelled`] for yet, and says whether there was one.
+    ///
+    /// A token's cancel is kept until a call returns `Cancelled` for it, so
+    /// one that comes as a batch ends (after its last page, or as the
+    /// feeder empties) stops the next batch's first page. Call this before
+    /// a new batch whose start a cancel then shouldn't stop; a cancel that
+    /// comes after this returns is kept. `sane_cancel` was called when the
+    /// token cancelled, and isn't again.
+    pub fn clear_cancel(&mut self) -> bool {
+        self.token.take_request()
     }
 
     /// Takes a token's cancel, if one is waiting, ending what's in

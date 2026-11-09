@@ -12,7 +12,7 @@ use std::ffi::c_void;
 use std::fmt;
 
 use crate::library::CText;
-use crate::{Error, Limits, ffi};
+use crate::{Error, LimitKind, Limits, ffi};
 
 /// How an option's value is read: SANE's value type, checked.
 ///
@@ -675,16 +675,17 @@ pub(crate) fn check_count_option(zero: &OptionDescriptor) -> Result<(), Error> {
 /// The number of options, from option 0's value: at least 1 (it counts
 /// itself) and within the cap, or [`Error::BadDescriptor`], for option 0.
 pub(crate) fn option_count(value: i32, limits: Limits) -> Result<usize, Error> {
-    let bad = |reason: String| Error::BadDescriptor { option: 0, reason };
     match usize::try_from(value) {
         Ok(count) if (1..=limits.options).contains(&count) => Ok(count),
-        Ok(count) if count > limits.options => Err(bad(format!(
-            "it says there are {value} options, more than {}",
-            limits.options
-        ))),
-        _ => Err(bad(format!(
-            "it says there are {value} options, and option 0 is one"
-        ))),
+        Ok(count) if count > limits.options => Err(Error::LimitExceeded {
+            limit: LimitKind::Options,
+            value: count as u64,
+            cap: limits.options,
+        }),
+        _ => Err(Error::BadDescriptor {
+            option: 0,
+            reason: format!("it says there are {value} options, and option 0 is one"),
+        }),
     }
 }
 
@@ -1221,10 +1222,20 @@ mod tests {
         };
         assert_eq!(option_count(1, limits).unwrap(), 1);
         assert_eq!(option_count(10, limits).unwrap(), 10);
-        for value in [0, -1, 11, i32::MAX, i32::MIN] {
+        for value in [0, -1, i32::MIN] {
             assert!(matches!(
                 option_count(value, limits),
                 Err(Error::BadDescriptor { option: 0, .. })
+            ));
+        }
+        for value in [11, i32::MAX] {
+            assert!(matches!(
+                option_count(value, limits),
+                Err(Error::LimitExceeded {
+                    limit: LimitKind::Options,
+                    value: given,
+                    cap: 10,
+                }) if given == value as u64
             ));
         }
         assert!(option_count(1_000_000_000, Limits::default()).is_err());

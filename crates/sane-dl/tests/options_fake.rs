@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use common::Fake;
 use sane_dl::{
-    Call, Capabilities, Constraint, Error, Fixed, Handle, SaneString, Status, Unit, Value,
-    ValueType,
+    Call, Capabilities, Constraint, Error, Fixed, Handle, LimitKind, SaneString, Status, Unit,
+    Value, ValueType,
 };
 
 /// A device to open, then the script's options.
@@ -600,12 +600,34 @@ macro_rules! bad_descriptor_test {
     };
 }
 
-bad_descriptor_test!(
-    a_count_of_a_billion_options_is_refused_unread,
-    "option-count 1000000000\n",
-    0,
-    "it says there are 1000000000 options, more than 4096"
-);
+#[test]
+fn a_count_of_a_billion_options_is_refused_unread() {
+    let fake = Fake::new(
+        "a_count_of_a_billion_options_is_refused_unread",
+        &format!("{DEVICE}option-count 1000000000\n"),
+    );
+    in_child!(
+        a_count_of_a_billion_options_is_refused_unread,
+        fake.child(),
+        || {
+            let sane = common::load_fake();
+            match sane.open("fake:0") {
+                Err(Error::LimitExceeded {
+                    limit: LimitKind::Options,
+                    value: 1_000_000_000,
+                    cap: 4096,
+                }) => {}
+                other => panic!("expected LimitExceeded, got {other:?}"),
+            }
+        }
+    );
+    let log = fake.log();
+    log.assert_no_violations();
+    assert_eq!(
+        log.calls_but_options(),
+        ["sane_init", "sane_open", "sane_close", "sane_exit"]
+    );
+}
 bad_descriptor_test!(
     a_count_of_none_is_refused,
     "option-count 0\n",
@@ -694,7 +716,11 @@ fn caps_hold_at_their_limit_and_refuse_one_past() {
             sane.set_limits(fewer);
             assert!(matches!(
                 sane.open("fake:0"),
-                Err(Error::BadDescriptor { option: 0, .. })
+                Err(Error::LimitExceeded {
+                    limit: LimitKind::Options,
+                    value: 5,
+                    cap: 4
+                })
             ));
             let mut shorter = at;
             shorter.string_bytes = 3;

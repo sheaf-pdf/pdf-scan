@@ -59,6 +59,34 @@ fn list_paths(paths: &[PathBuf]) -> String {
     names.join(", ")
 }
 
+/// Which of the caps in [`Limits`](crate::Limits) a value passed
+/// ([`Error::LimitExceeded`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LimitKind {
+    /// [`Limits::devices`](crate::Limits::devices): devices in a list.
+    Devices,
+    /// [`Limits::options`](crate::Limits::options): options a device has.
+    Options,
+    /// [`Limits::frame_bytes`](crate::Limits::frame_bytes): bytes in a
+    /// frame.
+    FrameBytes,
+    /// [`Limits::line_bytes`](crate::Limits::line_bytes): bytes in a
+    /// frame's line.
+    LineBytes,
+}
+
+impl std::fmt::Display for LimitKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LimitKind::Devices => "devices in a list",
+            LimitKind::Options => "options for a device",
+            LimitKind::FrameBytes => "bytes in a frame",
+            LimitKind::LineBytes => "bytes in a line",
+        })
+    }
+}
+
 /// The SANE functions that return a status, to say which one answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Call {
@@ -128,7 +156,8 @@ pub enum Error {
     #[error("the deadline passed")]
     DeadlineExceeded,
     /// The device list SANE gave can't be read: null, a device with a null
-    /// name, more devices than the limit, or a string longer than its limit.
+    /// name, or a string longer than its limit. (More devices than the
+    /// limit is [`LimitExceeded`](Self::LimitExceeded).)
     #[error("the device list can't be read: {reason}")]
     BadDeviceList {
         /// What's wrong with it.
@@ -145,8 +174,9 @@ pub enum Error {
     Thread(#[source] std::io::Error),
     /// An option's descriptor can't stand for an option at all, so the
     /// device's options can't be read: option 0 isn't the count, the count
-    /// is below 1 or past [`Limits::options`](crate::Limits::options), a
-    /// descriptor below the count is null, or a name is longer than
+    /// is below 1 (past [`Limits::options`](crate::Limits::options) is
+    /// [`LimitExceeded`](Self::LimitExceeded)), a descriptor below the
+    /// count is null, or a name is longer than
     /// [`Limits::string_bytes`](crate::Limits::string_bytes). A descriptor
     /// that only holds what SANE doesn't allow makes its option unusable
     /// instead ([`OptionDescriptor::unusable`](crate::OptionDescriptor::unusable)).
@@ -333,13 +363,21 @@ pub enum Error {
         /// The bytes in a row, padding included.
         bytes_per_line: usize,
     },
-    /// A frame of unknown height ran past
-    /// [`Limits::frame_bytes`](crate::Limits::frame_bytes); reading stopped
-    /// there.
-    #[error("the frame ran past {limit} bytes, the limit")]
-    FrameTooLarge {
-        /// The limit.
-        limit: usize,
+    /// What SANE gave passed one of the caps in [`Limits`](crate::Limits):
+    /// not malformed, but more than this instance accepts. A caller may
+    /// raise the cap ([`Sane::set_limits`](crate::Sane::set_limits)) or ask
+    /// for less (a lower resolution); a frame's reading stopped there.
+    #[error("SANE gave {value} {limit}, past the cap of {cap}")]
+    LimitExceeded {
+        /// Which cap.
+        limit: LimitKind,
+        /// What SANE gave, as far as it was counted: exact for a frame or a
+        /// line whose parameters give its size and for a device's count of
+        /// options; for a device list or a frame of unknown height, the
+        /// count at which reading stopped, past the cap.
+        value: u64,
+        /// The cap.
+        cap: usize,
     },
     /// The scan was cancelled through a [`CancelToken`](crate::CancelToken).
     #[error("the scan was cancelled")]

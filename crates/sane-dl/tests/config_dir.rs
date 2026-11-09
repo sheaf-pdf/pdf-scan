@@ -60,7 +60,7 @@ fn a_dll_d_with_snippets_is_refused() {
     fs::write(dir.path().join("dll.d").join("airscan"), "airscan\n").unwrap();
     let error = ConfigDir::write(dir.path(), ["test"], Search::Isolated).unwrap_err();
     assert!(
-        matches!(&error, ConfigError::Io { path, .. } if path.ends_with("dll.d")),
+        matches!(&error, ConfigError::BadPath { path, reason } if path == dir.path() && reason.contains("isn't empty")),
         "{error:?}"
     );
     assert!(!dir.path().join("dll.conf").exists());
@@ -79,7 +79,7 @@ fn a_dll_d_that_isnt_a_directory_is_refused_before_anything_is_written() {
     fs::write(dir.path().join("dll.d"), "airscan\n").unwrap();
     let error = ConfigDir::write(dir.path(), ["test"], Search::Isolated).unwrap_err();
     assert!(
-        matches!(&error, ConfigError::Io { path, .. } if path.ends_with("dll.d")),
+        matches!(&error, ConfigError::BadPath { path, reason } if path == dir.path() && reason.contains("isn't a directory")),
         "{error:?}"
     );
     assert!(!dir.path().join("dll.conf").exists());

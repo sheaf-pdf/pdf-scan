@@ -117,7 +117,8 @@ one build, since each would start SANE as if it were alone.
   reaches a closed handle: a cancel after the close does nothing, and one in flight finishes before the
   close begins. It also flags the cancel, so a backend that ignores `sane_cancel` still stops being read:
   the next start or read returns `Error::Cancelled`, and so does a read in flight when it returns.
-  The flag stays until a call returns `Cancelled` for it, so a cancel between pages stops the next page.
+  The flag stays until a call returns `Cancelled` for it, so a cancel between pages stops the next page;
+  `Handle::clear_cancel` takes back one that came as a batch ended, before the next batch.
 - **Stopping after the page in flight** is the caller's: start no next page, and drop the batch. A batch
   ends with `sane_cancel` however it ends, as SANE asks, and `sane_cancel` follows every error status from
   a start, the parameters or a read, as SANE's frontends do.
@@ -141,7 +142,9 @@ defaults are far above what a real backend gives:
 | Bytes asked for in one read | 256 KiB |
 
 Change them on a copy of `sane.limits()`, given back with `sane.set_limits`, for the calls that start
-after. Beyond the caps, what makes no sense is refused with what SANE said: parameters no frame can have
+after. What passes a cap is `Error::LimitExceeded`, saying which (`LimitKind`), what SANE gave and the cap,
+so a program can raise the cap or ask for less, as a lower resolution. Beyond the caps, what makes no sense
+is refused with what SANE said: parameters no frame can have
 (`BadParameters`: a reserved frame type, a depth other than 1, 8 or 16, too few bytes a line, a gray frame
 that isn't the last), frames that end early or run late (`ShortFrame`, `LongFrame`, `PartialRow`), a read
 length past what was asked (`BadReadLength`), and descriptors SANE doesn't allow, which make their option
