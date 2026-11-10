@@ -1147,7 +1147,8 @@ fn an_area_in_pixels_is_set_down_the_page_at_y_resolution() {
 fn an_inactive_resolution_is_left_and_an_active_x_resolution_set() {
     let script = format!(
         "{DEVICE}\
-         option resolution INT 4 soft-select+soft-detect+inactive\nunit DPI\nwords 100 200 300\nvalue 100\n\
+         option resolution INT 4 soft-select+soft-detect+inactive\n\
+         unit DPI\nwords 100 200 300\nvalue 100\n\
          option x-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 150 300\nvalue 150\n\
          option y-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 150 300\nvalue 150\n"
     );

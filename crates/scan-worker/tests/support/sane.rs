@@ -8,8 +8,8 @@
 //! What a worker loading SANE needs is set on its command ([`WorkerCommand::env`]): the loader's
 //! search path naming the fake's directory first, the fake's script and log, and the
 //! `SANE_CONFIG_DIR` a listing's worker reads, which an open's worker reads after the client's
-//! own directory. A test that needs libsane says it skipped where the worker answers that SANE isn't
-//! installed, on the standard error the harness doesn't capture, or fails where
+//! own directory. A test that needs libsane says it skipped where the worker answers that SANE
+//! isn't installed, on the standard error the harness doesn't capture, or fails where
 //! `SANE_DL_REQUIRE_LIBSANE` is `1`.
 //!
 //! The fake is found as SANE is: copied under SANE's own file name into a directory of its own
