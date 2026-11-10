@@ -526,30 +526,81 @@ fn the_test_backend_s_three_pass_color_in_each_order_is_its_one_pass_color() {
     );
 }
 
+/// The child for a test of a status the `test` backend is made to read: started again where it
+/// hangs, as [`a_status_read_ends_the_batch`] says, its batch done in milliseconds.
+fn status_child(test: &str) -> sane_support::Child {
+    real_child(test, &["test"], &[("test.conf", PACED)])
+        .timeout(Duration::from_secs(10))
+        .retry_hangs(4)
+}
+
+/// A batch the `test` backend is made to answer with `status` at its first read, which ends it
+/// as `ended`, with nothing after the settings applied.
+///
+/// A status from the first read brings the cancel at once after the start, and the backend
+/// (1.4.0, built with threads) cancels its reader thread asynchronously: now and then that
+/// thread dies holding the dynamic loader's lock, and the process hangs at its next `dlclose`,
+/// SANE's exit as the backend is dropped (about one child in 30 here, more with other processes
+/// running). It's the backend's race, which a pause between the start and the read keeps clear
+/// of, as `sane-dl`'s test of every status pauses; the model's batch has no such pause to give,
+/// so each status runs in a child of its own, started again where it hangs.
+fn a_status_read_ends_the_batch(status: &str, ended: ScanError) {
+    let asked = settings(Source::Feeder, false, 10, Format::Gray8);
+    let mut backend = SaneBackend::new().with_option("read-return-value", status);
+    let mut device = open_tester(&mut backend);
+    let (events, done) = paced(&mut *device, &asked, 1, None);
+    assert_eq!(done, Err(ended), "{status}");
+    assert_eq!(order(&events), ["applied"], "{status}");
+}
+
 #[test]
-fn the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them() {
-    let test = "the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them";
-    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+fn a_jam_the_test_backend_reads_ends_the_batch_as_jammed() {
+    let test = "a_jam_the_test_backend_reads_ends_the_batch_as_jammed";
     in_child!(
-        the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them,
-        child,
-        || {
-            let asked = settings(Source::Feeder, false, 10, Format::Gray8);
-            for (status, ended) in [
-                ("SANE_STATUS_JAMMED", ScanError::Jammed),
-                ("SANE_STATUS_COVER_OPEN", ScanError::CoverOpen),
-                // At the first page's first read: the feeder empty as the batch began.
-                ("SANE_STATUS_NO_DOCS", ScanError::FeederEmpty),
-                ("SANE_STATUS_IO_ERROR", ScanError::Gone),
-                ("SANE_STATUS_ACCESS_DENIED", ScanError::AccessDenied),
-            ] {
-                let mut backend = SaneBackend::new().with_option("read-return-value", status);
-                let mut device = open_tester(&mut backend);
-                let (events, done) = paced(&mut *device, &asked, 1, None);
-                assert_eq!(done, Err(ended), "{status}");
-                assert_eq!(order(&events), ["applied"], "{status}");
-            }
-        }
+        a_jam_the_test_backend_reads_ends_the_batch_as_jammed,
+        status_child(test),
+        || a_status_read_ends_the_batch("SANE_STATUS_JAMMED", ScanError::Jammed)
+    );
+}
+
+#[test]
+fn an_open_cover_the_test_backend_reads_ends_the_batch_as_cover_open() {
+    let test = "an_open_cover_the_test_backend_reads_ends_the_batch_as_cover_open";
+    in_child!(
+        an_open_cover_the_test_backend_reads_ends_the_batch_as_cover_open,
+        status_child(test),
+        || a_status_read_ends_the_batch("SANE_STATUS_COVER_OPEN", ScanError::CoverOpen)
+    );
+}
+
+/// At the first page's first read: the feeder empty as the batch began.
+#[test]
+fn no_documents_at_the_test_backend_s_first_read_end_the_batch_as_the_feeder_empty() {
+    let test = "no_documents_at_the_test_backend_s_first_read_end_the_batch_as_the_feeder_empty";
+    in_child!(
+        no_documents_at_the_test_backend_s_first_read_end_the_batch_as_the_feeder_empty,
+        status_child(test),
+        || a_status_read_ends_the_batch("SANE_STATUS_NO_DOCS", ScanError::FeederEmpty)
+    );
+}
+
+#[test]
+fn an_io_error_the_test_backend_reads_ends_the_batch_as_the_device_gone() {
+    let test = "an_io_error_the_test_backend_reads_ends_the_batch_as_the_device_gone";
+    in_child!(
+        an_io_error_the_test_backend_reads_ends_the_batch_as_the_device_gone,
+        status_child(test),
+        || a_status_read_ends_the_batch("SANE_STATUS_IO_ERROR", ScanError::Gone)
+    );
+}
+
+#[test]
+fn access_denied_at_the_test_backend_s_read_ends_the_batch_as_access_denied() {
+    let test = "access_denied_at_the_test_backend_s_read_ends_the_batch_as_access_denied";
+    in_child!(
+        access_denied_at_the_test_backend_s_read_ends_the_batch_as_access_denied,
+        status_child(test),
+        || a_status_read_ends_the_batch("SANE_STATUS_ACCESS_DENIED", ScanError::AccessDenied)
     );
 }
 
@@ -644,7 +695,7 @@ fn pnm_s_files_come_page_for_page() {
     let child = real_child(test, &["pnm"], &[]).prepare({
         let files = [(pbm.clone(), PBM), (pgm.clone(), PGM), (ppm.clone(), PPM)];
         move |_| {
-            for (path, bytes) in files {
+            for (path, bytes) in &files {
                 fs::write(path, bytes).expect("couldn't write a PNM file");
             }
         }

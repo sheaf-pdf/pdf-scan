@@ -121,8 +121,8 @@ pub fn installed<T>(result: Result<T, ScanError>) -> Result<T, ScanError> {
     }
 }
 
-/// Work for the parent alone, run as the child is spawned.
-type Preparation = Box<dyn FnOnce(&mut Command)>;
+/// Work for the parent alone, run as each child is spawned.
+type Preparation = Box<dyn FnMut(&mut Command)>;
 
 /// A child process to run a test's body in.
 pub struct Child {
@@ -130,6 +130,7 @@ pub struct Child {
     prepare: Vec<Preparation>,
     timeout: Duration,
     require: Option<&'static str>,
+    attempts: u32,
 }
 
 impl Default for Child {
@@ -139,6 +140,7 @@ impl Default for Child {
             prepare: Vec::new(),
             timeout: Duration::from_secs(60),
             require: None,
+            attempts: 1,
         }
     }
 }
@@ -155,9 +157,9 @@ impl Child {
         self
     }
 
-    /// Work for the parent alone (files to write, the fake to build), run as the child is
+    /// Work for the parent alone (files to write, the fake to build), run as each child is
     /// spawned, given the child's command to set variables on. Never run in the child.
-    pub fn prepare(mut self, work: impl FnOnce(&mut Command) + 'static) -> Child {
+    pub fn prepare(mut self, work: impl FnMut(&mut Command) + 'static) -> Child {
         self.prepare.push(Box::new(work));
         self
     }
@@ -174,18 +176,28 @@ impl Child {
         self
     }
 
+    /// Starts the child again where it runs past its timeout, up to `attempts` times in all,
+    /// each hang said on the standard error: for a test that meets a hang in the library it
+    /// drives, not its own, which it can't keep clear of. Any other failure fails the test at
+    /// once, and a hang at the last attempt fails it as any child's does.
+    pub fn retry_hangs(mut self, attempts: u32) -> Child {
+        self.attempts = attempts.max(1);
+        self
+    }
+
     /// Runs `body` in a child process, through [`in_child!`]. False where the child skipped
     /// ([`skip`]), so a parent with checks of its own after the child leaves them out.
     pub fn run(self, test: &str, id: rusty_fork::RustyForkId, body: impl FnOnce()) -> bool {
         let Child {
             env,
-            prepare,
+            mut prepare,
             timeout,
             require,
+            attempts,
         } = self;
-        // rusty-fork calls this in the parent alone, just before it spawns the child.
-        let configure = |command: &mut Command| {
-            for work in prepare {
+        // rusty-fork calls this in the parent alone, just before it spawns each child.
+        let mut configure = |command: &mut Command| {
+            for work in &mut prepare {
                 work(command);
             }
             for (key, value) in &env {
@@ -198,9 +210,7 @@ impl Child {
                 .wait_timeout(timeout)
                 .expect("couldn't wait for the child");
             // A child still running is killed as `fork` returns.
-            let Some(status) = status else {
-                panic!("{test}: the child ran past its timeout of {timeout:?}")
-            };
+            let status = status?;
             if status.code() == Some(SKIP) {
                 let mut text = String::new();
                 let _ = output.seek(SeekFrom::Start(0));
@@ -210,15 +220,36 @@ impl Child {
                     .find_map(|line| line.strip_prefix(SKIP_MARK))
                     .unwrap_or("it gave no reason");
                 report_skip(test, reason, require);
-                return false;
+                return Some(false);
             }
             assert!(
                 status.success(),
                 "{test}: the child failed ({status}); its output is above"
             );
-            true
+            Some(true)
         };
-        rusty_fork::fork(test, id, configure, supervise, body).expect("couldn't start the child")
+        // The child runs the body as its first `fork` is called there; the parent never runs it.
+        let mut body = Some(body);
+        for attempt in 1..=attempts {
+            let once = body.take();
+            let ran = rusty_fork::fork(test, &id, &mut configure, supervise, move || {
+                once.expect("a child runs its test's body once")();
+            })
+            .expect("couldn't start the child");
+            match ran {
+                Some(ran) => return ran,
+                None if attempt < attempts => {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "{test}: the child ran past its timeout of {timeout:?} (attempt {attempt} of {attempts}); started again"
+                    );
+                }
+                None => {}
+            }
+        }
+        panic!(
+            "{test}: the child ran past its timeout of {timeout:?}, at each of {attempts} attempts"
+        )
     }
 }
 
@@ -365,7 +396,7 @@ impl Fake {
         Child::new()
             .prepare(move |command| {
                 fresh_dir(&dir);
-                fs::write(&script, text).expect("couldn't write the fake's script");
+                fs::write(&script, &text).expect("couldn't write the fake's script");
                 command.env(LOADER_PATH, loader_path(fake_library_dir()));
             })
             .env(CONFIG_DIR_VARIABLE, &self.dir)
