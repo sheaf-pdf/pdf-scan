@@ -16,19 +16,23 @@
 //! SANE is loaded at a backend's first [`list`](crate::Backend::list) or
 //! [`open`](crate::Backend::open), never as it's made, so a worker without libsane starts and
 //! answers `NotInstalled`; where it isn't there (no library, or a system with none, as Windows),
-//! each call tries again. It's loaded once per process, whatever the number of backends: while
-//! any backend, or any device one opened, holds it, every other backend made in the process shares
-//! it, and once all are gone it ends, so the next one loads it afresh. The library is the one the
-//! system's loader finds under SANE's name, by the search the process started with, as `sane-dl`'s
-//! `Sane::load` says, and that rests on two rules of the process's environment, which it gives:
-//! every entry of the loader's search path absolute, and that path never changed inside a process
-//! using SANE. Any other failure to load is [`ScanError::Driver`].
+//! each call tries again. A library under SANE's name that the system's loader finds but can't
+//! load (one needing a library that's missing, or built for another architecture) is reported as
+//! not installed too, since the loader's answer doesn't tell the two apart. It's loaded once per
+//! process, whatever the number of backends: while any backend, or any device one opened, holds
+//! it, every other backend made in the process shares it, and once all are gone, and any listing
+//! past its deadline has returned, it ends, so the next one loads it afresh. The library is the
+//! one the system's loader finds under SANE's name, by the search the process started with, as
+//! `sane-dl`'s `Sane::load` says, and that rests on two rules of the process's environment, which
+//! it gives: every entry of the loader's search path absolute, and that path never changed inside
+//! a process using SANE. Any other failure to load is [`ScanError::Driver`].
 //!
 //! # Devices and their ids
 //!
 //! A listing gives every device SANE finds, network backends' among them, within its deadline;
 //! past it the answer is [`ScanError::TimedOut`], and every call after it too while the listing
-//! still holds SANE, so the backend is then the caller's to drop, with its process. A device's id
+//! still holds SANE, a new backend's among them, so the backend is then the caller's to drop,
+//! with its process. A device's id
 //! is `sane:` and the name SANE gives it, each of the name's bytes the character of its number
 //! (Latin-1, the charset SANE's standard gives its strings), so the name goes back to SANE byte for
 //! byte. Its name, maker and model, for people, are SANE's name, vendor and model read as UTF-8
@@ -78,7 +82,9 @@
 //! `Applied` says what it holds; one that fails then fails the batch the same way. These are the
 //! app's own choice, never a stored device's or a device's answer: an option can do anything a
 //! backend lets it (the `pnm` backend's `filename` reads any file the process can, and the `test`
-//! backend's options inject faults).
+//! backend's options inject faults). Since a name the device lacks is skipped, a misspelt
+//! `filename` leaves `pnm` reading its default, `/tmp/input.ppm`, a file any local user can put
+//! there.
 //!
 //! # What a device can do
 //!
@@ -170,11 +176,12 @@
 //! SANE has no settings window of a driver's own, so [`Device::settings_window`] is
 //! [`ScanError::Unsupported`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use in_progress::Progress;
-use sane_dl::{Call, Error, Handle, Sane, Status};
+use sane_dl::{Call, Error, Handle, LoadError, Sane, Status};
 
 use crate::{
     Backend, Caps, Device, DeviceInfo, Done, Driver, Event, Opened, ScanError, Settings,
@@ -249,23 +256,39 @@ impl SaneBackend {
 /// so every backend shares the one loaded.
 static LOADED: Mutex<Weak<Sane>> = Mutex::new(Weak::new());
 
+/// Whether a listing has passed its deadline since SANE was last loaded: it holds SANE until it
+/// returns, though every backend and device is gone.
+static LATE_LISTING: AtomicBool = AtomicBool::new(false);
+
 /// The process's SANE: the one a backend or a device holds, else loaded now. Held locked while it
-/// loads, so two backends never both load it.
+/// loads, so two backends never both load it. SANE still loaded, though none holds it, after a
+/// listing passed its deadline is that listing's, not yet returned: [`ScanError::TimedOut`], as
+/// every call is while it holds SANE.
 fn shared() -> Result<Arc<Sane>, ScanError> {
     let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(sane) = loaded.upgrade() {
         return Ok(sane);
     }
-    let sane = Arc::new(Sane::load().map_err(|error| error::load(&error))?);
+    let sane = match Sane::load() {
+        Ok(sane) => Arc::new(sane),
+        Err(LoadError::AlreadyLoaded) if LATE_LISTING.load(Ordering::Relaxed) => {
+            return Err(ScanError::TimedOut);
+        }
+        Err(error) => return Err(error::load(&error)),
+    };
+    LATE_LISTING.store(false, Ordering::Relaxed);
     *loaded = Arc::downgrade(&sane);
     Ok(sane)
 }
 
 /// Every device SANE lists within `deadline`, network backends' among them.
 fn listing(sane: &Sane, deadline: Duration) -> Result<Vec<id::Listed>, ScanError> {
-    let devices = sane
-        .devices(false, deadline)
-        .map_err(|error| error::map(&error))?;
+    let devices = sane.devices(false, deadline).map_err(|error| {
+        if matches!(error, Error::DeadlineExceeded) {
+            LATE_LISTING.store(true, Ordering::Relaxed);
+        }
+        error::map(&error)
+    })?;
     Ok(devices
         .into_iter()
         .map(|device| {

@@ -613,7 +613,9 @@ fn the_test_backend_s_flatbed_gives_one_page_letter_cut_to_its_area() {
     );
 }
 
-/// A 5 by 3 PGM, every byte its own.
+/// A 5 by 3 PGM, every byte its own. At 8 bits a sample, as are all the files here: SANE 1.4.0's
+/// `pnm` announces a 16-bit file's frames as 8-bit and sends twice the bytes, so its batch fails
+/// as the driver's words, a fault of the backend's.
 const PGM: &[u8] = b"P5\n5 3\n255\n\x00\x01\x02\x03\x04\x40\x41\x42\x43\x44\xf0\xf1\xf2\xf3\xff";
 
 /// A 4 by 2 PPM.

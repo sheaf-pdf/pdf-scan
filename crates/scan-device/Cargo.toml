@@ -8,7 +8,8 @@ description = "A device model for document scanners, one shape whatever driver A
 repository = "https://github.com/sheaf-pdf/pdf-scan"
 # Provisional: the model may change until a second driver API has been
 # through it, and then it's made ready to publish (keywords, categories,
-# the package's contents and a changelog come then).
+# the package's contents, a changelog, and docs.rs metadata building every
+# feature, since none is on by default, come then).
 publish = false
 
 [dependencies]

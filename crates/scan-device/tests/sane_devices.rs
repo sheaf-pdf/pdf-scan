@@ -8,6 +8,7 @@
 #[macro_use]
 mod sane_support;
 
+use std::thread;
 use std::time::{Duration, Instant};
 
 use sane_support::{Fake, FakeLog, assert_fake_loaded};
@@ -192,6 +193,48 @@ fn a_listing_past_its_deadline_is_timed_out_and_so_is_every_call_while_it_holds_
         log.assert_no_violations();
         assert_eq!(log.calls_of("sane_get_devices").len(), 1);
         assert!(log.calls_of("sane_open").is_empty());
+    }
+}
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn a_new_backend_while_a_late_listing_holds_sane_is_timed_out_until_it_returns() {
+    let script = "listing-delay 1500 0\ndevice fake:0 Fake Scanner T\n";
+    let fake = Fake::new(
+        "a_new_backend_while_a_late_listing_holds_sane_is_timed_out_until_it_returns",
+        script,
+    );
+    let ran = in_child!(
+        a_new_backend_while_a_late_listing_holds_sane_is_timed_out_until_it_returns,
+        fake.child(),
+        || {
+            let mut first = SaneBackend::new();
+            assert_eq!(
+                first.list(Duration::from_millis(200)),
+                Err(ScanError::TimedOut)
+            );
+            drop(first);
+            // No backend holds SANE, but the listing does until it returns: a new backend
+            // can't load it, and says so as the first did.
+            assert_eq!(SaneBackend::new().list(SOON), Err(ScanError::TimedOut));
+            // Once it has returned, SANE has ended, and a new backend loads it afresh.
+            let given_up = Instant::now() + Duration::from_secs(10);
+            let listed = loop {
+                match SaneBackend::new().list(SOON) {
+                    Err(ScanError::TimedOut) if Instant::now() < given_up => {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    other => break other,
+                }
+            };
+            assert_eq!(listed.map(|devices| devices.len()), Ok(1));
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        assert_eq!(log.calls_of("sane_init").len(), 2);
+        assert_eq!(log.calls_of("sane_get_devices").len(), 2);
     }
 }
 
