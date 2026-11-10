@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
-description = "A stand-in for libsane that sane-dl's tests load: scripted devices, hostile values, and SANE's calling rules checked"
+description = "A stand-in for libsane that the tests of sane-dl and of scan-device's sane backend load: scripted devices, hostile values, and SANE's calling rules checked"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
 # Never published, and no crate depends on it, of any kind: tests build it
 # and load the shared object as SANE, through the system loader's search
