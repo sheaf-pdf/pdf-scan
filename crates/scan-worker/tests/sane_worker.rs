@@ -590,7 +590,7 @@ fn letter_at_300_dpi_from_the_fake_through_a_worker_measured() {
         "release"
     };
     // Letter at 300 dpi is 2550 by 3300 pixels: color at 8 bits, and gray at 1 bit (319 bytes a
-    // row, its last pixel's six bits padding).
+    // row, its last byte six pixels then two bits of padding).
     for (format, frame, page_bytes) in [
         (
             Format::Rgb8,
