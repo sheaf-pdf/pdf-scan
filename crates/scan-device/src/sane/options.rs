@@ -42,6 +42,9 @@ pub(super) const DEPTH: &str = "depth";
 /// `y-resolution` set alike (NAPS2's `SaneScanDriver.cs`).
 pub(super) const RESOLUTION: [&str; 3] = ["resolution", "scan-resolution", "x-resolution"];
 
+/// The resolution down the page, set alike where the resolution option is `x-resolution`.
+pub(super) const Y_RESOLUTION: &str = "y-resolution";
+
 /// The scan area's corners (the standard's).
 pub(super) const TL_X: &str = "tl-x";
 /// The scan area's top.
@@ -297,7 +300,7 @@ pub(super) fn depths(depth: &OptionDescriptor) -> Vec<u32> {
 
 /// Whether an option's constraint allows `value`: within a range, on its step from its least, or
 /// in a word list. An option with no such constraint allows nothing here.
-fn allows(option: &OptionDescriptor, value: f64) -> bool {
+pub(super) fn allows(option: &OptionDescriptor, value: f64) -> bool {
     match &option.constraint {
         Constraint::Range { min, max, quant } => {
             let (Some(min), Some(max), Some(quant)) = (
@@ -447,6 +450,71 @@ pub(super) fn length_mm(option: &OptionDescriptor, end: End, dpi: Option<f64>) -
     match option.unit {
         Unit::Mm => Some(value),
         Unit::Pixel => dpi.filter(|&dpi| dpi > 0.0).map(|dpi| value / dpi * 25.4),
+        _ => None,
+    }
+}
+
+/// A length an area option holds, `value` in its unit, in millimetres: as it is in millimetres,
+/// converted at `dpi` in pixels; `None` for another unit, or pixels with no resolution above 0.
+pub(super) fn value_mm(option: &OptionDescriptor, value: f64, dpi: Option<f64>) -> Option<f64> {
+    match option.unit {
+        Unit::Mm => Some(value),
+        Unit::Pixel => dpi.filter(|&dpi| dpi > 0.0).map(|dpi| value / dpi * 25.4),
+        _ => None,
+    }
+}
+
+/// `mm` millimetres as a value of an area option, in its unit (pixels converted at `dpi`) and of
+/// its type, in each of its words: an `INT`'s rounded. `None` where the unit isn't one of those,
+/// or the number doesn't fit the type.
+pub(super) fn mm_value(option: &OptionDescriptor, mm: f64, dpi: Option<f64>) -> Option<Value> {
+    let length = match option.unit {
+        Unit::Mm => mm,
+        Unit::Pixel => mm / 25.4 * dpi.filter(|&dpi| dpi > 0.0)?,
+        _ => return None,
+    };
+    number_value(option, length)
+}
+
+/// `value` as a value of a numeric option, in each of its words: an `INT`'s rounded to the
+/// nearest, a `FIXED`'s to the nearest step; `None` where it doesn't fit the type, or the option
+/// isn't a number.
+pub(super) fn number_value(option: &OptionDescriptor, value: f64) -> Option<Value> {
+    let words = option.word_count().max(1);
+    match option.value_type {
+        ValueType::Int => {
+            let rounded = value.round();
+            // NaN fails both comparisons.
+            (rounded >= f64::from(i32::MIN) && rounded <= f64::from(i32::MAX))
+                .then(|| Value::Int(vec![rounded as i32; words]))
+        }
+        ValueType::Fixed => Fixed::from_f64(value).map(|fixed| Value::Fixed(vec![fixed; words])),
+        _ => None,
+    }
+}
+
+/// The least value a numeric option's constraint allows, as a value of it, in each of its words:
+/// a range's least, a word list's; 0 where it has no such constraint.
+pub(super) fn least_value(option: &OptionDescriptor) -> Option<Value> {
+    let words = option.word_count().max(1);
+    let least = match &option.constraint {
+        Constraint::Range { min, .. } => *min,
+        // A fixed-point word orders as its number does.
+        Constraint::WordList(list) => list.iter().copied().min().unwrap_or(0),
+        _ => 0,
+    };
+    match option.value_type {
+        ValueType::Int => Some(Value::Int(vec![least; words])),
+        ValueType::Fixed => Some(Value::Fixed(vec![Fixed(least); words])),
+        _ => None,
+    }
+}
+
+/// The first word of a numeric value, as a number; `None` for another value.
+pub(super) fn first_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int(words) => words.first().map(|&word| f64::from(word)),
+        Value::Fixed(words) => words.first().map(|word| word.to_f64()),
         _ => None,
     }
 }

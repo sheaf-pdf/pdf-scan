@@ -8,7 +8,7 @@ use crate::{Caps, Format, Resolutions, ScanError, Source, SourceCaps};
 
 /// The resolution taken where a device has no resolution option: 72 dpi, what image software
 /// takes where a file gives none.
-const NO_RESOLUTION_OPTION: u32 = 72;
+pub(super) const NO_RESOLUTION_OPTION: u32 = 72;
 
 /// What the device behind `handle` can do, read afresh from its descriptors.
 ///
@@ -32,19 +32,19 @@ pub(super) fn read(handle: &mut Handle) -> Result<Caps, ScanError> {
     Ok(Caps::new(sources))
 }
 
-/// The option that chooses the source, as far as caps need it.
-struct SourceOption {
+/// The option that chooses the source, as far as caps and a batch's settings need it.
+pub(super) struct SourceOption {
     /// Its name.
-    name: String,
+    pub name: String,
     /// The values it lists; none where it has no list.
-    values: Vec<SaneString>,
+    pub values: Vec<SaneString>,
     /// Whether software can set it now; where it can't, it's read as it is, as one with one
     /// value.
-    settable: bool,
+    pub settable: bool,
 }
 
 /// The device's source option, where it has one it can read now: a string option.
-fn source_option(handle: &Handle) -> Option<SourceOption> {
+pub(super) fn source_option(handle: &Handle) -> Option<SourceOption> {
     let option = options::SOURCE
         .iter()
         .find_map(|name| handle.find_option(name))?;
@@ -156,7 +156,7 @@ fn read_source(handle: &mut Handle, source: Source) -> Result<Option<SourceCaps>
 
 /// The formats the source set now gives: from its modes and depths, or from its parameters
 /// before a start where it has no mode option.
-fn formats(handle: &mut Handle) -> Result<Vec<Format>, ScanError> {
+pub(super) fn formats(handle: &mut Handle) -> Result<Vec<Format>, ScanError> {
     let Some(mode) = handle.find_option(options::MODE) else {
         let parameters = handle.parameters().map_err(|error| error::map(&error))?;
         return Ok(options::format_of(&parameters).into_iter().collect());
@@ -167,7 +167,7 @@ fn formats(handle: &mut Handle) -> Result<Vec<Format>, ScanError> {
 }
 
 /// The options the largest area is read from.
-struct Area {
+pub(super) struct Area {
     /// A feeder's page size, where both are active: its width and length.
     page: Option<(OptionDescriptor, OptionDescriptor)>,
     /// The scan area's corners, where the bottom right ones are active: top left (where there are
@@ -182,7 +182,7 @@ struct Area {
 
 impl Area {
     /// The area options of the source set now.
-    fn of(handle: &Handle, source: Source) -> Area {
+    pub(super) fn of(handle: &Handle, source: Source) -> Area {
         let active = |name: &str| {
             handle
                 .find_option(name)
@@ -224,7 +224,7 @@ impl Area {
     /// The largest area: a feeder's page size's greatest, else the bottom right corner's greatest
     /// less the top left's least (0 where there's no top left), lengths in pixels converted at
     /// `dpi`. `None` where there are no area options, or the area isn't finite and above 0.
-    fn largest(&self, dpi: Option<f64>) -> Option<crate::SizeMm> {
+    pub(super) fn largest(&self, dpi: Option<f64>) -> Option<crate::SizeMm> {
         if let Some((width, height)) = &self.page {
             return options::area(
                 options::length_mm(width, End::Max, dpi)?,
@@ -244,7 +244,7 @@ impl Area {
 }
 
 /// A numeric option's value now, its first word, as a number.
-fn current_number(
+pub(super) fn current_number(
     handle: &mut Handle,
     option: &OptionDescriptor,
 ) -> Result<Option<f64>, ScanError> {
@@ -259,7 +259,7 @@ fn current_number(
 }
 
 /// A string option's value now, found by its name.
-fn get_string(handle: &mut Handle, name: &str) -> Result<SaneString, ScanError> {
+pub(super) fn get_string(handle: &mut Handle, name: &str) -> Result<SaneString, ScanError> {
     let index = index_of(handle, name)?;
     match handle.get(index).map_err(|error| error::map(&error))? {
         Value::String(value) => Ok(value),
@@ -271,7 +271,11 @@ fn get_string(handle: &mut Handle, name: &str) -> Result<SaneString, ScanError> 
 }
 
 /// Sets a string option, found by its name, to `value`.
-fn set_string(handle: &mut Handle, name: &str, value: &SaneString) -> Result<(), ScanError> {
+pub(super) fn set_string(
+    handle: &mut Handle,
+    name: &str,
+    value: &SaneString,
+) -> Result<(), ScanError> {
     let index = index_of(handle, name)?;
     handle
         .set(index, &Value::String(value.clone()))
@@ -280,7 +284,7 @@ fn set_string(handle: &mut Handle, name: &str, value: &SaneString) -> Result<(),
 }
 
 /// The number of the option named `name`, which the device described a moment ago.
-fn index_of(handle: &Handle, name: &str) -> Result<usize, ScanError> {
+pub(super) fn index_of(handle: &Handle, name: &str) -> Result<usize, ScanError> {
     handle
         .find_option(name)
         .map(|option| option.index)

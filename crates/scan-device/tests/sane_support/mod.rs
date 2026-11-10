@@ -24,6 +24,11 @@
 //! of its own ([`fake_library_dir`]), and spawns the child with the system loader's search path
 //! naming that directory first (`LD_LIBRARY_PATH`; `DYLD_LIBRARY_PATH` on macOS). Windows has no
 //! default library, so no route to the fake: each test that loads it is ignored there, saying why.
+//!
+//! For batches: a batch run with its events taken on a thread of their own ([`batch_with`]) and
+//! what they were; the fake's bytes as its crate docs give them ([`fake_pixels`], as `sane-dl`'s
+//! helper has it); and a progress that records what a batch counts on it, paced for SANE's `test`
+//! backend as `sane-dl`'s `tests/scan_real.rs` paces it where it's made so ([`Recorder`]).
 
 // Each test binary uses some of these.
 #![allow(dead_code)]
@@ -34,11 +39,15 @@ use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
+use std::thread;
 use std::time::Duration;
 
 use sane_dl::{CONFIG_DIR_VARIABLE, ConfigDir, Sane, Search};
-use scan_device::ScanError;
+use scan_device::in_progress::{Level, Progress, Tracker, Unit};
+use scan_device::{
+    Applied, Device, Done, Event, Format, Pixels, RawPage, ScanError, Settings, Source,
+};
 
 /// The variable naming the directories the system loader searches first for a library loaded by
 /// name, read as the process starts.
@@ -482,6 +491,54 @@ impl FakeLog {
             .filter_map(|rest| rest.split_once(" value=").map(|(_, value)| value))
             .collect()
     }
+
+    /// Each set of an option, in order: the option's number and the value given, as the log
+    /// shows it (a string quoted, numbers as `[n]`).
+    pub fn option_sets(&self) -> Vec<(usize, &str)> {
+        self.calls_of("sane_control_option")
+            .into_iter()
+            .filter(|rest| rest.contains(" action=SET"))
+            .filter_map(|rest| {
+                let (_, option) = rest.split_once("option=")?;
+                let (number, _) = option.split_once(' ')?;
+                let (_, value) = rest.split_once(" value=")?;
+                Some((number.parse().ok()?, value))
+            })
+            .collect()
+    }
+
+    /// Where, among the log's lines, each `call` of `function` is.
+    pub fn positions_of(&self, function: &str) -> Vec<usize> {
+        self.lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.kind == "call" && line.function == function)
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// Where, among the log's lines, each set of option `option` is.
+    pub fn positions_of_sets(&self, option: usize) -> Vec<usize> {
+        let wanted = format!("option={option} action=SET");
+        self.lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.kind == "call"
+                    && line.function == "sane_control_option"
+                    && line.rest.contains(&wanted)
+            })
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// How many reads answered `EOF`: a frame read to its end each.
+    pub fn frames_ended(&self) -> usize {
+        self.returns_of("sane_read")
+            .into_iter()
+            .filter(|rest| rest.starts_with("status=EOF"))
+            .count()
+    }
 }
 
 /// A child for a test of the real libsane: its `SANE_CONFIG_DIR` an isolated configuration
@@ -545,4 +602,208 @@ fn write_files(dir: &Path, files: &[(String, String)]) {
     for (name, text) in files {
         fs::write(dir.join(name), text).expect("couldn't write a configuration file");
     }
+}
+
+/// The fake's bytes of a frame, its padding dropped, as its crate docs say it sends them: page
+/// `page` (from 1, counted since the device opened), a back if `back`, frame `frame` (from 0),
+/// `rows` rows of `pixel_bytes` bytes. As `sane-dl`'s helper has it.
+pub fn fake_pixels(
+    page: usize,
+    back: bool,
+    frame: usize,
+    pixel_bytes: usize,
+    rows: usize,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(rows * pixel_bytes);
+    for row in 0..rows {
+        for column in 0..pixel_bytes {
+            bytes.push(if row == 0 && column == 0 {
+                if back { b'B' } else { b'F' }
+            } else {
+                ((page * 31 + frame * 7 + row * 3 + column) % 251) as u8
+            });
+        }
+    }
+    bytes
+}
+
+/// What a batch counted on a [`Recorder`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Count {
+    /// `set_total`, in bytes.
+    Total(Option<u64>),
+    /// `set`.
+    Done(u64),
+}
+
+/// A progress that records each count a batch makes on it, and is cancelled through its tracker;
+/// paced, where it's made so, as `sane-dl`'s `tests/scan_real.rs` paces SANE's `test` backend.
+///
+/// Paced, it pauses a moment after each frame's first read: with the `test` backend's reads
+/// limited to 64 bytes (its `read-limit` and `read-limit-size`, in the test's `test.conf`), a
+/// frame's end comes long after the backend's reader thread has written the frame and exited,
+/// clear of a race in the backend (1.4.0, built with threads) that can block its next frame for
+/// good.
+#[derive(Default)]
+pub struct Recorder {
+    pub tracker: Tracker,
+    counts: Mutex<Vec<Count>>,
+    /// Whether it's paced, and if so, the bytes of each frame of a page (a three-pass page's), or
+    /// `None` for pages of one frame.
+    pace: Option<Option<u64>>,
+    /// The frame of the page being read whose first read has come.
+    frame: Mutex<Option<u64>>,
+}
+
+impl Recorder {
+    pub fn new() -> Recorder {
+        Recorder::default()
+    }
+
+    /// A recorder paced for the `test` backend, each page's frames `frame_bytes` long where
+    /// given, else each page one frame.
+    pub fn paced(frame_bytes: Option<u64>) -> Recorder {
+        Recorder {
+            pace: Some(frame_bytes),
+            ..Recorder::default()
+        }
+    }
+
+    /// The counts, in order.
+    pub fn counts(&self) -> Vec<Count> {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn record(&self, count: Count) {
+        self.counts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(count);
+    }
+}
+
+impl Progress for Recorder {
+    fn set_total(&self, total: Option<u64>, unit: Unit) {
+        assert_eq!(unit, Unit::Bytes, "a batch counts bytes");
+        self.record(Count::Total(total));
+        self.tracker.set_total(total, unit);
+    }
+    fn set(&self, done: u64) {
+        self.record(Count::Done(done));
+        self.tracker.set(done);
+        let Some(frame_bytes) = self.pace else {
+            return;
+        };
+        let mut last = self.frame.lock().unwrap_or_else(PoisonError::into_inner);
+        if done == 0 {
+            // A page begins.
+            *last = None;
+            return;
+        }
+        let frame = frame_bytes.map_or(0, |bytes| (done - 1) / bytes);
+        if *last != Some(frame) {
+            *last = Some(frame);
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    fn inc(&self, n: u64) {
+        self.tracker.inc(n);
+    }
+    fn message(&self, level: Level, msg: &str) {
+        self.tracker.message(level, msg);
+    }
+    fn is_cancelled(&self) -> bool {
+        self.tracker.is_cancelled()
+    }
+    fn child(&self, name: &str, weight: f64) -> Box<dyn Progress> {
+        self.tracker.child(name, weight)
+    }
+}
+
+/// Settings from `source`, at `dpi`, in `format`, `duplex` or not; the paper's size the driver's.
+pub fn settings(source: Source, duplex: bool, dpi: u32, format: Format) -> Settings {
+    let mut settings = Settings::new(source, dpi, format);
+    settings.duplex = duplex;
+    settings
+}
+
+/// A batch on a rendezvous channel, its events taken on a thread of their own as they come, each
+/// given to `on_event` as it's taken; the events and how it ended. `on_event` answering false
+/// drops the receiver there.
+pub fn batch_with(
+    device: &mut dyn Device,
+    settings: &Settings,
+    first_sheet: u32,
+    progress: &dyn Progress,
+    mut on_event: impl FnMut(&Event) -> bool + Send,
+) -> (Vec<Event>, Result<Done, ScanError>) {
+    let (events, received) = mpsc::sync_channel(0);
+    thread::scope(|scope| {
+        let taker = scope.spawn(move || {
+            let mut taken = Vec::new();
+            for event in received {
+                let more = on_event(&event);
+                taken.push(event);
+                if !more {
+                    break;
+                }
+            }
+            taken
+        });
+        let done = device.scan(settings, first_sheet, &events, progress);
+        drop(events);
+        (taker.join().expect("the events' thread"), done)
+    })
+}
+
+/// A batch whose events are all taken.
+pub fn batch(
+    device: &mut dyn Device,
+    settings: &Settings,
+    first_sheet: u32,
+) -> (Vec<Event>, Result<Done, ScanError>) {
+    batch_with(device, settings, first_sheet, &Tracker::new(), |_| true)
+}
+
+/// The events, briefly: `applied`, `sheet n`, `page n front`.
+pub fn order(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event {
+            Event::Applied(_) => "applied".to_owned(),
+            Event::Sheet(sheet) => format!("sheet {sheet}"),
+            Event::Page(page) => format!("page {} {:?}", page.sheet, page.side).to_lowercase(),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+/// The batch's `Applied`.
+pub fn applied(events: &[Event]) -> &Applied {
+    match events.first() {
+        Some(Event::Applied(applied)) => applied,
+        other => panic!("the first event isn't Applied: {other:?}"),
+    }
+}
+
+/// The batch's pages.
+pub fn pages(events: &[Event]) -> Vec<&RawPage> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Page(page) => Some(page),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A page's raw image: its format, width, height and bytes.
+pub fn image(page: &RawPage) -> (Format, u32, u32, &[u8]) {
+    let Pixels::Raw(image) = &page.pixels else {
+        panic!("not a raw page: {page:?}");
+    };
+    (image.format(), image.width(), image.height(), image.data())
 }

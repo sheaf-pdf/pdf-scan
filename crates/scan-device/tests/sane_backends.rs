@@ -1,9 +1,12 @@
-//! The `sane` backend's devices through SANE's own `test` and `pnm` backends: listed, opened and
-//! what each can do, an option set by name, a device opened once at a time; and the
-//! configuration of a worker that opens a stored device, a directory naming its backend then one
-//! standing for the system's, never the system's own: aliases opened through it, a stale index
-//! gone, and an alias whose target is gone listed after it's opened. Each test runs in a child
-//! process of its own; where there's no libsane, each says it skipped, or fails where
+//! The `sane` backend through SANE's own `test` and `pnm` backends: devices listed, opened and
+//! what each can do, an option set by name, a device opened once at a time; the configuration of
+//! a worker that opens a stored device, a directory naming its backend then one standing for the
+//! system's, never the system's own: aliases opened through it, a stale index gone, and an alias
+//! whose target is gone listed after it's opened. And batches: the `test` backend's feeder of ten
+//! sheets, again and again; its five formats in the raw layout; a hand scanner's unknown height;
+//! three-pass color in each order; the statuses it's made to read; a cancel; a flatbed's one page
+//! and Letter cut to its area; and `pnm`'s files, page for page. Each test runs in a child process
+//! of its own; where there's no libsane, each says it skipped, or fails where
 //! `SANE_DL_REQUIRE_LIBSANE=1`.
 
 #[macro_use]
@@ -12,10 +15,14 @@ mod sane_support;
 use std::fs;
 use std::time::Duration;
 
-use sane_support::{installed, real_child, stand_in_child, test_dir};
+use sane_support::{
+    Count, Recorder, applied, batch_with, image, installed, order, pages, real_child, settings,
+    stand_in_child, test_dir,
+};
 use scan_device::sane::SaneBackend;
 use scan_device::{
-    Backend, DeviceId, DeviceInfo, Driver, Format, Resolutions, ScanError, SizeMm, Source,
+    Applied, Backend, Clamped, Device, DeviceId, DeviceInfo, Done, Driver, Event, Format, Paper,
+    Resolutions, ScanError, Settings, SizeMm, Source,
 };
 
 /// A deadline no listing of these backends comes near.
@@ -298,4 +305,385 @@ fn on_windows_sane_isn_t_installed() {
     assert_eq!(opened.map(|opened| opened.info), Err(not_installed));
     let bad = backend.open(&tester("sane::0"), SOON);
     assert_eq!(bad.map(|opened| opened.info), Err(ScanError::BadId));
+}
+
+/// The `test` backend's configuration for batches: two devices, its reads limited to 64 bytes, as
+/// a paced [`Recorder`] needs.
+const PACED: &str = "number_of_devices 2\nread-limit true\nread-limit-size 64\n";
+
+/// The `test` backend's own scan area at its first values, 80 by 100 mm: 31 by 39 pixels at 10
+/// dpi.
+const SMALL: SizeMm = SizeMm {
+    width: 80.0,
+    height: 100.0,
+};
+
+/// `test:0`, opened by `backend`; a skip where there's no SANE.
+fn open_tester(backend: &mut SaneBackend) -> Box<dyn Device> {
+    installed(backend.open(&tester("sane:test:0"), SOON))
+        .unwrap()
+        .device
+}
+
+/// A batch paced for the `test` backend, every event taken: each page's frames `frame_bytes`
+/// long where given.
+fn paced(
+    device: &mut dyn Device,
+    settings: &Settings,
+    first_sheet: u32,
+    frame_bytes: Option<u64>,
+) -> (Vec<Event>, Result<Done, ScanError>) {
+    let progress = Recorder::paced(frame_bytes);
+    batch_with(device, settings, first_sheet, &progress, |_| true)
+}
+
+/// Each page's sheet.
+fn sheets(events: &[Event]) -> Vec<u32> {
+    pages(events).iter().map(|page| page.sheet).collect()
+}
+
+#[test]
+fn the_test_backend_s_feeder_gives_10_pages_then_is_empty_then_10_more() {
+    let test = "the_test_backend_s_feeder_gives_10_pages_then_is_empty_then_10_more";
+    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+    in_child!(
+        the_test_backend_s_feeder_gives_10_pages_then_is_empty_then_10_more,
+        child,
+        || {
+            let mut device = open_tester(&mut SaneBackend::new());
+            let asked = settings(Source::Feeder, false, 10, Format::Gray8);
+            let (events, done) = paced(&mut *device, &asked, 1, None);
+            assert_eq!(done, Ok(Done::FeederEmpty));
+            // The paper the driver's: the largest area, 200 by 200 mm, said.
+            let mut taken = asked.clone();
+            taken.paper = Paper::Size(SizeMm {
+                width: 200.0,
+                height: 200.0,
+            });
+            assert_eq!(
+                *applied(&events),
+                Applied::new(taken, vec![Clamped::Paper(Paper::Auto)])
+            );
+            assert_eq!(sheets(&events), (1..=10).collect::<Vec<_>>());
+            for page in pages(&events) {
+                // 200 mm at 10 dpi, the whole pixels of 78.7; its first picture solid black.
+                let (format, width, height, data) = image(page);
+                assert_eq!((format, width, height), (Format::Gray8, 78, 78));
+                assert!(data.iter().all(|&byte| byte == 0));
+                assert_eq!(page.dpi, (10.0, 10.0));
+            }
+            let (events, done) = paced(&mut *device, &asked, 11, None);
+            assert_eq!(done, Ok(Done::FeederEmpty));
+            assert_eq!(sheets(&events), (11..=20).collect::<Vec<_>>());
+        }
+    );
+}
+
+/// The longest run of samples, along the rows, each the one before plus `step`, the samples read
+/// as little-endian.
+fn longest_run(data: &[u8], width: usize, step: u16) -> usize {
+    let samples: Vec<u16> = data
+        .chunks(2)
+        .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
+        .collect();
+    let mut longest = 0;
+    for row in samples.chunks(width) {
+        let mut run = 0;
+        for pair in row.windows(2) {
+            run = if pair[1] == pair[0].wrapping_add(step) {
+                run + 1
+            } else {
+                0
+            };
+            longest = longest.max(run);
+        }
+    }
+    longest
+}
+
+#[test]
+fn the_test_backend_s_five_formats_in_the_raw_layout() {
+    let test = "the_test_backend_s_five_formats_in_the_raw_layout";
+    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+    in_child!(
+        the_test_backend_s_five_formats_in_the_raw_layout,
+        child,
+        || {
+            let scan = |picture: &str, format: Format, paper: Paper| {
+                let mut backend = SaneBackend::new().with_option("test-picture", picture);
+                let mut device = open_tester(&mut backend);
+                let mut asked = settings(Source::Flatbed, false, 10, format);
+                asked.paper = paper;
+                let (events, done) = paced(&mut *device, &asked, 1, None);
+                assert_eq!(done, Ok(Done::OnePage), "{picture} in {format:?}");
+                // As asked, the driver's paper aside: the largest area.
+                let applied = applied(&events);
+                assert_eq!(
+                    (applied.settings.format, applied.settings.dpi),
+                    (format, 10)
+                );
+                let auto = [Clamped::Paper(Paper::Auto)];
+                assert_eq!(applied.clamped, auto[..usize::from(paper == Paper::Auto)]);
+                let (got, width, height, data) = image(pages(&events)[0]);
+                assert_eq!(got, format);
+                (width, height, data.to_vec())
+            };
+            let small = Paper::Size(SMALL);
+            // Gray at 1 bit, black and white: 0 black, and the bits past the last pixel 0. 31
+            // pixels a row: four bytes, the last bit of each row padding.
+            let (width, height, black) = scan("Solid black", Format::Bw1, small);
+            assert_eq!((width, height), (31, 39));
+            assert!(black.iter().all(|&byte| byte == 0));
+            let (_, _, white) = scan("Solid white", Format::Bw1, small);
+            assert_eq!(white, [0xff, 0xff, 0xff, 0xfe].repeat(39));
+            let (width, height, gray) = scan("Color pattern", Format::Gray8, small);
+            assert_eq!((width, height, gray.len()), (31, 39, 31 * 39));
+            let (width, height, color) = scan("Color pattern", Format::Rgb8, small);
+            assert_eq!((width, height, color.len()), (31, 39, 31 * 39 * 3));
+            let (width, height, color16) = scan("Color pattern", Format::Rgb16, small);
+            assert_eq!((width, height, color16.len()), (31, 39, 31 * 39 * 6));
+            // At 16 bits, little-endian: the pattern's gray at its largest area runs along its rows
+            // in steps of 256 read so, where read the other way the steps would be 1.
+            let (width, height, gray16) = scan("Color pattern", Format::Gray16, Paper::Auto);
+            assert_eq!((width, height, gray16.len()), (78, 78, 78 * 78 * 2));
+            assert!(longest_run(&gray16, 78, 256) >= 40);
+            assert_eq!(longest_run(&gray16, 78, 1), 0);
+        }
+    );
+}
+
+#[test]
+fn the_test_backend_as_a_hand_scanner_gives_a_page_of_unknown_height() {
+    let test = "the_test_backend_as_a_hand_scanner_gives_a_page_of_unknown_height";
+    let conf = format!("{PACED}hand-scanner true\n");
+    let child = real_child(test, &["test"], &[("test.conf", &conf)]);
+    in_child!(
+        the_test_backend_as_a_hand_scanner_gives_a_page_of_unknown_height,
+        child,
+        || {
+            let mut device = open_tester(&mut SaneBackend::new());
+            let asked = settings(Source::Flatbed, false, 10, Format::Gray8);
+            let progress = Recorder::paced(None);
+            let (events, done) = batch_with(&mut *device, &asked, 1, &progress, |_| true);
+            assert_eq!(done, Ok(Done::OnePage));
+            // Its fixed width, 11 cm.
+            let (format, width, height, data) = image(pages(&events)[0]);
+            assert_eq!((format, width), (Format::Gray8, 43));
+            assert!(height > 0);
+            // No total until the page ended, then its bytes.
+            let counts = progress.counts();
+            let (last, before) = counts.split_last().unwrap();
+            assert_eq!(*last, Count::Total(Some(data.len() as u64)));
+            assert!(
+                before
+                    .iter()
+                    .all(|count| matches!(count, Count::Total(None) | Count::Done(_))),
+                "{counts:?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn the_test_backend_s_three_pass_color_in_each_order_is_its_one_pass_color() {
+    let test = "the_test_backend_s_three_pass_color_in_each_order_is_its_one_pass_color";
+    let conf = format!("{PACED}three-pass true\ntest-picture \"Color pattern\"\n");
+    let child = real_child(test, &["test"], &[("test.conf", &conf)]);
+    in_child!(
+        the_test_backend_s_three_pass_color_in_each_order_is_its_one_pass_color,
+        child,
+        || {
+            let mut asked = settings(Source::Flatbed, false, 10, Format::Rgb8);
+            asked.paper = Paper::Size(SMALL);
+            // A page, and whether it came as three frames of a third of its bytes each: read 64
+            // bytes at a time, a frame of 1,209 ends its own read, which one of 3,627 never
+            // gives.
+            let page = |backend: SaneBackend, frame_bytes: Option<u64>| {
+                let mut backend = backend;
+                let mut device = open_tester(&mut backend);
+                let progress = Recorder::paced(frame_bytes);
+                let (events, done) = batch_with(&mut *device, &asked, 1, &progress, |_| true);
+                assert_eq!(done, Ok(Done::OnePage));
+                let (format, width, height, data) = image(pages(&events)[0]);
+                assert_eq!((format, width, height), (Format::Rgb8, 31, 39));
+                let third = data.len() as u64 / 3;
+                let counts = progress.counts();
+                let three = [third, 2 * third]
+                    .iter()
+                    .all(|&end| counts.contains(&Count::Done(end)));
+                (data.to_vec(), three)
+            };
+            // Three-pass is on from the configuration, and set off by name: an option inactive
+            // as the device opens, in gray, and set at the batch, once the mode is color.
+            let (one, three) = page(SaneBackend::new().with_option("three-pass", "false"), None);
+            assert!(!three);
+            let frame_bytes = Some(one.len() as u64 / 3);
+            for order in ["RGB", "RBG", "GBR", "GRB", "BRG", "BGR"] {
+                let backend = SaneBackend::new().with_option("three-pass-order", order);
+                assert_eq!(page(backend, frame_bytes), (one.clone(), true), "{order}");
+            }
+        }
+    );
+}
+
+#[test]
+fn the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them() {
+    let test = "the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them";
+    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+    in_child!(
+        the_statuses_the_test_backend_reads_end_a_batch_as_the_model_names_them,
+        child,
+        || {
+            let asked = settings(Source::Feeder, false, 10, Format::Gray8);
+            for (status, ended) in [
+                ("SANE_STATUS_JAMMED", ScanError::Jammed),
+                ("SANE_STATUS_COVER_OPEN", ScanError::CoverOpen),
+                // At the first page's first read: the feeder empty as the batch began.
+                ("SANE_STATUS_NO_DOCS", ScanError::FeederEmpty),
+                ("SANE_STATUS_IO_ERROR", ScanError::Gone),
+                ("SANE_STATUS_ACCESS_DENIED", ScanError::AccessDenied),
+            ] {
+                let mut backend = SaneBackend::new().with_option("read-return-value", status);
+                let mut device = open_tester(&mut backend);
+                let (events, done) = paced(&mut *device, &asked, 1, None);
+                assert_eq!(done, Err(ended), "{status}");
+                assert_eq!(order(&events), ["applied"], "{status}");
+            }
+        }
+    );
+}
+
+#[test]
+fn a_cancel_as_the_test_backend_s_sheet_3_is_taken_leaves_7_for_the_next_batch() {
+    let test = "a_cancel_as_the_test_backend_s_sheet_3_is_taken_leaves_7_for_the_next_batch";
+    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+    in_child!(
+        a_cancel_as_the_test_backend_s_sheet_3_is_taken_leaves_7_for_the_next_batch,
+        child,
+        || {
+            let mut device = open_tester(&mut SaneBackend::new());
+            let mut asked = settings(Source::Feeder, false, 10, Format::Gray8);
+            asked.paper = Paper::Size(SMALL);
+            let progress = Recorder::paced(None);
+            let cancel = progress.tracker.clone();
+            // The backend's next `send` waits on the events' thread, so the cancel comes before
+            // it checks again.
+            let (events, done) = batch_with(&mut *device, &asked, 1, &progress, |event| {
+                if *event == Event::Sheet(3) {
+                    cancel.cancel();
+                }
+                true
+            });
+            assert_eq!(done, Ok(Done::Cancelled));
+            assert_eq!(sheets(&events), [1, 2, 3]);
+            let (events, done) = paced(&mut *device, &asked, 4, None);
+            assert_eq!(done, Ok(Done::FeederEmpty));
+            assert_eq!(sheets(&events), (4..=10).collect::<Vec<_>>());
+        }
+    );
+}
+
+#[test]
+fn the_test_backend_s_flatbed_gives_one_page_letter_cut_to_its_area() {
+    let test = "the_test_backend_s_flatbed_gives_one_page_letter_cut_to_its_area";
+    let child = real_child(test, &["test"], &[("test.conf", PACED)]);
+    in_child!(
+        the_test_backend_s_flatbed_gives_one_page_letter_cut_to_its_area,
+        child,
+        || {
+            let mut device = open_tester(&mut SaneBackend::new());
+            let mut asked = settings(Source::Flatbed, false, 10, Format::Gray8);
+            asked.paper = Paper::Size(SizeMm::LETTER);
+            let (events, done) = paced(&mut *device, &asked, 1, None);
+            assert_eq!(done, Ok(Done::OnePage));
+            let mut taken = asked.clone();
+            taken.paper = Paper::Size(SizeMm {
+                width: 200.0,
+                height: 200.0,
+            });
+            assert_eq!(
+                *applied(&events),
+                Applied::new(taken, vec![Clamped::Paper(asked.paper)])
+            );
+            assert_eq!(order(&events), ["applied", "sheet 1", "page 1 front"]);
+            // The area at the dpi: 200 mm at 10 dpi, 78 whole pixels each way.
+            let (_, width, height, _) = image(pages(&events)[0]);
+            assert_eq!((width, height), (78, 78));
+        }
+    );
+}
+
+/// A 5 by 3 PGM, every byte its own.
+const PGM: &[u8] = b"P5\n5 3\n255\n\x00\x01\x02\x03\x04\x40\x41\x42\x43\x44\xf0\xf1\xf2\xf3\xff";
+
+/// A 4 by 2 PPM.
+const PPM: &[u8] = b"P6\n4 2\n255\n\
+    \xff\x00\x00\x00\xff\x00\x00\x00\xff\x10\x20\x30\
+    \x01\x02\x03\x80\x90\xa0\xfe\xfd\xfc\x00\x00\x00";
+
+/// A PNM file's pixels, after its header's last line.
+fn pixels_of(file: &[u8], header_lines: usize) -> &[u8] {
+    let mut at = 0;
+    for _ in 0..header_lines {
+        at += file[at..].iter().position(|&byte| byte == b'\n').unwrap() + 1;
+    }
+    &file[at..]
+}
+
+#[test]
+fn pnm_s_files_come_page_for_page() {
+    let test = "pnm_s_files_come_page_for_page";
+    let dir = test_dir(test);
+    let (pbm, pgm, ppm) = (
+        dir.join("page.pbm"),
+        dir.join("page.pgm"),
+        dir.join("page.ppm"),
+    );
+    let child = real_child(test, &["pnm"], &[]).prepare({
+        let files = [(pbm.clone(), PBM), (pgm.clone(), PGM), (ppm.clone(), PPM)];
+        move |_| {
+            for (path, bytes) in files {
+                fs::write(path, bytes).expect("couldn't write a PNM file");
+            }
+        }
+    });
+    in_child!(pnm_s_files_come_page_for_page, child, || {
+        let scan = |backend: SaneBackend, format: Format| {
+            let mut backend = backend;
+            let mut device =
+                installed(backend.open(&stored("sane:pnm:0", "Noname", "PNM file reader"), SOON))
+                    .unwrap()
+                    .device;
+            let asked = settings(Source::Flatbed, false, 75, format);
+            let (events, done) = batch_with(&mut *device, &asked, 1, &Recorder::new(), |_| true);
+            assert_eq!(done, Ok(Done::OnePage));
+            // No area options: the driver's paper.
+            assert_eq!(*applied(&events), Applied::new(asked, Vec::new()));
+            let (got, width, height, data) = image(pages(&events)[0]);
+            assert_eq!(got, format);
+            (width, height, data.to_vec())
+        };
+        let file = |path: &std::path::Path| {
+            SaneBackend::new()
+                .with_option("filename", path.to_str().expect("the test's path is text"))
+        };
+        // The PBM's 1 black, inverted, the three bits past each row's last pixel cleared.
+        let (width, height, data) = scan(file(&pbm), Format::Bw1);
+        assert_eq!((width, height), (13, 3));
+        let expected: Vec<u8> = pixels_of(PBM, 2)
+            .chunks(2)
+            .flat_map(|row| [!row[0], !row[1] & 0xf8])
+            .collect();
+        assert_eq!(data, expected);
+        assert_eq!(data, [0x55, 0x40, 0xaa, 0xb8, 0x00, 0x00]);
+        let (width, height, data) = scan(file(&pgm), Format::Gray8);
+        assert_eq!((width, height), (5, 3));
+        assert_eq!(data, pixels_of(PGM, 3));
+        let (width, height, data) = scan(file(&ppm), Format::Rgb8);
+        assert_eq!((width, height), (4, 2));
+        assert_eq!(data, pixels_of(PPM, 3));
+        // Three frames, green, blue and red, set by name: the same page.
+        let (_, _, three) = scan(file(&ppm).with_option("three-pass", "true"), Format::Rgb8);
+        assert_eq!(three, pixels_of(PPM, 3));
+    });
 }

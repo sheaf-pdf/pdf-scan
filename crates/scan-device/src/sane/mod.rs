@@ -73,7 +73,9 @@
 //! device has the option and it's active, and skipped otherwise, so a name misspelt sets nothing.
 //! The value is read by the option's type (a string's bytes; a boolean from `true`, `false`,
 //! `yes`, `no`, `1` or `0`; a number in each of its words; a button pressed), and one that doesn't
-//! read, or that the device refuses, fails the open as [`ScanError::Driver`]. These are the
+//! read, or that the device refuses, fails the open as [`ScanError::Driver`]. They're set again
+//! at each batch, after its settings, so one the model sets too is the device's last word, and
+//! `Applied` says what it holds; one that fails then fails the batch the same way. These are the
 //! app's own choice, never a stored device's or a device's answer: an option can do anything a
 //! backend lets it (the `pnm` backend's `filename` reads any file the process can, and the `test`
 //! backend's options inject faults).
@@ -116,6 +118,52 @@
 //! has none). A device with no source the model can scan from (no format, or no resolution, it
 //! can name) is [`ScanError::Unsupported`].
 //!
+//! # A batch
+//!
+//! [`Device::scan`] first sets the settings, each clamped to what the device's options allow as
+//! it's set, since setting one can change what the others allow (the resolutions of a feeder's
+//! both sides, say), in this order: the source (the one asked, else the first the device has of
+//! a flatbed and a feeder); duplex, by the source's value or an option of its own; the mode, then
+//! the depth (the format asked, else its sibling at the other depth, else the first the source
+//! gives); the resolution nearest the one asked, the higher of two as near; a feeder's page
+//! size, where it's active; the scan area, its top left at the least it allows and its bottom
+//! right the paper's size from there, the paper cut to the largest area (the driver's own paper,
+//! which no SANE source finds itself here, is the largest); then the options set by name. A
+//! source option with one value, or one software can't set, is left as it is, as for caps. Then
+//! every option the model sets is read back, and [`Event::Applied`] says what the device holds:
+//! a value it moved, whatever moved it (rounding, another option, an option set by name), is in
+//! `Clamped` with what was asked, a size within 0.005 mm of the one asked being the one asked.
+//! Encoded forms asked for are dropped, since SANE gives none. A resolution read back at or below
+//! 0, and an area with no width or height, fail the batch as [`ScanError::Driver`] before
+//! `Applied`, since no page could have them.
+//!
+//! Then sheet after sheet. The progress is checked before each sheet's front, never within a
+//! sheet, so a cancel finishes the sheet in flight, front and back, and the next batch starts at
+//! the next sheet. Each page is started, read whole, put in the raw layout and sent, its bytes
+//! counted on the progress as SANE gives them, padding included. SANE says a sheet is there only
+//! by giving its page (a start says the feeder is empty only once the next sheet is asked for),
+//! so a sheet's [`Event::Sheet`] comes with its front, once that's read; and every event is sent
+//! between pages, never from within a read, so a batch held by a full channel holds there with
+//! its scanner never mid-sheet, at most a page ahead of whoever takes its events.
+//!
+//! The feeder found empty is [`ScanError::FeederEmpty`] before any page of the batch and
+//! [`Done::FeederEmpty`] after, at a sheet's back too; a flatbed gives one page,
+//! [`Done::OnePage`], and one that says it has no document is [`ScanError::Driver`]. A start the
+//! device refuses with the settings (SANE's `INVAL`, after which its options may have changed) is
+//! met by setting them again as `Applied` gave them and starting the page once more, and is
+//! [`ScanError::SettingsRefused`] where it refuses again, or a setting won't go back. A cancel
+//! SANE gives itself (a scanner's cancel button) ends the batch [`Done::Cancelled`]; a jam, an
+//! open cover, a busy device, refused access and a device gone are their own errors, and the rest
+//! the driver's words, the pages before them kept and the page being read dropped. No
+//! [`Event::Status`]: SANE gives none.
+//!
+//! Pages come as their frames say, whatever the settings asked (`Applied` says what was set, a
+//! page what came): gray at 1 bit inverted, since SANE's 1 is black, the bits past each row's
+//! last pixel cleared; 16-bit samples made little-endian; color at 1 bit expanded to 8 bits a
+//! sample, refused past `sane-dl`'s frame cap, where a lower resolution asks for less. A page's
+//! resolution is the one read back, as SANE gave it, a fraction kept; its side is worked out from
+//! the order, front then back, since SANE says nothing of it.
+//!
 //! SANE has no settings window of a driver's own, so [`Device::settings_window`] is
 //! [`ScanError::Unsupported`].
 
@@ -130,10 +178,13 @@ use crate::{
     WindowClosed, WindowOwner,
 };
 
+mod batch;
 mod caps;
 mod error;
 mod id;
 mod options;
+mod pixels;
+mod settings;
 
 /// SANE, as a backend: the scanners SANE finds, listed and opened.
 ///
@@ -155,10 +206,11 @@ impl SaneBackend {
     }
 
     /// The backend, setting the option SANE names `name` to `value` on every device it opens,
-    /// after the options given before: where the device has the option and it's active, skipped
-    /// otherwise, so a name misspelt sets nothing; read by the option's type (a string's bytes;
-    /// `true`, `false`, `yes`, `no`, `1` or `0`; a number; a button pressed, whatever `value`
-    /// says). A value that doesn't read, or that the device refuses, fails the open.
+    /// after the options given before, and again at each batch after its settings: where the
+    /// device has the option and it's active, skipped otherwise, so a name misspelt sets nothing;
+    /// read by the option's type (a string's bytes; `true`, `false`, `yes`, `no`, `1` or `0`; a
+    /// number; a button pressed, whatever `value` says). A value that doesn't read, or that the
+    /// device refuses, fails the open, or the batch.
     ///
     /// For what the model doesn't carry, such as the `pnm` backend's `filename` or a backend's
     /// advanced options: the app's own choice, since an option can do whatever its backend lets it
@@ -184,7 +236,8 @@ impl SaneBackend {
         options::set_by_name(&mut handle, &self.options)?;
         Ok(Box::new(SaneDevice {
             handle,
-            _sane: sane,
+            options: self.options.clone(),
+            sane,
         }))
     }
 }
@@ -280,9 +333,12 @@ impl Backend for SaneBackend {
 struct SaneDevice {
     /// Its handle, closed as it's dropped.
     handle: Handle,
+    /// The options set by name, set again at each batch after its settings.
+    options: Vec<(String, String)>,
     /// The process's SANE, held beside the handle and dropped after it, so the backends' shared
-    /// SANE lives as long as this device keeps SANE loaded.
-    _sane: Arc<Sane>,
+    /// SANE lives as long as this device keeps SANE loaded; and its caps, which a page's are
+    /// read against.
+    sane: Arc<Sane>,
 }
 
 impl Device for SaneDevice {
@@ -292,13 +348,17 @@ impl Device for SaneDevice {
 
     fn scan(
         &mut self,
-        _settings: &Settings,
-        _first_sheet: u32,
-        _events: &std::sync::mpsc::SyncSender<Event>,
-        _progress: &dyn Progress,
+        settings: &Settings,
+        first_sheet: u32,
+        events: &std::sync::mpsc::SyncSender<Event>,
+        progress: &dyn Progress,
     ) -> Result<Done, ScanError> {
-        // Batches aren't built yet: until they are, a scan is refused before anything is set.
-        Err(ScanError::Unsupported)
+        let device = batch::Device {
+            handle: &mut self.handle,
+            by_name: &self.options,
+            frame_cap: self.sane.limits().frame_bytes,
+        };
+        batch::scan(device, settings, first_sheet, events, progress)
     }
 
     fn settings_window(&mut self, _owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError> {

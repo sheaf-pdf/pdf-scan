@@ -2,7 +2,7 @@
 
 use sane_dl::{Call, Error, LoadError, Status};
 
-use crate::ScanError;
+use crate::{Done, ScanError};
 
 /// SANE, as a user knows it, where it isn't installed.
 const SANE: &str = "SANE";
@@ -43,6 +43,23 @@ pub(super) fn map(error: &Error) -> ScanError {
             shown: false,
         },
         other => driver(other),
+    }
+}
+
+/// How a batch ends on `error`, from a page's start or reads: SANE's own `CANCELLED` (a cancel
+/// the backend didn't make, such as the scanner's button) and a cancel through `sane-dl`'s token
+/// end it [`Done::Cancelled`]; a start refused with the settings again (`INVAL`, once they were
+/// set again) is [`ScanError::SettingsRefused`]; everything else as [`map`] has it, `NO_DOCS`
+/// after a page's first byte among it, the driver's words.
+pub(super) fn batch_end(error: &Error) -> Result<Done, ScanError> {
+    match error {
+        Error::Status {
+            status: Status::CANCELLED,
+            call: Call::Start | Call::GetParameters | Call::Read,
+        }
+        | Error::Cancelled => Ok(Done::Cancelled),
+        Error::StartInvalid { .. } => Err(ScanError::SettingsRefused),
+        other => Err(map(other)),
     }
 }
 
@@ -168,6 +185,43 @@ mod tests {
                 ScanError::Driver { shown: false, .. }
             ));
         }
+    }
+
+    #[test]
+    fn a_batch_ends_cancelled_on_sane_s_own_cancel_and_refused_on_a_second_inval() {
+        for call in [Call::Start, Call::GetParameters, Call::Read] {
+            let cancelled = Error::Status {
+                status: Status::CANCELLED,
+                call,
+            };
+            assert_eq!(batch_end(&cancelled), Ok(Done::Cancelled), "{call}");
+        }
+        assert_eq!(batch_end(&Error::Cancelled), Ok(Done::Cancelled));
+        assert_eq!(
+            batch_end(&Error::StartInvalid { reload: None }),
+            Err(ScanError::SettingsRefused)
+        );
+        // The rest as `map` has them: a jam, an open cover, the device gone, and `NO_DOCS` once a
+        // page's first byte came, which is no empty feeder.
+        let ended = |status, call| batch_end(&Error::Status { status, call });
+        assert_eq!(ended(Status::JAMMED, Call::Read), Err(ScanError::Jammed));
+        assert_eq!(
+            ended(Status::COVER_OPEN, Call::Start),
+            Err(ScanError::CoverOpen)
+        );
+        assert_eq!(ended(Status::IO_ERROR, Call::Read), Err(ScanError::Gone));
+        assert_eq!(
+            ended(Status::NO_DOCS, Call::Read),
+            Err(ScanError::Driver {
+                message: "sane_read returned NO_DOCS (7)".to_owned(),
+                shown: false,
+            })
+        );
+        // A cancel from a call that isn't a page's is no batch's end.
+        assert!(matches!(
+            ended(Status::CANCELLED, Call::ControlOption),
+            Err(ScanError::Driver { .. })
+        ));
     }
 
     #[test]
