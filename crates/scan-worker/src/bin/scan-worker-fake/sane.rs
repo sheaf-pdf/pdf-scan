@@ -8,20 +8,8 @@
 //! `read-limit` and `read-limit-size`, in the test's `test.conf`), a page then ends long after
 //! the backend's reader thread has written it and exited, clear of a race in that backend that
 //! can block its next page for good.
-//!
-//! **A stand-in for the system's configuration,** a test's own: where the worker's environment
-//! names a directory as `SCAN_WORKER_TEST_SANE_SYSTEM`, and its `SANE_CONFIG_DIR` is the one the
-//! client gives a worker that opens a stored device (its directory, then `:`, so SANE reads its
-//! own list after it), the worker first runs itself again in place (`exec`, so the process, its
-//! pipes and its directory stay the client's), with `SANE_CONFIG_DIR` the client's directory then
-//! that one, and without the variable: SANE reads the stored id's one-backend configuration, then
-//! the stand-in, as it would the system's, and never the system's own. Once, before its `hello`,
-//! since the process it becomes lacks the variable; and never for a listing's worker, whose
-//! `SANE_CONFIG_DIR` is its command's own. Unix alone: elsewhere it says it can't, and exits.
 
 use std::{
-    env,
-    ffi::OsString,
     process::ExitCode,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -31,7 +19,6 @@ use std::{
     time::Duration,
 };
 
-use sane_dl::CONFIG_DIR_VARIABLE;
 use scan_device::in_progress::{Level, Progress, Unit};
 use scan_device::sane::SaneBackend;
 use scan_device::{
@@ -39,14 +26,8 @@ use scan_device::{
     WindowOwner,
 };
 
-/// The variable naming the directory that stands for the system's SANE configuration.
-const SYSTEM: &str = "SCAN_WORKER_TEST_SANE_SYSTEM";
-
 /// The scenario, given the arguments after its name.
 pub fn main(args: &[String]) -> ExitCode {
-    if let Some(ended) = stand_in() {
-        return ended;
-    }
     let mut backend = SaneBackend::new();
     let mut paced = false;
     let mut args = args.iter();
@@ -69,48 +50,6 @@ pub fn main(args: &[String]) -> ExitCode {
 
 fn usage(problem: &str) -> ExitCode {
     eprintln!("scan-worker-fake: sane [--paced] [--option NAME=VALUE]...: {problem}");
-    ExitCode::from(2)
-}
-
-/// Where the stand-in is asked for and this is an open's worker, the worker run again with it,
-/// and how that failed; `None` where it isn't asked for, or this is a listing's worker.
-fn stand_in() -> Option<ExitCode> {
-    let system = env::var_os(SYSTEM)?;
-    let config = env::var_os(CONFIG_DIR_VARIABLE)?;
-    if !config.as_encoded_bytes().ends_with(b":") {
-        return None;
-    }
-    // `<directory>:` becomes `<directory>:<stand-in>`, with nothing of SANE's own after it.
-    let mut stood_in = config;
-    stood_in.push(system);
-    Some(run_again(stood_in))
-}
-
-/// This program run again in place, with its arguments, `SANE_CONFIG_DIR` set to `config`, and
-/// the stand-in's variable gone; returns only if that failed, saying how.
-#[cfg(unix)]
-fn run_again(config: OsString) -> ExitCode {
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
-    let error = match env::current_exe() {
-        Ok(me) => Command::new(me)
-            .args(env::args_os().skip(1))
-            .env(CONFIG_DIR_VARIABLE, config)
-            .env_remove(SYSTEM)
-            .exec(),
-        Err(error) => error,
-    };
-    eprintln!("scan-worker-fake: couldn't run again with the stand-in configuration: {error}");
-    ExitCode::from(2)
-}
-
-/// Elsewhere, no process is run again in place: said, and the worker exits.
-#[cfg(not(unix))]
-fn run_again(_config: OsString) -> ExitCode {
-    eprintln!(
-        "scan-worker-fake: a stand-in for the system's SANE configuration runs the worker again \
-         in place, which only Unix does"
-    );
     ExitCode::from(2)
 }
 

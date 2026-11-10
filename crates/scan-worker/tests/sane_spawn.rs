@@ -93,21 +93,33 @@ fn a_directory_of_its_own(dir: &PathBuf, work: &tempfile::TempDir) {
     }
 }
 
-/// `SANE_CONFIG_DIR` as a SANE open's worker has it: its directory, then `:`, so SANE reads
-/// its own list after it.
-fn names_its_directory_first(started: &Started) {
+/// `SANE_CONFIG_DIR` as a SANE open's worker has it: its directory, then what a listing's worker
+/// reads, `listing` (the command's, else the app's): `:` and its directories, or the directory
+/// alone where it names none; where there's none, `:`, so SANE reads its own list after it.
+fn names_its_directory_then(started: &Started, listing: Option<&str>) {
+    let after = match listing {
+        None => ":".to_owned(),
+        Some("") => String::new(),
+        Some(listing) => format!(":{listing}"),
+    };
     let directory = started
         .variable
-        .strip_suffix(':')
-        .unwrap_or_else(|| panic!("{:?} ends in `:`", started.variable));
+        .strip_suffix(&after)
+        .unwrap_or_else(|| panic!("{:?} ends in {after:?}", started.variable));
     assert_eq!(resolved(directory), resolved(&started.dir));
+}
+
+/// The app's own `SANE_CONFIG_DIR`, which an open's worker reads after its directory where the
+/// command gives none.
+fn the_app_s() -> Option<String> {
+    env::var("SANE_CONFIG_DIR").ok()
 }
 
 #[test]
 fn a_sane_open_s_directory_names_the_stored_id_s_backend_alone() {
     let (client, work) = env_client();
     let (device, started) = open_sane(&client, &work, "sane:test:0");
-    names_its_directory_first(&started);
+    names_its_directory_then(&started, the_app_s().as_deref());
     assert_eq!(
         started.held,
         json!({"entries": ["dll.conf", "dll.d"], "dll_conf": "test\n", "dll_d": []})
@@ -125,7 +137,7 @@ fn a_sane_open_names_no_backend_where_the_id_gives_none() {
     // after a backend's.
     for id in ["sane:Desk scanner", "sane:test:\u{2603}"] {
         let (device, started) = open_sane(&client, &work, id);
-        names_its_directory_first(&started);
+        names_its_directory_then(&started, the_app_s().as_deref());
         assert_eq!(
             started.held,
             json!({"entries": ["dll.conf", "dll.d"], "dll_conf": "", "dll_d": []}),
@@ -199,9 +211,11 @@ fn a_variable_the_command_sets_reaches_the_worker_the_last_given_its_value() {
 }
 
 #[test]
-fn a_command_s_sane_config_dir_is_a_listing_s_and_an_open_s_is_the_client_s() {
+fn a_command_s_sane_config_dir_is_a_listing_s_and_an_open_s_after_the_client_s() {
     let given = env::temp_dir().join("given-by-the-command");
-    let command = worker("env").env("SANE_CONFIG_DIR", &given);
+    let command = worker("env")
+        .env("SANE_CONFIG_DIR", "/given-first")
+        .env("SANE_CONFIG_DIR", &given);
     let (client, work) = env_client_of(command);
     // A listing's worker keeps the command's, its directory empty.
     let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
@@ -211,9 +225,9 @@ fn a_command_s_sane_config_dir_is_a_listing_s_and_an_open_s_is_the_client_s() {
         listing.held,
         json!({"entries": [], "dll_conf": null, "dll_d": null})
     );
-    // An open's has the client's in its place: its directory naming the id's backend, then `:`.
+    // An open's has the client's directory, naming the id's backend, then the command's.
     let (device, opened) = open_sane(&client, &work, "sane:test:0");
-    names_its_directory_first(&opened);
+    names_its_directory_then(&opened, Some(given.to_str().expect("a path in UTF-8")));
     assert_eq!(
         opened.held,
         json!({"entries": ["dll.conf", "dll.d"], "dll_conf": "test\n", "dll_d": []})

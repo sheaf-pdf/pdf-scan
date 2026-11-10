@@ -32,6 +32,9 @@ caller's, and a crash says how the worker exited and keeps the end of its standa
 
 ## Features
 
+- `sane`: `scan-device`'s SANE backend, `scan_worker::scan_device::sane::SaneBackend`, for an app's SANE
+  worker to serve: named through the re-export, it's of the `scan-device` this crate's `serve` takes. It turns
+  on `scan-device`'s own `sane`; the rest of the library is the same with it or without.
 - `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE backend (the
   scenario this crate's tests run SANE's own `test` backend and a stand-in for libsane through), and workers
   that break the protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang,

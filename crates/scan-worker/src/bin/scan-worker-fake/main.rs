@@ -7,13 +7,12 @@
 //! started; `sane`, SANE's backend, with the arguments `sane.rs` gives; `slow-listing`, whose
 //! listing takes a minute and whose exit is held; `slow-exit`, whose device opens at once and
 //! whose exit is held, a minute or the seconds its second argument says. By hand, the protocol
-//! written as literal lines: `version`, `later-hello`,
-//! `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`, `refuses`,
-//! `opened-another`, `renamed-elsewhere`, `no-source`, `big-page`, `page-length`, `padding`,
-//! `zero-dpi`, `cut-short`, `page-then-end`, `page-first`, `applied-late`, `sheet-out-of-turn`,
-//! `empty-after-page`, `encoded-unasked`, `huge-paper`, `helper-window` and `helper-batch`.
-//! And `held`, the process the last two start: it holds the pipes it inherits until its input
-//! ends.
+//! written as literal lines: `version`, `later-hello`, `not-json`, `no-hello`, `silent`, `deaf`,
+//! `long-line`, `out-of-place`, `refuses`, `opened-another`, `renamed-elsewhere`, `no-source`,
+//! `big-page`, `page-length`, `padding`, `zero-dpi`, `cut-short`, `page-then-end`, `page-first`,
+//! `applied-late`, `sheet-out-of-turn`, `empty-after-page`, `encoded-unasked`, `huge-paper`,
+//! `helper-window` and `helper-batch`. And `held`, the process the last two start: it holds the
+//! pipes it inherits until its input ends.
 
 #![forbid(unsafe_code)]
 

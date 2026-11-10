@@ -25,14 +25,19 @@ tempfile.workspace = true
 thiserror.workspace = true
 
 [features]
+# SANE's backend, `scan_device::sane`, through the re-export
+# `scan_worker::scan_device`, so an app's SANE worker serves the backend of
+# the scan-device this crate's `serve` takes: it turns on scan-device's
+# `sane`, and nothing else in the library changes with it.
+sane = ["scan-device/sane"]
 # The test worker, `scan-worker-fake`, a binary serving the scripted backend,
 # SANE's, and protocol written by hand: for this crate's tests, never for a
 # shipped build, since its scenarios hang, crash and break the protocol. It
-# turns on scan-device's `fake` and `sane`, which the re-export
+# turns on scan-device's `fake`, and `sane`, which the re-export
 # `scan_worker::scan_device` then holds; nothing else in the library changes
 # with it. A binary takes its package's dependencies, never its
 # dev-dependencies, so the backend it serves comes on through this feature.
-fake = ["scan-device/fake", "scan-device/sane"]
+fake = ["scan-device/fake", "sane"]
 
 [dev-dependencies]
 # The tests take the test worker: a dev-dependency on the crate itself turns

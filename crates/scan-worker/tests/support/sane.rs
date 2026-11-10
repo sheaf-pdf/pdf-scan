@@ -7,8 +7,8 @@
 //! child process of the test's own, and the test writes its files and builds the fake itself.
 //! What a worker loading SANE needs is set on its command ([`WorkerCommand::env`]): the loader's
 //! search path naming the fake's directory first, the fake's script and log, and the
-//! `SANE_CONFIG_DIR` a listing's worker reads, an open's worker being given the client's in its
-//! place. A test that needs libsane says it skipped where the worker answers that SANE isn't
+//! `SANE_CONFIG_DIR` a listing's worker reads, which an open's worker reads after the client's
+//! own directory. A test that needs libsane says it skipped where the worker answers that SANE isn't
 //! installed, on the standard error the harness doesn't capture, or fails where
 //! `SANE_DL_REQUIRE_LIBSANE` is `1`.
 //!
@@ -38,10 +38,6 @@ const LOADER_PATH: &str = "LD_LIBRARY_PATH";
 /// The variable whose `1` makes a test that needs libsane fail rather than skip where it isn't
 /// there: the one `sane-dl`'s tests read, which CI's Ubuntu job sets.
 pub const REQUIRE_LIBSANE: &str = "SANE_DL_REQUIRE_LIBSANE";
-
-/// The variable naming the directory the test worker's `sane` scenario takes for the system's
-/// SANE configuration, in an open's worker.
-pub const SYSTEM: &str = "SCAN_WORKER_TEST_SANE_SYSTEM";
 
 /// Whether `variable` is `1`.
 fn required(variable: &str) -> bool {
@@ -314,31 +310,24 @@ impl FakeLog {
     }
 }
 
-/// A worker's command for SANE's real backends, its configuration the test's own, in `dir`: a
-/// listing's worker reads a directory naming `backends` alone, holding `files` (a backend's own
-/// configuration, such as `test.conf`), each a name and its text; an open's worker, given the
-/// client's directory naming the stored id's backend, reads it then a directory standing for the
-/// system's, holding `stand_in`'s files (`dll.aliases`, a backend's `.conf`), and never the
-/// system's own, through the `sane` scenario's stand-in. The scenario is given `args`.
+/// A worker's command for SANE's real backends, its configuration the test's own: its
+/// `SANE_CONFIG_DIR` a directory in `dir` naming `backends` alone, holding `files` (a backend's
+/// own configuration, such as `test.conf`, and `dll.aliases`), each a name and its text, and
+/// nothing after it, so SANE never reads the system's. A listing's worker reads it; an open's
+/// reads the client's directory, naming the stored id's backend, then it. The scenario is given
+/// `args`.
 pub fn real_command(
     dir: &Path,
     backends: &[&str],
     files: &[(&str, &str)],
-    stand_in: &[(&str, &str)],
     args: &[&str],
 ) -> WorkerCommand {
-    let listing = dir.join("listing");
-    let system = dir.join("stand-in");
-    for made in [&listing, &system] {
-        fs::create_dir(made).expect("couldn't make a configuration directory");
-    }
-    write_files(&listing, files);
-    write_files(&system, stand_in);
-    let listing = ConfigDir::write(&listing, backends, Search::Isolated)
+    let config = dir.join("config");
+    fs::create_dir(&config).expect("couldn't make a configuration directory");
+    write_files(&config, files);
+    let config = ConfigDir::write(&config, backends, Search::Isolated)
         .expect("couldn't write the configuration");
-    sane_worker(args)
-        .env(CONFIG_DIR_VARIABLE, listing.value())
-        .env(SYSTEM, &system)
+    sane_worker(args).env(CONFIG_DIR_VARIABLE, config.value())
 }
 
 fn write_files(dir: &Path, files: &[(&str, &str)]) {

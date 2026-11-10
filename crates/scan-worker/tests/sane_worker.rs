@@ -7,9 +7,11 @@
 //! next batch giving the rest; the fake's log, which every worker that loaded it appends to,
 //! checked after each.
 //!
-//! Through SANE's own `test` backend, in a worker whose configuration is the client's directory
-//! then one standing for the system's, never the system's own: a listing and an open of its first
-//! device and its feeder of ten sheets; a stored device of another model and a stale index gone;
+//! Through SANE's own `test` backend, its configuration the test's own, given as the command's
+//! `SANE_CONFIG_DIR`, which a listing's worker reads and an open's reads after the client's
+//! directory, never the system's: a listing and an open of its first device and its feeder of ten
+//! sheets, the open's worker reading the command's configuration; a stored device of another
+//! model and a stale index gone;
 //! an alias opened by a worker whose directory names no backend, and one by a worker whose
 //! directory names the alias's prefix; and a batch with SANE's debug output on, which reaches the
 //! worker's standard error alone. Where there's no libsane, each says it skipped, or fails where
@@ -429,8 +431,8 @@ fn a_cancel_through_the_client_finishes_its_sheet_and_the_next_batch_gives_the_r
 /// scenario's pacing needs.
 const PACED: &str = "number_of_devices 2\nread-limit true\nread-limit-size 64\n";
 
-/// The stand-in's `test.conf`: as [`PACED`], with a grid for its first picture, which neither the
-/// backend's own defaults nor the system's configuration give, so a page shows it was read.
+/// A `test.conf` as [`PACED`], with a grid for its first picture, which neither the backend's own
+/// defaults nor the system's configuration give, so a page shows it was read.
 const PACED_GRID: &str =
     "number_of_devices 2\nread-limit true\nread-limit-size 64\ntest-picture Grid\n";
 
@@ -440,17 +442,11 @@ fn tester(id: &str) -> DeviceInfo {
 }
 
 /// A client whose SANE worker is the paced `sane` scenario for the `test` backend, with `extra`
-/// variables on its command: a listing reads a configuration naming `test` with [`PACED`], an open
-/// the client's directory then a stand-in holding `stand_in`.
-fn test_backend(test: &str, stand_in: &[(&str, &str)], extra: &[(&str, &str)]) -> Client {
+/// variables on its command: its configuration names `test`, with `files` beside it (a
+/// `test.conf`, `dll.aliases`), which a listing reads, and an open after the client's directory.
+fn test_backend(test: &str, files: &[(&str, &str)], extra: &[(&str, &str)]) -> Client {
     let dir = fresh_dir(test);
-    let command = real_command(
-        &dir,
-        &["test"],
-        &[("test.conf", PACED)],
-        stand_in,
-        &["--paced"],
-    );
+    let command = real_command(&dir, &["test"], files, &["--paced"]);
     let command = extra
         .iter()
         .fold(command, |command, &(key, value)| command.env(key, value));
@@ -478,10 +474,6 @@ fn ten_sheets(device: &mut RemoteDevice) -> Vec<Event> {
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn the_test_backend_in_a_worker_lists_opens_and_gives_its_feeder_s_ten_sheets() {
     let test = "the_test_backend_in_a_worker_lists_opens_and_gives_its_feeder_s_ten_sheets";
     let client = test_backend(test, &[("test.conf", PACED_GRID)], &[]);
@@ -494,7 +486,8 @@ fn the_test_backend_in_a_worker_lists_opens_and_gives_its_feeder_s_ten_sheets() 
     assert_eq!(*device.info(), listed[0]);
     assert_eq!(device.renamed_from(), None);
     let events = ten_sheets(&mut device);
-    // The grid, the stand-in's: so the open's worker read it, and not the system's.
+    // The grid, the command's configuration's: so the open's worker read it after the client's
+    // directory, and not the system's.
     for page in pages(&events) {
         let (_, _, _, data) = image(page);
         assert!(data.contains(&0) && data.contains(&255), "not a grid");
@@ -503,10 +496,6 @@ fn the_test_backend_in_a_worker_lists_opens_and_gives_its_feeder_s_ten_sheets() 
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn a_stored_test_device_of_another_model_is_gone_through_a_worker() {
     let test = "a_stored_test_device_of_another_model_is_gone_through_a_worker";
     let client = test_backend(test, &[("test.conf", PACED)], &[]);
@@ -521,10 +510,6 @@ fn a_stored_test_device_of_another_model_is_gone_through_a_worker() {
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn a_stale_index_of_the_test_backend_is_gone_through_a_worker() {
     let test = "a_stale_index_of_the_test_backend_is_gone_through_a_worker";
     let client = test_backend(test, &[("test.conf", PACED)], &[]);
@@ -537,7 +522,7 @@ fn a_stale_index_of_the_test_backend_is_gone_through_a_worker() {
     );
 }
 
-/// The stand-in's aliases: one whose name names no backend, one whose prefix names none.
+/// The aliases: one whose name names no backend, one whose prefix names none.
 const ALIASES: &str = "alias office:scan test:0\nalias \"Desk scanner\" test:1\n";
 
 /// An alias opened through `client`, a worker whose directory the client writes from the id: its
@@ -556,10 +541,6 @@ fn alias_opens(test: &str, alias: &str) {
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn an_alias_naming_no_backend_opens_in_a_worker_whose_directory_names_none() {
     alias_opens(
         "an_alias_naming_no_backend_opens_in_a_worker_whose_directory_names_none",
@@ -568,10 +549,6 @@ fn an_alias_naming_no_backend_opens_in_a_worker_whose_directory_names_none() {
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn an_alias_whose_prefix_names_no_backend_opens_in_a_worker_whose_directory_names_it() {
     alias_opens(
         "an_alias_whose_prefix_names_no_backend_opens_in_a_worker_whose_directory_names_it",
@@ -580,10 +557,6 @@ fn an_alias_whose_prefix_names_no_backend_opens_in_a_worker_whose_directory_name
 }
 
 #[test]
-#[cfg_attr(
-    not(unix),
-    ignore = "the stand-in runs the worker again in place, which only Unix does"
-)]
 fn sane_s_debug_output_reaches_no_further_than_the_worker_s_standard_error() {
     let test = "sane_s_debug_output_reaches_no_further_than_the_worker_s_standard_error";
     // SANE's `dll` and the `test` backend saying everything they do: on standard error, so the
