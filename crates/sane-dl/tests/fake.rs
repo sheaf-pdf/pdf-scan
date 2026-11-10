@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::Fake;
-use sane_dl::{Call, Device, DeviceName, Error, LimitKind, LoadError, Sane, Status};
+use sane_dl::{Call, Device, DeviceName, Error, LimitKind, LoadError, Sane, SaneString, Status};
 
 /// Waits until a late listing has given the library back, then lists again.
 fn list_once_free(sane: &Sane) -> Result<Vec<Device>, Error> {
@@ -28,9 +28,12 @@ fn list_once_free(sane: &Sane) -> Result<Vec<Device>, Error> {
 #[test]
 #[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn devices_are_copied_as_sane_lists_them() {
+    // A vendor in Latin-1, as the standard has SANE's strings, and a model in
+    // UTF-8, as some backends send them: each comes back as its bytes.
     let script = r#"
         device fake:0 "Fake Co" "Model One" "flatbed scanner"
         device "fake:\xff" @null @null @null
+        device fake:1 "Caf\xe9 Scan" "Mod\xc3\xa8le" "scanner \x01"
     "#;
     let fake = Fake::new("devices_are_copied_as_sane_lists_them", script);
     in_child!(devices_are_copied_as_sane_lists_them, fake.child(), || {
@@ -39,18 +42,29 @@ fn devices_are_copied_as_sane_lists_them() {
         let expected = vec![
             Device {
                 name: DeviceName::from("fake:0"),
-                vendor: "Fake Co".to_owned(),
-                model: "Model One".to_owned(),
-                kind: "flatbed scanner".to_owned(),
+                vendor: SaneString::from("Fake Co"),
+                model: SaneString::from("Model One"),
+                kind: SaneString::from("flatbed scanner"),
             },
             Device {
                 name: DeviceName::new(b"fake:\xff".to_vec()),
-                vendor: String::new(),
-                model: String::new(),
-                kind: String::new(),
+                vendor: SaneString::default(),
+                model: SaneString::default(),
+                kind: SaneString::default(),
+            },
+            Device {
+                name: DeviceName::from("fake:1"),
+                vendor: SaneString::new(b"Caf\xe9 Scan".to_vec()),
+                model: SaneString::new("Mod\u{e8}le".as_bytes()),
+                kind: SaneString::new(b"scanner \x01".to_vec()),
             },
         ];
         assert_eq!(first, expected);
+        assert_eq!(first[2].vendor.as_bytes(), b"Caf\xe9 Scan");
+        assert_eq!(first[2].model.as_bytes(), b"Mod\xc3\xa8le");
+        // Read as UTF-8, the Latin-1 byte is replaced, and the UTF-8 kept.
+        assert_eq!(first[2].vendor.to_string_lossy(), "Caf\u{fffd} Scan");
+        assert_eq!(first[2].model.to_string_lossy(), "Mod\u{e8}le");
         // The fake overwrites a list once it's stale: the first copy holds.
         let second = sane.devices(true, Duration::from_secs(10)).unwrap();
         assert_eq!(second, expected);
@@ -502,7 +516,7 @@ fn a_string_past_the_cap_is_refused() {
         limits.string_bytes = 65537;
         sane.set_limits(limits);
         let devices = sane.devices(false, Duration::from_secs(10)).unwrap();
-        assert_eq!(devices[0].vendor.len(), 65537);
+        assert_eq!(devices[0].vendor.as_bytes().len(), 65537);
     });
     fake.log().assert_no_violations();
 }

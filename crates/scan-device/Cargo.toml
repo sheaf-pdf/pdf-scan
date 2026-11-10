@@ -15,6 +15,10 @@ publish = false
 # Its `Progress` is in this crate's API, which re-exports the crate, so an
 # app names the version the trait does.
 in-progress = "0.1.0"
+# The `sane` backend's way to SANE, loaded at run time; private, so none of
+# its types is in this crate's API. A path alone while this crate isn't
+# published.
+sane-dl = { path = "../sane-dl", optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
@@ -25,13 +29,16 @@ fake = []
 # `Serialize` and `Deserialize` for the model's plain data, so it crosses a
 # pipe to a process that runs the drivers, and an app can store a device.
 serde = ["dep:serde"]
+# The SANE backend, `scan_device::sane`: SANE's scanners on Linux and the
+# other Unix-like systems, libsane loaded at run time, never linked.
+sane = ["dep:sane-dl"]
 
 [dev-dependencies]
-# The crate's own tests, doctests included, take the fake backend and the
-# serde form: a dev-dependency on the crate itself turns the features on for
-# them alone, so a plain `cargo test` runs them, while a build without the
-# features has neither in it.
-scan-device = { path = ".", features = ["fake", "serde"] }
+# The crate's own tests, doctests included, take the fake backend, the serde
+# form and the SANE backend: a dev-dependency on the crate itself turns the
+# features on for them alone, so a plain `cargo test` runs them, while a
+# build without the features has none of them in it.
+scan-device = { path = ".", features = ["fake", "serde", "sane"] }
 # A child process for each test of a fault that ends the process it runs in.
 rusty-fork.workspace = true
 # The serde form's tests write and read it as JSON.

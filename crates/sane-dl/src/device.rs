@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::SaneString;
 use crate::config::backend_of;
 
 /// A device's name, as SANE's bytes.
@@ -87,18 +88,22 @@ impl fmt::Debug for DeviceName {
 
 /// A device as `sane_get_devices` lists it.
 ///
-/// The name is kept as SANE's bytes; the rest is text for people, any bytes
-/// that aren't UTF-8 replaced, and empty where the backend gave none.
+/// Each string is kept as SANE's bytes, never decoded: the name, which goes
+/// back to `sane_open` as it came, and the vendor, model and kind, for
+/// people, empty where the backend gave none. The standard makes SANE's
+/// strings Latin-1, but backends send UTF-8 too, so what the bytes mean is
+/// the caller's to say ([`SaneString::to_string_lossy`] reads them as
+/// UTF-8, any bytes that aren't replaced).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Device {
     /// The device's name, which [`Sane::open`](crate::Sane::open) takes.
     pub name: DeviceName,
     /// Its vendor.
-    pub vendor: String,
+    pub vendor: SaneString,
     /// Its model.
-    pub model: String,
+    pub model: SaneString,
     /// What kind of device it is, such as "flatbed scanner".
-    pub kind: String,
+    pub kind: SaneString,
 }
 
 #[cfg(test)]

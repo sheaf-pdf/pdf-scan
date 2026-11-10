@@ -13,7 +13,10 @@
 //!
 //! let sane = sane_dl::Sane::load()?;
 //! for device in sane.devices(false, Duration::from_secs(30))? {
-//!     println!("{} ({} {})", device.name, device.vendor, device.model);
+//!     // A device's strings are SANE's bytes, read here as UTF-8.
+//!     let vendor = device.vendor.to_string_lossy();
+//!     let model = device.model.to_string_lossy();
+//!     println!("{} ({vendor} {model})", device.name);
 //! }
 //! let mut handle = sane.open("test:0")?;
 //! if let Some(resolution) = handle.find_option("resolution") {

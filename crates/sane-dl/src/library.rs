@@ -49,7 +49,7 @@ use crate::options::{
 };
 use crate::{
     Call, Device, DeviceName, Error, LimitKind, Limits, LoadError, OptionDescriptor, Parameters,
-    ReadOutcome, SetInfo, Status, Value, Version, ffi,
+    ReadOutcome, SaneString, SetInfo, Status, Value, Version, ffi,
 };
 
 /// SANE's 14 functions, looked up in a library that's never unloaded, so
@@ -652,12 +652,11 @@ unsafe fn copy_device_list(
                 ))),
             }
         };
-        let lossy = |bytes: Vec<u8>| String::from_utf8_lossy(&bytes).into_owned();
         devices.push(Device {
             name: DeviceName::new(string(device.name, "name", true)?),
-            vendor: lossy(string(device.vendor, "vendor", false)?),
-            model: lossy(string(device.model, "model", false)?),
-            kind: lossy(string(device.r#type, "type", false)?),
+            vendor: SaneString::new(string(device.vendor, "vendor", false)?),
+            model: SaneString::new(string(device.model, "model", false)?),
+            kind: SaneString::new(string(device.r#type, "type", false)?),
         });
     }
 }

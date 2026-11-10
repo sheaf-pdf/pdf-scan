@@ -300,12 +300,15 @@ fn words_in(size: i32) -> usize {
     usize::try_from(size).unwrap_or(0) / WORD
 }
 
-/// A string as SANE's bytes: an option's string value, or an entry of a
-/// string list.
+/// A string as SANE's bytes: an option's string value, an entry of a string
+/// list, or a device's vendor, model or kind ([`Device`](crate::Device)).
 ///
-/// Kept as bytes, never decoded, since it goes back to the backend exactly as
-/// it came. It holds no `NUL` when SANE gives it; one given to
-/// [`set`](crate::Handle::set) with a `NUL` inside is refused.
+/// Kept as bytes, never decoded: an option's value goes back to the backend
+/// exactly as it came, and a device's strings are as the backend sent them,
+/// which the standard makes Latin-1 and some backends send as UTF-8, so
+/// what they mean is the caller's to say. It holds no `NUL` when SANE gives
+/// it; one given to [`set`](crate::Handle::set) with a `NUL` inside is
+/// refused.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct SaneString(Vec<u8>);
 

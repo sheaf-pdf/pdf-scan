@@ -104,6 +104,16 @@
 //!   Provisional, as the model is: until it's frozen, a change to the model changes the form, and
 //!   what was stored before may not read.
 //!
+//! - `sane`: `scan_device::sane::SaneBackend`, SANE's scanners on Linux and the other Unix-like
+//!   systems, through libsane loaded at run time and never linked, so a program built with it runs
+//!   where SANE isn't installed and hears so as [`ScanError::NotInstalled`]. Its devices' ids are
+//!   `sane:` and SANE's names, a stored one opened after a listing of its backend (a renamed USB
+//!   connection found by its maker and model), and what each source can do is read through tables
+//!   of the names backends give a feeder, duplex and a mode. `SaneBackend::with_option` sets an
+//!   option the model doesn't carry by its SANE name. SANE's backends run in the process that
+//!   loads them, so an app runs this one in a worker process of its own. Builds on every system;
+//!   where there's no SANE (Windows among them), listing and opening say it isn't installed.
+//!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
 //! # Example
@@ -179,6 +189,8 @@ mod image;
 mod page;
 #[cfg(all(test, feature = "serde"))]
 mod round_trip;
+#[cfg(feature = "sane")]
+pub mod sane;
 
 pub use caps::{Applied, Caps, Clamped, Paper, Resolutions, Settings, SizeMm, Source, SourceCaps};
 pub use device::{
