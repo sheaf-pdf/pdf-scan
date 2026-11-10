@@ -3,7 +3,7 @@
 use sane_dl::{Handle, OptionDescriptor, SaneString, Value};
 
 use super::error;
-use super::options::{self, End, SourceValues};
+use super::options::{self, End, SourceKind, SourceValues};
 use crate::{Caps, Format, Resolutions, ScanError, Source, SourceCaps};
 
 /// The resolution taken where a device has no resolution option: 72 dpi, what image software
@@ -16,11 +16,12 @@ pub(super) const NO_RESOLUTION_OPTION: u32 = 72;
 /// Otherwise each source the model names that the option offers is read by setting the option to
 /// its value, since SANE's options change with the source, and the option is set back to the
 /// value it was found at once they're read. A value already set isn't set again, and an option
-/// with one value, or one software can't set, is never set (some backends refuse to be set to
-/// the one value they offer), so only the source it's at is read. A
-/// feeder is read through its one-sided value where it has one, its duplex said where it has a
-/// value or an option for it. A source that offers no format or no resolution the model can name
-/// is left out, and a device left with none is [`ScanError::Unsupported`].
+/// with one value, or one software can't set, is never set (some backends refuse to be set to the
+/// one value they offer), so only the source its value names is read, a feeder's both sides as a
+/// feeder with duplex. A feeder is read through its one-sided value where it has one, its duplex
+/// said where it has a value it can be set to, or an option, for it. A source that offers no
+/// format or no resolution the model can name is left out, and a device left with none is
+/// [`ScanError::Unsupported`].
 pub(super) fn read(handle: &mut Handle) -> Result<Caps, ScanError> {
     let sources = match source_option(handle) {
         None => read_source(handle, Source::Flatbed)?.into_iter().collect(),
@@ -65,7 +66,9 @@ fn read_sources(handle: &mut Handle, option: &SourceOption) -> Result<Vec<Source
     } else {
         option.values.clone()
     };
-    let never_set = values.len() == 1 || !option.settable;
+    if values.len() == 1 || !option.settable {
+        return read_fixed_source(handle, &found);
+    }
     let SourceValues {
         flatbed,
         feeder,
@@ -86,9 +89,6 @@ fn read_sources(handle: &mut Handle, option: &SourceOption) -> Result<Vec<Source
     let mut outcome = Ok(());
     for (source, value) in wanted {
         if value != current {
-            if never_set {
-                continue;
-            }
             if let Err(error) = set_string(handle, &option.name, &value) {
                 outcome = Err(error);
                 break;
@@ -119,14 +119,79 @@ fn read_sources(handle: &mut Handle, option: &SourceOption) -> Result<Vec<Source
     Ok(sources)
 }
 
+/// The one source a source option that's never set gives, found at `found`: the source its value
+/// names, a feeder's both sides as a feeder with duplex, a feeder's one side with duplex where an
+/// option apart from the source gives it; none for a value no row names.
+fn read_fixed_source(
+    handle: &mut Handle,
+    found: &SaneString,
+) -> Result<Vec<SourceCaps>, ScanError> {
+    let (source, both_sides) = match options::source_kind(found.as_bytes()) {
+        Some(SourceKind::Flatbed) => (Source::Flatbed, false),
+        Some(SourceKind::Feeder) => (Source::Feeder, false),
+        Some(SourceKind::FeederDuplex) => (Source::Feeder, true),
+        None => return Ok(Vec::new()),
+    };
+    let caps = read_source(handle, source)?.map(|mut caps| {
+        if source == Source::Feeder {
+            caps.duplex = both_sides || options::duplex_switch(handle.options()).is_some();
+        }
+        caps
+    });
+    Ok(caps.into_iter().collect())
+}
+
+/// The device's resolution option, by the table's names: the first that's active now, since an
+/// inactive one is neither set nor read back; none where none is.
+pub(super) fn resolution_option(handle: &Handle) -> Option<&OptionDescriptor> {
+    options::RESOLUTION.iter().find_map(|name| {
+        handle
+            .find_option(name)
+            .filter(|option| option.unusable.is_none() && option.capabilities.is_active())
+    })
+}
+
+/// The resolution now, across and down the page, as lengths in pixels are converted at it: the
+/// resolution option's value, where it can be read, and down the page `y-resolution`'s where the
+/// option is `x-resolution` and it can be read, else the same; 72 dpi both ways where the device
+/// has no resolution option.
+pub(super) fn dpi_now(handle: &mut Handle) -> Result<Dpi, ScanError> {
+    let Some(option) = resolution_option(handle).cloned() else {
+        let dpi = Some(f64::from(NO_RESOLUTION_OPTION));
+        return Ok(Dpi {
+            across: dpi,
+            down: dpi,
+        });
+    };
+    let across = if options::readable(&option) {
+        current_number(handle, &option)?
+    } else {
+        None
+    };
+    let down = match handle.find_option(options::Y_RESOLUTION).cloned() {
+        Some(down) if option.name == options::X_RESOLUTION && options::readable(&down) => {
+            current_number(handle, &down)?
+        }
+        _ => across,
+    };
+    Ok(Dpi { across, down })
+}
+
+/// A resolution across and down the page, where it's known, as lengths in pixels are converted
+/// at it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Dpi {
+    /// Across, for widths.
+    pub across: Option<f64>,
+    /// Down, for heights.
+    pub down: Option<f64>,
+}
+
 /// What the source set now can do, read from the descriptors as they are; `None` where it offers
 /// no format or no resolution the model can name.
 fn read_source(handle: &mut Handle, source: Source) -> Result<Option<SourceCaps>, ScanError> {
     let formats = formats(handle)?;
-    let resolution = options::RESOLUTION
-        .iter()
-        .find_map(|name| handle.find_option(name))
-        .cloned();
+    let resolution = resolution_option(handle).cloned();
     let area = Area::of(handle, source);
     // The resolution now, where something is read through it: an unconstrained resolution, or an
     // area in pixels.
@@ -134,14 +199,14 @@ fn read_source(handle: &mut Handle, source: Source) -> Result<Option<SourceCaps>
         .as_ref()
         .is_some_and(|option| option.constraint == sane_dl::Constraint::None)
         || area.in_pixels();
-    let dpi = match &resolution {
-        None => Some(f64::from(NO_RESOLUTION_OPTION)),
-        Some(option) if needs_dpi && options::readable(option) => current_number(handle, option)?,
-        Some(_) => None,
+    let dpi = if resolution.is_none() || needs_dpi {
+        dpi_now(handle)?
+    } else {
+        Dpi::default()
     };
     let resolutions = match &resolution {
         None => Some(Resolutions::List(vec![NO_RESOLUTION_OPTION])),
-        Some(option) => options::resolutions(option, dpi),
+        Some(option) => options::resolutions(option, dpi.across),
     };
     let Some(resolutions) = resolutions else {
         return Ok(None);
@@ -223,22 +288,23 @@ impl Area {
 
     /// The largest area: a feeder's page size's greatest, else the bottom right corner's greatest
     /// less the top left's least (0 where there's no top left), lengths in pixels converted at
-    /// `dpi`. `None` where there are no area options, or the area isn't finite and above 0.
-    pub(super) fn largest(&self, dpi: Option<f64>) -> Option<crate::SizeMm> {
+    /// `dpi`, widths at its across and heights at its down. `None` where there are no area
+    /// options, or the area isn't finite and above 0.
+    pub(super) fn largest(&self, dpi: Dpi) -> Option<crate::SizeMm> {
         if let Some((width, height)) = &self.page {
             return options::area(
-                options::length_mm(width, End::Max, dpi)?,
-                options::length_mm(height, End::Max, dpi)?,
+                options::length_mm(width, End::Max, dpi.across)?,
+                options::length_mm(height, End::Max, dpi.down)?,
             );
         }
         let (left, top, right, bottom) = self.corners.as_ref()?;
-        let least = |option: &Option<OptionDescriptor>| match option {
+        let least = |option: &Option<OptionDescriptor>, dpi| match option {
             Some(option) => options::length_mm(option, End::Min, dpi),
             None => Some(0.0),
         };
         options::area(
-            options::length_mm(right, End::Max, dpi)? - least(left)?,
-            options::length_mm(bottom, End::Max, dpi)? - least(top)?,
+            options::length_mm(right, End::Max, dpi.across)? - least(left, dpi.across)?,
+            options::length_mm(bottom, End::Max, dpi.down)? - least(top, dpi.down)?,
         )
     }
 }

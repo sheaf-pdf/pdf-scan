@@ -105,6 +105,9 @@ pub struct Feed {
     /// The options a `sane_start` answering `INVAL` makes inactive, without
     /// saying.
     pub inval_deactivates: Vec<Vec<u8>>,
+    /// The options a `sane_start` answering `INVAL` sets back to the value
+    /// the script gave them, without saying.
+    pub inval_resets: Vec<Vec<u8>>,
 }
 
 /// The default page's one frame.
@@ -266,6 +269,14 @@ impl Feed {
                         return Err("start-inval-deactivates takes names".to_owned());
                     };
                     self.inval_deactivates.push(name.clone());
+                }
+            }
+            "start-inval-resets" => {
+                for arg in args {
+                    let Text::Bytes(name) = arg else {
+                        return Err("start-inval-resets takes names".to_owned());
+                    };
+                    self.inval_resets.push(name.clone());
                 }
             }
             _ => return Ok(false),
@@ -721,7 +732,7 @@ mod tests {
     #[test]
     fn scan_lines_parse_and_say_their_errors() {
         let feed = feed(
-            "frame RGB 1 9 3 -1 8\nsheets 10\nnon-blocking\nio-mode-unsupported\nselect-fd -1\nparameters-status IO_ERROR\nread-length -1\nstart-inval-deactivates a b\n",
+            "frame RGB 1 9 3 -1 8\nsheets 10\nnon-blocking\nio-mode-unsupported\nselect-fd -1\nparameters-status IO_ERROR\nread-length -1\nstart-inval-deactivates a b\nstart-inval-resets c\n",
         );
         assert_eq!(feed.frames[0].bytes, Bytes::Count(36));
         assert_eq!(feed.sheets, Some(10));
@@ -731,6 +742,7 @@ mod tests {
         assert_eq!(feed.parameters_status, Some(ffi::SANE_STATUS_IO_ERROR));
         assert_eq!(feed.read_length, Some(ReadLength::Claim(-1)));
         assert_eq!(feed.inval_deactivates, [b"a".to_vec(), b"b".to_vec()]);
+        assert_eq!(feed.inval_resets, [b"c".to_vec()]);
         for bad in [
             "frame GRAY 1 2\n",
             "frame BLACK 1 2 2 2 8\n",

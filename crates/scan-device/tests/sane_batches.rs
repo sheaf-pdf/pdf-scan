@@ -714,6 +714,110 @@ fn a_start_refused_again_is_settings_refused() {
 
 #[test]
 #[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn a_start_refused_at_a_duplex_sheet_s_back_ends_the_batch_its_front_kept() {
+    // Sheet 1's back is the fake's second page.
+    let script = format!("{DEVICE}{DUPLEX_FEEDER}duplex\nsheets 2\nat 2 start INVAL\n");
+    let fake = Fake::new(
+        "a_start_refused_at_a_duplex_sheet_s_back_ends_the_batch_its_front_kept",
+        &script,
+    );
+    let ran = in_child!(
+        a_start_refused_at_a_duplex_sheet_s_back_ends_the_batch_its_front_kept,
+        fake.child(),
+        || {
+            let mut device = open(&mut SaneBackend::new());
+            let asked = settings(Source::Feeder, true, 72, Format::Gray8);
+            let (events, done) = batch(&mut *device, &asked, 1);
+            match done {
+                Err(ScanError::Driver { message, shown }) => {
+                    assert!(!shown);
+                    assert!(message.contains("sheet 1's back"), "{message}");
+                }
+                other => panic!("not the driver's words: {other:?}"),
+            }
+            // Never started again mid-sheet, which would give the next sheet's front as this
+            // sheet's back: the front alone, kept.
+            assert_eq!(order(&events), ["applied", "sheet 1", "page 1 front"]);
+            assert_eq!(images(&events), [gray_page(1, false)]);
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        assert_eq!(starts(&log), 2);
+        // The settings never set again after the back's start: the source (option 1) among them.
+        let refused = log.positions_of("sane_start")[1];
+        assert!(
+            log.positions_of_sets(1).iter().all(|&set| set < refused),
+            "{:?}",
+            log.option_sets()
+        );
+    }
+}
+
+/// A source option offering a flatbed and a feeder of one side, at the flatbed, which a start's
+/// `INVAL` sets back there.
+const INVAL_RESETS: &str = "option source STRING 32 soft-select+soft-detect\n\
+                            strings Flatbed \"Automatic Document Feeder\"\n\
+                            value Flatbed\n\
+                            start-inval-resets source\n";
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn a_setting_found_as_asked_that_a_start_s_inval_moves_is_set_back() {
+    let script = format!("{DEVICE}{INVAL_RESETS}sheets 4\nat 2 start INVAL\n");
+    let fake = Fake::new(
+        "a_setting_found_as_asked_that_a_start_s_inval_moves_is_set_back",
+        &script,
+    );
+    let ran = in_child!(
+        a_setting_found_as_asked_that_a_start_s_inval_moves_is_set_back,
+        fake.child(),
+        || {
+            let mut device = open(&mut SaneBackend::new());
+            let asked = settings(Source::Feeder, false, 72, Format::Gray8);
+            // The first batch sets the feeder, and is cancelled after its first sheet.
+            let tracker = Tracker::new();
+            let cancel = tracker.clone();
+            let (events, done) = batch_with(&mut *device, &asked, 1, &tracker, |event| {
+                if *event == Event::Sheet(1) {
+                    cancel.cancel();
+                }
+                true
+            });
+            assert_eq!(done, Ok(Done::Cancelled));
+            assert_eq!(images(&events), [gray_page(1, false)]);
+            // The second finds the feeder set, so sets nothing; its start's `INVAL` moves the
+            // source back to the flatbed, which is set to the feeder again, and the page started
+            // once more.
+            let (events, done) = batch(&mut *device, &asked, 2);
+            assert_eq!(done, Ok(Done::FeederEmpty));
+            assert_eq!(*applied(&events), Applied::new(asked, Vec::new()));
+            assert_eq!(
+                order(&events)[1..],
+                ["sheet 2", "page 2 front", "sheet 3", "page 3 front"]
+            );
+            assert_eq!(images(&events), [gray_page(3, false), gray_page(4, false)]);
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        // Set once by the first batch, then once after the second's start refused.
+        let refused = log.positions_of("sane_start")[1];
+        let sets = log.positions_of_sets(1);
+        assert_eq!(sets.len(), 2, "{:?}", log.option_sets());
+        assert!(
+            sets[0] < refused && sets[1] > refused,
+            "{:?}",
+            log.option_sets()
+        );
+        assert_eq!(starts(&log), 5);
+    }
+}
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
 fn a_cancel_as_sheet_2_is_taken_finishes_it_and_the_next_batch_gives_the_rest() {
     let script = format!("{DEVICE}{FEEDER}sheets 10\n");
     let fake = Fake::new(
@@ -954,6 +1058,120 @@ fn no_sheet_is_numbered_past_u32_max() {
         log.assert_no_violations();
         // The sheet after it never started.
         assert_eq!(starts(&log), 1);
+    }
+}
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn a_cancel_as_sheet_u32_max_is_taken_ends_the_batch_cancelled() {
+    let script = format!("{DEVICE}{FEEDER}sheets 3\n");
+    let fake = Fake::new(
+        "a_cancel_as_sheet_u32_max_is_taken_ends_the_batch_cancelled",
+        &script,
+    );
+    let ran = in_child!(
+        a_cancel_as_sheet_u32_max_is_taken_ends_the_batch_cancelled,
+        fake.child(),
+        || {
+            let mut device = open(&mut SaneBackend::new());
+            let asked = settings(Source::Feeder, false, 72, Format::Gray8);
+            let tracker = Tracker::new();
+            let cancel = tracker.clone();
+            // A cancel is checked before the next sheet is numbered: cancelled, not past the
+            // last number.
+            let (events, done) = batch_with(&mut *device, &asked, u32::MAX, &tracker, |event| {
+                if *event == Event::Sheet(u32::MAX) {
+                    cancel.cancel();
+                }
+                true
+            });
+            assert_eq!(done, Ok(Done::Cancelled));
+            let last = format!("page {} front", u32::MAX);
+            assert_eq!(order(&events)[1..], [format!("sheet {}", u32::MAX), last]);
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        assert_eq!(starts(&log), 1);
+    }
+}
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn an_area_in_pixels_is_set_down_the_page_at_y_resolution() {
+    // y-resolution takes 600 dpi alone, whatever x-resolution is set to.
+    let script = format!(
+        "{DEVICE}\
+         option x-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 300\nvalue 300\n\
+         option y-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 600\nvalue 600\n\
+         option tl-x INT 4 soft-select+soft-detect\nunit PIXEL\nrange 0 2550 1\n\
+         option tl-y INT 4 soft-select+soft-detect\nunit PIXEL\nrange 0 6600 1\n\
+         option br-x INT 4 soft-select+soft-detect\nunit PIXEL\nrange 0 2550 1\nvalue 2550\n\
+         option br-y INT 4 soft-select+soft-detect\nunit PIXEL\nrange 0 6600 1\nvalue 6600\n"
+    );
+    let fake = Fake::new(
+        "an_area_in_pixels_is_set_down_the_page_at_y_resolution",
+        &script,
+    );
+    let ran = in_child!(
+        an_area_in_pixels_is_set_down_the_page_at_y_resolution,
+        fake.child(),
+        || {
+            let mut device = open(&mut SaneBackend::new());
+            let mut asked = settings(Source::Flatbed, false, 300, Format::Gray8);
+            asked.paper = Paper::Size(SizeMm::LETTER);
+            let (events, done) = batch(&mut *device, &asked, 1);
+            assert_eq!(done, Ok(Done::OnePage));
+            // The whole of Letter: 3300 pixels down at 600 dpi is 139.7 mm.
+            assert_eq!(*applied(&events), Applied::new(asked, Vec::new()));
+            assert_eq!(pages(&events)[0].dpi, (300.0, 600.0));
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        // Options 1 to 6: x and y, tl-x and tl-y, br-x and br-y.
+        let last = |option| {
+            log.option_sets()
+                .into_iter()
+                .rfind(|&(set, _)| set == option)
+        };
+        assert_eq!(last(5).map(|(_, value)| value), Some("[2550]"));
+        assert_eq!(last(6).map(|(_, value)| value), Some("[6600]"));
+    }
+}
+
+#[test]
+#[cfg_attr(not(unix), ignore = "loads the fake by SANE's name: none on Windows")]
+fn an_inactive_resolution_is_left_and_an_active_x_resolution_set() {
+    let script = format!(
+        "{DEVICE}\
+         option resolution INT 4 soft-select+soft-detect+inactive\nunit DPI\nwords 100 200 300\nvalue 100\n\
+         option x-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 150 300\nvalue 150\n\
+         option y-resolution INT 4 soft-select+soft-detect\nunit DPI\nwords 150 300\nvalue 150\n"
+    );
+    let fake = Fake::new(
+        "an_inactive_resolution_is_left_and_an_active_x_resolution_set",
+        &script,
+    );
+    let ran = in_child!(
+        an_inactive_resolution_is_left_and_an_active_x_resolution_set,
+        fake.child(),
+        || {
+            let mut device = open(&mut SaneBackend::new());
+            let asked = settings(Source::Flatbed, false, 300, Format::Gray8);
+            let (events, done) = batch(&mut *device, &asked, 1);
+            assert_eq!(done, Ok(Done::OnePage));
+            assert_eq!(*applied(&events), Applied::new(asked, Vec::new()));
+            assert_eq!(pages(&events)[0].dpi, (300.0, 300.0));
+        }
+    );
+    if ran {
+        let log = fake.log();
+        log.assert_no_violations();
+        // x-resolution and y-resolution (options 2 and 3) set; the inactive one never.
+        assert_eq!(log.option_sets(), [(2, "[300]"), (3, "[300]")]);
     }
 }
 

@@ -86,9 +86,9 @@
 //! options change with the source, so it sets the source option to each source's value, reads
 //! what that source can do, and sets the option back to the value it found. An option already at
 //! the value wanted isn't set, and a source option with one value, or one software can't set,
-//! never is, so only the source it's at is read. Where a
-//! device names a source, a mode or an option its own way, the backend reads it by tables of the
-//! names backends are seen to use, each with where it's seen:
+//! never is, so only the source its value names is read (a feeder's both sides as a feeder with
+//! duplex). Where a device names a source, a mode or an option its own way, the backend reads it
+//! by tables of the names backends are seen to use, each with where it's seen:
 //!
 //! | What | Read from | The model |
 //! |---|---|---|
@@ -100,8 +100,8 @@
 //! | Left out | `ADF Back` (the backs alone), `Auto` (a flatbed that never stops), any other value, translated ones among them | not offered |
 //! | Formats | `mode`: `Lineart`, `Binary`, `Black & White`, `Black and White - Line Art` (black and white); `Gray`, `Grayscale`, `True Gray`; `Color`, `24bit Color`. With `depth`, gray and color at 8 bits and 16 where it allows them, and gray at 1 as black and white; without, 8 bits. Dithered modes (`Halftone`) left out | [`Format`](crate::Format), in its order |
 //! | No `mode` | the parameters before a start: gray at 1, 8 or 16 bits, color at 8 or 16, color at 1 as 8 | that one format |
-//! | Resolutions | `resolution`, else `scan-resolution`, else `x-resolution`: a range or a list, in whole dpi; none of these, 72 dpi | [`Resolutions`](crate::Resolutions) |
-//! | The largest area | a feeder's `page-width` and `page-height`, where active; else `br-x` and `br-y` less `tl-x` and `tl-y`; in millimetres, or in pixels at the resolution now | `max_area`; no such options, none |
+//! | Resolutions | the first of `resolution`, `scan-resolution` and `x-resolution` that's active: a range or a list, in whole dpi; none of these active, 72 dpi | [`Resolutions`](crate::Resolutions) |
+//! | The largest area | a feeder's `page-width` and `page-height`, where active; else `br-x` and `br-y` less `tl-x` and `tl-y`; in millimetres, or in pixels at the resolution now (down the page at `y-resolution`'s, where the resolution is `x-resolution`) | `max_area`; no such options, none |
 //!
 //! Where each name is seen: SANE's standard
 //! (<https://gitlab.com/sane-project/standard>) names `source`, `mode`, `depth`, `resolution`
@@ -112,11 +112,12 @@
 //! (<https://github.com/GNOME/simple-scan/blob/master/src/scanner.vala>) and libinsane
 //! (<https://gitlab.gnome.org/World/OpenPaperwork/libinsane>). Values are matched whole, never by
 //! a part of them. A feeder is read through its one-sided value, so where both sides allow less
-//! than one (fewer resolutions, say), its caps are the one side's. A resolution range's ends are rounded inward to whole dpi, its step to whole dpi (none, or
-//! under 1, is 1; a larger fraction rounded up), and a list's values to the nearest whole dpi,
-//! nothing below 1. No source finds the paper's size itself, and none gives encoded pages (SANE 1
-//! has none). A device with no source the model can scan from (no format, or no resolution, it
-//! can name) is [`ScanError::Unsupported`].
+//! than one (fewer resolutions, say), its caps are the one side's. A resolution range's ends are
+//! rounded inward to whole dpi, its step to whole dpi (none, or under 1, is 1; a larger fraction
+//! rounded up), and a list's values to the nearest whole dpi, nothing below 1. No source finds
+//! the paper's size itself, and none gives encoded pages (SANE 1 has none). A device with no
+//! source the model can scan from (no format, or no resolution, it can name) is
+//! [`ScanError::Unsupported`].
 //!
 //! # A batch
 //!
@@ -149,13 +150,15 @@
 //! The feeder found empty is [`ScanError::FeederEmpty`] before any page of the batch and
 //! [`Done::FeederEmpty`] after, at a sheet's back too; a flatbed gives one page,
 //! [`Done::OnePage`], and one that says it has no document is [`ScanError::Driver`]. A start the
-//! device refuses with the settings (SANE's `INVAL`, after which its options may have changed) is
-//! met by setting them again as `Applied` gave them and starting the page once more, and is
-//! [`ScanError::SettingsRefused`] where it refuses again, or a setting won't go back. A cancel
-//! SANE gives itself (a scanner's cancel button) ends the batch [`Done::Cancelled`]; a jam, an
-//! open cover, a busy device, refused access and a device gone are their own errors, and the rest
-//! the driver's words, the pages before them kept and the page being read dropped. No
-//! [`Event::Status`]: SANE gives none.
+//! device refuses with the settings (SANE's `INVAL`, after which its options may have changed) at
+//! a sheet's front is met by setting them again as `Applied` gave them and starting the page once
+//! more, and is [`ScanError::SettingsRefused`] where it refuses again, or a setting won't go back.
+//! At a sheet's back it ends the batch as the driver's words, the front kept: starting again
+//! means cancelling SANE's scan mid-sheet, which a scanner that reads both sides at once ends by
+//! dropping the back. A cancel SANE gives itself (a scanner's cancel button) ends the batch
+//! [`Done::Cancelled`]; a jam, an open cover, a busy device, refused access and a device gone are
+//! their own errors, and the rest the driver's words, the pages before them kept and the page
+//! being read dropped. No [`Event::Status`]: SANE gives none.
 //!
 //! Pages come as their frames say, whatever the settings asked (`Applied` says what was set, a
 //! page what came): gray at 1 bit inverted, since SANE's 1 is black, the bits past each row's

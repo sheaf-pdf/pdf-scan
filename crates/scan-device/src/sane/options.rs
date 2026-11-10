@@ -40,9 +40,13 @@ pub(super) const DEPTH: &str = "depth";
 /// The option that chooses the resolution: the standard's `resolution`, else `scan-resolution`,
 /// Lexmark's (libinsane's `workarounds.h`; simple-scan), else `x-resolution`, with
 /// `y-resolution` set alike (NAPS2's `SaneScanDriver.cs`).
-pub(super) const RESOLUTION: [&str; 3] = ["resolution", "scan-resolution", "x-resolution"];
+pub(super) const RESOLUTION: [&str; 3] = ["resolution", "scan-resolution", X_RESOLUTION];
 
-/// The resolution down the page, set alike where the resolution option is `x-resolution`.
+/// The resolution across the page, of a device with none for both ways.
+pub(super) const X_RESOLUTION: &str = "x-resolution";
+
+/// The resolution down the page, set alike where the resolution option is `x-resolution`, and
+/// what lengths down the page in pixels are converted at.
 pub(super) const Y_RESOLUTION: &str = "y-resolution";
 
 /// The scan area's corners (the standard's).

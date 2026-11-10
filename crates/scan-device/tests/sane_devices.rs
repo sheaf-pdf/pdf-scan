@@ -1041,6 +1041,121 @@ layout_caps!(
 );
 
 layout_caps!(
+    a_source_software_can_t_set_at_its_duplex_value_is_a_feeder_with_duplex,
+    r#"
+    option source STRING 16 soft-detect
+    strings Flatbed ADF "ADF Duplex"
+    value "ADF Duplex"
+    "#,
+    Ok(vec![source(
+        Source::Feeder,
+        Resolutions::List(vec![72]),
+        &[Format::Gray8],
+        true,
+        None
+    )]),
+    []
+);
+
+layout_caps!(
+    a_source_software_can_t_set_at_one_side_offers_no_duplex_it_can_t_be_set_to,
+    r#"
+    option source STRING 16 soft-detect
+    strings Flatbed ADF "ADF Duplex"
+    value ADF
+    "#,
+    Ok(vec![source(
+        Source::Feeder,
+        Resolutions::List(vec![72]),
+        &[Format::Gray8],
+        false,
+        None
+    )]),
+    []
+);
+
+layout_caps!(
+    an_area_in_pixels_is_read_down_the_page_at_y_resolution,
+    r#"
+    option x-resolution INT 4 soft-select+soft-detect
+    unit DPI
+    words 300
+    value 300
+    option y-resolution INT 4 soft-select+soft-detect
+    unit DPI
+    words 600
+    value 600
+    option tl-x INT 4 soft-select+soft-detect
+    unit PIXEL
+    range 0 2550 1
+    option tl-y INT 4 soft-select+soft-detect
+    unit PIXEL
+    range 0 6600 1
+    option br-x INT 4 soft-select+soft-detect
+    unit PIXEL
+    range 0 2550 1
+    value 2550
+    option br-y INT 4 soft-select+soft-detect
+    unit PIXEL
+    range 0 6600 1
+    value 6600
+    "#,
+    // Letter: 2550 pixels across at 300 dpi, 6600 down at 600.
+    Ok(vec![source(
+        Source::Flatbed,
+        Resolutions::List(vec![300]),
+        &[Format::Gray8],
+        false,
+        Some((215.9, 279.4))
+    )]),
+    []
+);
+
+layout_caps!(
+    an_inactive_resolution_gives_way_to_an_active_x_resolution,
+    r#"
+    option resolution INT 4 soft-select+soft-detect+inactive
+    unit DPI
+    words 100 200 300
+    value 100
+    option x-resolution INT 4 soft-select+soft-detect
+    unit DPI
+    words 150 300
+    value 150
+    option y-resolution INT 4 soft-select+soft-detect
+    unit DPI
+    words 150 300
+    value 150
+    "#,
+    Ok(vec![source(
+        Source::Flatbed,
+        Resolutions::List(vec![150, 300]),
+        &[Format::Gray8],
+        false,
+        None
+    )]),
+    []
+);
+
+layout_caps!(
+    a_resolution_option_that_s_inactive_is_none,
+    r#"
+    option resolution INT 4 soft-select+soft-detect+inactive
+    unit DPI
+    words 100 200 300
+    value 100
+    "#,
+    Ok(vec![source(
+        Source::Flatbed,
+        Resolutions::List(vec![72]),
+        &[Format::Gray8],
+        false,
+        None
+    )]),
+    []
+);
+
+layout_caps!(
     a_device_with_no_mode_the_model_names_is_unsupported,
     r#"
     option mode STRING 16 soft-select+soft-detect

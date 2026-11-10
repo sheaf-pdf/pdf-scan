@@ -32,17 +32,19 @@ pub(super) struct Device<'a> {
 /// - The settings set and read back, and said in [`Event::Applied`] before any sheet.
 /// - Before each sheet's front, never within a sheet, `progress` checked: once it fails, the
 ///   batch is dropped (`sane_cancel`) and ends [`Done::Cancelled`], the sheet in flight finished,
-///   front and back. A sheet past `u32::MAX` is [`ScanError::Driver`] before it starts.
+///   front and back. Then the sheet numbered: past `u32::MAX`, [`ScanError::Driver`] before it
+///   starts.
 /// - A flatbed gives one page, then the batch is dropped: [`Done::OnePage`] (some flatbeds give
 ///   the same page for ever).
 /// - `NO_DOCS` before a page: from a feeder with no page sent yet in this batch,
 ///   [`ScanError::FeederEmpty`]; after pages, or at a sheet's back, [`Done::FeederEmpty`], the
 ///   progress holding the last page's bytes again; from a flatbed, [`ScanError::Driver`], since
 ///   the model's empty feeder is a feeder's.
-/// - A start the device refuses with the settings (`INVAL`): the batch dropped, the settings set
-///   again as `Applied` gave them, and the page started once more in a new batch, its sheet's
-///   number the same; refused again, or a setting that won't go back, is
-///   [`ScanError::SettingsRefused`].
+/// - A start the device refuses with the settings (`INVAL`) at a sheet's front: the batch
+///   dropped, the settings set again as `Applied` gave them, and the page started once more in a
+///   new batch, its sheet's number the same; refused again, or a setting that won't go back, is
+///   [`ScanError::SettingsRefused`]. At a sheet's back, never tried again, since dropping the
+///   batch mid-sheet may drop the back: [`ScanError::Driver`], the front kept.
 /// - SANE's own `CANCELLED` (the scanner's button) ends it [`Done::Cancelled`]; every other error
 ///   ends it as `error::batch_end` maps it, the pages sent before kept and the page being read
 ///   dropped.
@@ -80,6 +82,11 @@ pub(super) fn scan(
     let mut sheets: u64 = 0;
     let mut batch = handle.batch();
     loop {
+        // Between sheets, never within one: dropping the batch cancels SANE's. Before the sheet
+        // is numbered, so a cancel is a cancel whatever the number.
+        if progress.check().is_err() {
+            return Ok(Done::Cancelled);
+        }
         let Ok(sheet) = u32::try_from(u64::from(first_sheet) + sheets) else {
             return Err(ScanError::Driver {
                 message: format!(
@@ -89,14 +96,13 @@ pub(super) fn scan(
                 shown: false,
             });
         };
-        // Between sheets, never within one: dropping the batch cancels SANE's.
-        if progress.check().is_err() {
-            return Ok(Done::Cancelled);
-        }
         for &side in sides {
-            // A start refused with the settings is met once: the settings set again, in a batch
-            // of their own, and the page started once more.
-            let mut retried = false;
+            // A start refused with the settings is met once, at a sheet's front: the settings
+            // set again, in a batch of their own, and the page started once more. Never at a
+            // back, since a new batch cancels SANE's mid-sheet, which a scanner reading both
+            // sides at once ends by dropping the back: the next page would be the next sheet's
+            // front.
+            let mut retried = side == Side::Back;
             let page = loop {
                 let (page, bytes) = read_page(&mut batch, progress);
                 if matches!(page, Ok(Page::Image(_))) {
@@ -127,6 +133,16 @@ pub(super) fn scan(
                         (Source::Feeder, Side::Front) if sent == 0 => Err(ScanError::FeederEmpty),
                         (Source::Feeder, _) => Ok(Done::FeederEmpty),
                     };
+                }
+                // The front kept: the back refused with the settings the front took.
+                Err(Error::StartInvalid { .. }) if side == Side::Back => {
+                    return Err(ScanError::Driver {
+                        message: format!(
+                            "the scanner refused to start sheet {sheet}'s back with the settings \
+                             its front was scanned with"
+                        ),
+                        shown: false,
+                    });
                 }
                 Err(error) => return error::batch_end(&error),
             };

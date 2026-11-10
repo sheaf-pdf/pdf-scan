@@ -14,7 +14,7 @@ use std::cmp::Reverse;
 
 use sane_dl::{Call, Error, Handle, OptionDescriptor, SaneString, Status, Value, ValueType};
 
-use super::caps::{self, Area, NO_RESOLUTION_OPTION};
+use super::caps::{self, Area, Dpi, NO_RESOLUTION_OPTION};
 use super::error;
 use super::options::{self, DuplexSwitch, ModeKind, ModeValues, SourceKind, SourceValues};
 use crate::{Applied, Clamped, Format, Paper, Resolutions, ScanError, Settings, SizeMm, Source};
@@ -35,6 +35,9 @@ pub(super) struct Taken {
     restore: Vec<(String, Value)>,
     /// The options of those the settings set: what a start the device refused sets again.
     set: Vec<String>,
+    /// The source option, where it's never set (it has one value, or software can't set it):
+    /// left as it is after a start the device refused, too.
+    fixed_source: Option<String>,
 }
 
 /// Sets `asked` on the device, in order, each clamped as it's set, then the options by name;
@@ -57,19 +60,23 @@ pub(super) fn apply(
     let restore = read_options(handle, &model_options(handle, &source, switch.as_ref()))?;
     let read = read_back(handle, &restore, &source, switch.as_ref(), dpi_set)?;
     let (applied, dpi) = applied_of(asked, &read)?;
+    let fixed_source = source.option.clone().filter(|_| source.fixed);
     Ok(Taken {
         applied,
         dpi,
         restore,
         set,
+        fixed_source,
     })
 }
 
-/// Sets again, in order, each option the settings set to the value `taken` read back, where it's
-/// there and can be set now, then the options by name, after a start the device refused (`INVAL`,
-/// after which SANE may have changed its options); then reads back every option `taken` read. A
-/// value the device refuses, or one that reads back otherwise than `Applied` said, is
-/// [`ScanError::SettingsRefused`]. An option gone inactive is neither set nor read.
+/// Sets again, in order, each of the model's options to the value `taken` read back, where it's
+/// there and can be set now, after a start the device refused (`INVAL`, after which SANE may have
+/// changed its options): those the settings set, and each other that holds another value now; a
+/// source option that's never set is left as it is. Then the options by name, and every option
+/// `taken` read is read back. A value the device refuses, or one that reads back otherwise than
+/// `Applied` said, is [`ScanError::SettingsRefused`]. An option gone inactive is neither set nor
+/// read.
 pub(super) fn restore(
     handle: &mut Handle,
     taken: &Taken,
@@ -82,16 +89,22 @@ pub(super) fn restore(
             .map_err(|error| error::map(&error))?;
     }
     for (name, value) in &taken.restore {
-        if !taken.set.contains(name) {
+        if taken.fixed_source.as_ref() == Some(name) {
             continue;
         }
         let Some(option) = handle
             .find_option(name)
             .filter(|option| options::settable(option))
+            .cloned()
         else {
             continue;
         };
         let index = option.index;
+        // One the settings didn't set (a value found as asked, say) is set back only where the
+        // start moved it.
+        if !taken.set.contains(name) && (!readable(&option) || get(handle, index)? == *value) {
+            continue;
+        }
         handle.set(index, value).map_err(|error| match error {
             Error::Status {
                 status: Status::INVAL,
@@ -122,6 +135,8 @@ struct SourceSet {
     both_sides: bool,
     /// The source option's name, where there is one.
     option: Option<String>,
+    /// Whether the option is never set: it has one value, or software can't set it.
+    fixed: bool,
 }
 
 /// Sets the source asked for, or the first the device lists where it lacks it (a flatbed, then a
@@ -139,6 +154,7 @@ fn set_source(
             source: Source::Flatbed,
             both_sides: false,
             option: None,
+            fixed: false,
         });
     };
     let found = caps::get_string(handle, &option.name)?;
@@ -162,6 +178,7 @@ fn set_source(
         source,
         both_sides,
         option: Some(option.name),
+        fixed: never_set,
     })
 }
 
@@ -294,13 +311,6 @@ fn mode_for(format: Format, modes: &ModeValues) -> (Option<SaneString>, Option<u
     }
 }
 
-/// The device's resolution option, by the table's names, whatever its activity.
-fn resolution_option(handle: &Handle) -> Option<&OptionDescriptor> {
-    options::RESOLUTION
-        .iter()
-        .find_map(|name| handle.find_option(name))
-}
-
 /// Sets the resolution nearest `asked` that the option allows now ([`nearest`]), and
 /// `y-resolution` alike where the option is `x-resolution`; the dpi set, where one was. A device
 /// whose resolution can't be set, or allows none the model can name, gives what it gives, and
@@ -310,7 +320,7 @@ fn set_resolution(
     asked: u32,
     touched: &mut Vec<String>,
 ) -> Result<Option<u32>, ScanError> {
-    let Some(option) = resolution_option(handle).cloned() else {
+    let Some(option) = caps::resolution_option(handle).cloned() else {
         return Ok(None);
     };
     if !options::settable(&option) {
@@ -326,7 +336,7 @@ fn set_resolution(
     };
     let dpi = nearest(&resolutions, asked);
     set_number(handle, &option.name, f64::from(dpi), touched)?;
-    if option.name == "x-resolution"
+    if option.name == options::X_RESOLUTION
         && handle
             .find_option(options::Y_RESOLUTION)
             .is_some_and(options::settable)
@@ -369,29 +379,27 @@ fn nearest(resolutions: &Resolutions, asked: u32) -> u32 {
 /// Sets the scan area for `paper` ([`paper_for`]), where the device has area options: a feeder's
 /// page size, where it's active, to the paper's; the top left at its least; the bottom right at
 /// that plus the paper's size, top-left aligned. In each option's unit, pixels at the resolution
-/// set.
+/// set, lengths across at the resolution across and down at the resolution down
+/// ([`caps::dpi_now`]).
 fn set_area(
     handle: &mut Handle,
     paper: Paper,
     source: Source,
     touched: &mut Vec<String>,
 ) -> Result<(), ScanError> {
-    let dpi = match resolution_option(handle).cloned() {
-        Some(option) if options::readable(&option) => caps::current_number(handle, &option)?,
-        Some(_) => None,
-        None => Some(f64::from(NO_RESOLUTION_OPTION)),
-    };
+    let dpi = caps::dpi_now(handle)?;
     let Some(largest) = Area::of(handle, source).largest(dpi) else {
         return Ok(());
     };
     let size = paper_for(paper, largest);
     let (width, height) = (f64::from(size.width), f64::from(size.height));
-    set_length(handle, options::PAGE_WIDTH, width, dpi, touched)?;
-    set_length(handle, options::PAGE_HEIGHT, height, dpi, touched)?;
-    let left = set_least(handle, options::TL_X, dpi, touched)?;
-    let top = set_least(handle, options::TL_Y, dpi, touched)?;
-    set_length(handle, options::BR_X, left + width, dpi, touched)?;
-    set_length(handle, options::BR_Y, top + height, dpi, touched)?;
+    let Dpi { across, down } = dpi;
+    set_length(handle, options::PAGE_WIDTH, width, across, touched)?;
+    set_length(handle, options::PAGE_HEIGHT, height, down, touched)?;
+    let left = set_least(handle, options::TL_X, across, touched)?;
+    let top = set_least(handle, options::TL_Y, down, touched)?;
+    set_length(handle, options::BR_X, left + width, across, touched)?;
+    set_length(handle, options::BR_Y, top + height, down, touched)?;
     Ok(())
 }
 
@@ -470,9 +478,9 @@ fn model_options(
     names.extend(source.option.clone());
     names.extend(switch.map(|(name, _)| name.clone()));
     names.extend([options::MODE, options::DEPTH].map(str::to_owned));
-    if let Some(resolution) = resolution_option(handle) {
+    if let Some(resolution) = caps::resolution_option(handle) {
         names.push(resolution.name.clone());
-        if resolution.name == "x-resolution" {
+        if resolution.name == options::X_RESOLUTION {
             names.push(options::Y_RESOLUTION.to_owned());
         }
     }
@@ -575,13 +583,13 @@ fn read_back(
             })?
         }
     };
-    let resolution = resolution_option(handle).map(|option| option.name.clone());
+    let resolution = caps::resolution_option(handle).map(|option| option.name.clone());
     let across = match resolution.as_deref().and_then(number) {
         Some(dpi) => dpi,
         None => f64::from(dpi_set.unwrap_or(NO_RESOLUTION_OPTION)),
     };
     let down = number(options::Y_RESOLUTION)
-        .filter(|_| resolution.as_deref() == Some("x-resolution"))
+        .filter(|_| resolution.as_deref() == Some(options::X_RESOLUTION))
         .unwrap_or(across);
     let length = |name: &str, dpi: f64| {
         let option = handle.find_option(name)?;

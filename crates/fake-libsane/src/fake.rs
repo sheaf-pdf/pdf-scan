@@ -744,6 +744,22 @@ impl Fake {
                     }
                 }
             }
+            for name in &feed.inval_resets {
+                let wanted = Text::Bytes(name.clone());
+                let given = self
+                    .script
+                    .layout
+                    .options
+                    .iter()
+                    .find(|spec| spec.descriptor.name == wanted);
+                for (spec, _) in &mut handle.options {
+                    if let Some(given) = given
+                        && spec.descriptor.name == wanted
+                    {
+                        spec.value = given.value.clone();
+                    }
+                }
+            }
             handle.stale = (0..handle.options.len()).collect();
             handle.stale_after = "sane_start returned INVAL";
         }
@@ -1493,6 +1509,24 @@ mod tests {
                 "sane_control_option: came after sane_start returned INVAL before every descriptor was read again (not 0)"
             ]
         );
+    }
+
+    #[test]
+    fn a_start_answering_inval_sets_options_back_as_the_script_says() {
+        let mut fake = initialised(
+            "device fake:0 a b c\noption height INT 4 soft-select+soft-detect\nvalue 5\nat 1 start INVAL\nstart-inval-resets height\n",
+        );
+        let id = opened(&mut fake);
+        let set = control(&mut fake, id, 1, ffi::SANE_ACTION_SET_VALUE, words(&[9]));
+        assert_eq!(set.status, ffi::SANE_STATUS_GOOD);
+        assert_eq!(start(&mut fake, id), Some(ffi::SANE_STATUS_INVAL));
+        cancel(&mut fake, id);
+        for option in [0, 1] {
+            fake.descriptor(id, option).unwrap();
+        }
+        let got = control(&mut fake, id, 1, ffi::SANE_ACTION_GET_VALUE, Given::Nothing);
+        assert_eq!(got.write, Some(RawValue::Words(vec![5])));
+        assert!(fake.violations.is_empty(), "{:?}", fake.violations);
     }
 
     #[test]
