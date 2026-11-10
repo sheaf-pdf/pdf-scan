@@ -371,9 +371,12 @@ impl fmt::Display for SaneString {
     }
 }
 
+/// The string's bytes, as a byte string is written in Rust (`SaneString(b"Caf\xe9")`): ASCII's
+/// printable characters as they are, every other byte escaped, so bytes that aren't UTF-8 are
+/// shown as they came.
 impl fmt::Debug for SaneString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SaneString({:?})", self.to_string_lossy())
+        write!(f, "SaneString(b\"{}\")", self.0.escape_ascii())
     }
 }
 
@@ -948,7 +951,12 @@ mod tests {
         let string = SaneString::new(b"ADF \xff".to_vec());
         assert_eq!(string.as_bytes(), b"ADF \xff");
         assert_eq!(string.to_string(), "ADF \u{fffd}");
-        assert_eq!(format!("{string:?}"), "SaneString(\"ADF \u{fffd}\")");
+        assert_eq!(format!("{string:?}"), "SaneString(b\"ADF \\xff\")");
+        // Latin-1 and UTF-8 alike, as they came.
+        assert_eq!(
+            format!("{:?}", SaneString::from(b"Caf\xe9 \"\xc3\xa8\"".as_slice())),
+            "SaneString(b\"Caf\\xe9 \\\"\\xc3\\xa8\\\"\")"
+        );
         assert_eq!(
             SaneString::from("Flatbed"),
             SaneString::from(b"Flatbed".as_slice())

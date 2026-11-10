@@ -16,7 +16,9 @@ macOS have no default library; `Image`'s `Debug` gives its data's length rather 
 `Device`'s `vendor`, `model` and `kind` are `SaneString`, SANE's bytes as the backend sent them, where they
 were a `String` with any byte that isn't UTF-8 replaced, which lost a Latin-1 vendor's accented letters. Code
 that showed them calls `to_string_lossy()` for the same text as before, or reads `as_bytes()` and decodes
-them as it chooses.
+them as it chooses (the crate's example: as UTF-8 where they are, else as Latin-1). `SaneString`'s and
+`DeviceName`'s `Debug` show their bytes, escaped as a byte string is (`SaneString(b"Caf\xe9")`), where it
+showed them as text with any byte that isn't UTF-8 replaced; their `Display` still does that.
 
 - **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
   `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on

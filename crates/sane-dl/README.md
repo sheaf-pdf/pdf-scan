@@ -23,11 +23,16 @@ use sane_dl::{Page, Sane};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sane = Sane::load()?;
+    // A device's strings are SANE's bytes: Latin-1 by SANE's standard, UTF-8 from some backends.
+    // Read as UTF-8 where they are, else as Latin-1.
+    let text = |bytes: &[u8]| match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().copied().map(char::from).collect(),
+    };
     for device in sane.devices(false, Duration::from_secs(30))? {
-        // A device's strings are SANE's bytes, read here as UTF-8.
-        let vendor = device.vendor.to_string_lossy();
-        let model = device.model.to_string_lossy();
-        println!("{} ({vendor} {model})", device.name);
+        let vendor = text(device.vendor.as_bytes());
+        let model = text(device.model.as_bytes());
+        println!("{} ({vendor} {model})", text(device.name.as_bytes()));
     }
     let mut handle = sane.open("test:0")?;
     if let Some(mode) = handle.find_option("mode") {
