@@ -69,10 +69,16 @@
 //! none where the id gives none), given as `SANE_CONFIG_DIR` with SANE's own list after it, so
 //! SANE loads that backend alone and reads nothing anyone else wrote: the directory, then its
 //! current directory (the same), then the system's. That replaces any `SANE_CONFIG_DIR` the app
-//! has; a listing's directory is empty and leaves the app's. Whatever the id, the worker's
-//! backend is the one to refuse it. On Unix a worker leads a process group of its own, so a
-//! terminal's interrupt reaches the app, which decides, and not the worker mid-sheet; on Windows
-//! it's started with no console window. Otherwise it inherits the app's environment.
+//! or the worker's command has; a listing's directory is empty and leaves theirs. Whatever the
+//! id, the worker's backend is the one to refuse it. On Unix a worker leads a process group of
+//! its own, so a terminal's interrupt reaches the app, which decides, and not the worker
+//! mid-sheet; on Windows it's started with no console window.
+//!
+//! A worker inherits the app's environment, and its command's variables are set after it, in
+//! order ([`WorkerCommand::env`]), then a SANE open's `SANE_CONFIG_DIR`: so an app gives a
+//! worker what its process reads as it starts, such as the system loader's search path that
+//! chooses the SANE library it loads, without changing its own environment. The client sets each
+//! as given, the app's own choice, as its program is; a search path holds absolute entries alone.
 //!
 //! The client trusts nothing a worker says, since a driver's code runs there: every line is
 //! capped before it's read whole ([`Limits::line`]); a page's bytes are capped
@@ -201,7 +207,8 @@
 //!
 //! - `{"applied":Applied}`, the settings the device took and what it changed;
 //! - `{"status":Status}`, such as `{"status":"WarmingUp"}`;
-//! - `{"sheet":N}`, as sheet `N` begins;
+//! - `{"sheet":N}`, sheet `N`, before its pages: as it begins, or with its front where the
+//!   driver says a sheet is there only by scanning it;
 //! - `{"page":...}` and its bytes, for each page, whole (below);
 //! - `{"progress":{"done":B,"total":T}}`: the bytes done of the page in flight, and its total,
 //!   `null` while it isn't known;

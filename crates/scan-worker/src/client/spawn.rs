@@ -1,5 +1,6 @@
-//! A worker's process started: its private directory, a SANE open's configuration in it, and
-//! the process itself, apart from the app's terminal or console.
+//! A worker's process started: its private directory, its command's variables, a SANE open's
+//! configuration in the directory, and the process itself, apart from the app's terminal or
+//! console.
 
 use std::{
     io,
@@ -47,6 +48,9 @@ pub(super) fn spawn(
     let mut process = Command::new(&command.program);
     process
         .args(&command.args)
+        // After the app's own environment, which the worker inherits; in order, so the last
+        // given of a variable is its value.
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
         .current_dir(dir.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -56,6 +60,7 @@ pub(super) fn spawn(
     {
         // SANE reads this directory, then its current directory (the same one), then the
         // system's: so only the id's backend loads, and nothing SANE reads is anyone else's.
+        // Set after the command's variables, so it replaces one the command gives.
         let name = sane_name(id);
         let backend = name.as_deref().and_then(backend_of);
         let config = ConfigDir::write(dir.path(), backend, Search::BeforeSystem)

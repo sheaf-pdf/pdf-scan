@@ -1,11 +1,14 @@
 //! What the integration tests share: the test worker, its scenarios' scripts, and a batch run
-//! through a worker or in process.
+//! through a worker or in process; and for SANE's worker, the fake libsane and configurations of
+//! the test's own ([`sane`]).
 
 // Each test binary takes what it needs of these.
 #![allow(dead_code)]
 
 #[path = "../../src/bin/scan-worker-fake/scenarios.rs"]
 pub mod scenarios;
+
+pub mod sane;
 
 use std::{
     fs,

@@ -141,9 +141,9 @@ impl Client {
     /// ([`Client::work_dir`]): for a SANE device, the directory also holds a SANE configuration
     /// naming only the backend the stored id names (the text after `sane:` up to its first `:`;
     /// none where the id gives none), which SANE reads first (`SANE_CONFIG_DIR`, in place of any
-    /// the app has set), then the directory itself, then the system's, so the device opens
-    /// without waiting on every backend's probe. The worker's backend is the one to refuse an id
-    /// it doesn't form.
+    /// the app or the worker's command has set: [`WorkerCommand::env`]), then the directory
+    /// itself, then the system's, so the device opens without waiting on every backend's probe.
+    /// The worker's backend is the one to refuse an id it doesn't form.
     ///
     /// Errors: [`Error::NoWorker`] where no worker is given for the driver; [`Error::Start`]
     /// where the worker can't be started (a program that isn't an absolute path among it), and
@@ -197,20 +197,22 @@ impl Client {
     }
 }
 
-/// A worker's program and its arguments.
+/// A worker's program, its arguments, and the variables set on its process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkerCommand {
     program: PathBuf,
     args: Vec<OsString>,
+    env: Vec<(OsString, OsString)>,
 }
 
 impl WorkerCommand {
-    /// The worker `program`, with no argument: an absolute path, since it's never searched for
-    /// (checked as a worker starts).
+    /// The worker `program`, with no argument and no variable of its own: an absolute path, since
+    /// it's never searched for (checked as a worker starts).
     pub fn new(program: impl Into<PathBuf>) -> WorkerCommand {
         WorkerCommand {
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -218,6 +220,27 @@ impl WorkerCommand {
     #[must_use = "it returns the command so made, the one it was called on moved into it"]
     pub fn arg(mut self, arg: impl Into<OsString>) -> WorkerCommand {
         self.args.push(arg.into());
+        self
+    }
+
+    /// The command with the variable `key` set to `value` on the worker's process, after the
+    /// variables given before.
+    ///
+    /// A worker inherits the app's environment; its command's variables are set after it, in
+    /// order, so one the app has, or one given twice, takes the value given last. A SANE worker
+    /// that opens a stored device then has the client's `SANE_CONFIG_DIR` set after them, in
+    /// place of any given here (the [crate's docs](crate), "The client"); a listing's worker keeps
+    /// the one given here.
+    ///
+    /// For what a worker's process reads as it starts, such as the system loader's search path
+    /// that chooses the SANE library a worker loads (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` on
+    /// macOS), which no code in a worker may change once it runs. The client sets each as given,
+    /// unchecked: the app's own choice, as its program is. A search path holds absolute entries
+    /// alone, since the loader reads an empty or relative one from the working directory, as
+    /// `sane-dl`'s `Sane::load` says.
+    #[must_use = "it returns the command so made, the one it was called on moved into it"]
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> WorkerCommand {
+        self.env.push((key.into(), value.into()));
         self
     }
 
@@ -229,6 +252,13 @@ impl WorkerCommand {
     /// Its arguments, in order.
     pub fn args(&self) -> impl Iterator<Item = &OsStr> {
         self.args.iter().map(OsString::as_os_str)
+    }
+
+    /// Its variables, each a key and its value, in the order given.
+    pub fn envs(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+        self.env
+            .iter()
+            .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
     }
 }
 

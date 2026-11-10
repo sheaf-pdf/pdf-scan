@@ -1,41 +1,59 @@
 //! Where a worker is started: a private directory of its own under the work directory, and for
-//! a SANE open, the stored id's one-backend configuration in it. Through the test worker's `env`
-//! backend, whose devices say where it was started: its current directory as their name,
-//! `SANE_CONFIG_DIR` as their maker, what the directory holds as their model.
+//! a SANE open, the stored id's one-backend configuration in it; and the variables its command
+//! sets, a SANE open's `SANE_CONFIG_DIR` after them. Through the test worker's `env` backend,
+//! whose devices say where it was started: its current directory as their name,
+//! `SANE_CONFIG_DIR` as their maker, what the directory holds and a variable a test sets as their
+//! model.
 
 mod support;
 
 use std::{env, fs, path::PathBuf};
 
 use scan_worker::scan_device::{DeviceId, DeviceInfo, Driver};
-use scan_worker::{Client, RemoteDevice};
+use scan_worker::{Client, RemoteDevice, WorkerCommand};
 use serde_json::{Value, json};
 
 use support::{AT_MOST, resolved, worker};
 
 /// A client whose SANE worker is the `env` one, its directories made under a new work directory.
 fn env_client() -> (Client, tempfile::TempDir) {
+    env_client_of(worker("env"))
+}
+
+/// A client whose SANE worker is `command`, the `env` one, its directories made under a new work
+/// directory.
+fn env_client_of(command: WorkerCommand) -> (Client, tempfile::TempDir) {
     let work = tempfile::tempdir().expect("a work directory");
     let client = Client::new()
-        .worker(Driver::Sane, worker("env"))
+        .worker(Driver::Sane, command)
         .work_dir(work.path());
     (client, work)
 }
 
-/// Where a device says its worker was started: the directory, `SANE_CONFIG_DIR`, and what the
-/// directory held.
+/// The variable the `env` backend reports.
+const GIVEN: &str = "SCAN_WORKER_TEST_GIVEN";
+
+/// Where a device says its worker was started: the directory, `SANE_CONFIG_DIR`, what the
+/// directory held, and [`GIVEN`]'s value.
 struct Started {
     dir: PathBuf,
     variable: String,
     held: Value,
+    given: Value,
 }
 
 fn started(info: &DeviceInfo) -> Started {
     assert_eq!(info.driver, Driver::Sane);
+    let mut held: Value = serde_json::from_str(&info.model).expect("the directory's contents");
+    let given = held
+        .as_object_mut()
+        .and_then(|held| held.remove("given"))
+        .expect("the variable's value, or null");
     Started {
         dir: PathBuf::from(&info.name),
         variable: info.maker.clone(),
-        held: serde_json::from_str(&info.model).expect("the directory's contents"),
+        held,
+        given,
     }
 }
 
@@ -152,4 +170,53 @@ fn the_system_s_temporary_directory_is_the_default() {
         resolved(dir.parent().expect("a parent")),
         resolved(env::temp_dir())
     );
+}
+
+#[test]
+fn a_variable_the_command_sets_reaches_the_worker_the_last_given_its_value() {
+    let (client, work) = env_client();
+    // None given.
+    let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
+    assert_eq!(started(&listed[0]).given, Value::Null);
+    let (device, opened) = open_sane(&client, &work, "sane:test:0");
+    assert_eq!(opened.given, Value::Null);
+    device.close().expect("closed");
+    // Given, and given twice: the later is its value, for a listing and an open alike.
+    let command = worker("env")
+        .env(GIVEN, "first")
+        .env(GIVEN, "a value, with spaces")
+        .env("SCAN_WORKER_TEST_OTHER", "unread");
+    assert_eq!(
+        command.envs().map(|(key, _)| key).collect::<Vec<_>>(),
+        [GIVEN, GIVEN, "SCAN_WORKER_TEST_OTHER"]
+    );
+    let (client, work) = env_client_of(command);
+    let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
+    assert_eq!(started(&listed[0]).given, json!("a value, with spaces"));
+    let (device, opened) = open_sane(&client, &work, "sane:test:0");
+    assert_eq!(opened.given, json!("a value, with spaces"));
+    device.close().expect("closed");
+}
+
+#[test]
+fn a_command_s_sane_config_dir_is_a_listing_s_and_an_open_s_is_the_client_s() {
+    let given = env::temp_dir().join("given-by-the-command");
+    let command = worker("env").env("SANE_CONFIG_DIR", &given);
+    let (client, work) = env_client_of(command);
+    // A listing's worker keeps the command's, its directory empty.
+    let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
+    let listing = started(&listed[0]);
+    assert_eq!(PathBuf::from(&listing.variable), given);
+    assert_eq!(
+        listing.held,
+        json!({"entries": [], "dll_conf": null, "dll_d": null})
+    );
+    // An open's has the client's in its place: its directory naming the id's backend, then `:`.
+    let (device, opened) = open_sane(&client, &work, "sane:test:0");
+    names_its_directory_first(&opened);
+    assert_eq!(
+        opened.held,
+        json!({"entries": ["dll.conf", "dll.d"], "dll_conf": "test\n", "dll_d": []})
+    );
+    device.close().expect("closed");
 }
