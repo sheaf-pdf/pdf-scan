@@ -219,6 +219,63 @@ merged first.
    `scan-device`, the `fake` and `sane` backends and the worker's protocol together. Checked: 10 images
    through the sample source in both bitnesses (if the spike worked); the error mapping in unit tests; the
    Linux slices' checks again, on the changed model.
+   - **A real driver first, 2026-11-09,** ahead of slice 12, on the Windows machine: an fi-6130 on PFU's
+     PaperStream IP (TWAIN) 1.42.0.5685, which takes the plain fi-6130 as well as the fi-6130Z (an archived PFU
+     page lists both; slice 12 assumed FUJITSU TWAIN32 for it), driven through `twain-dsm` by a throwaway 32-bit
+     program outside the repository, gray at 200 dpi, native transfers, each page kept as a BMP: two runs of one
+     page each (the second sheet jammed a little), its capabilities read on a fresh open with nothing set, then a
+     batch of seven test sheets, the driver's settings as it opened but for gray and 200 dpi. What the backend
+     takes from it:
+     - **32-bit only, as installed.** The package puts one source, `twain_32\Fjicube\Fjic0400.ds`, and nothing
+       under `twain_64`, so only the 32-bit worker lists this scanner; whether PaperStream IP (TWAIN x64) takes
+       the plain fi-6130 is untried. The 32-bit DSM listed `PaperStream IP fi-6130dj` (family `PaperStream
+       IP`, manufacturer `FUJITSU`, TWAIN 2.2) and the sample, not the two `.ds` files the package puts in
+       `Fjicube\ExtraMode\` (`PSIPDiskImportMode.ds`, `PSIPReprocessMode.ds`). Its id, by the seam note's
+       section 1: `twain32:PaperStream IP fi-6130dj`.
+     - **Hidden, by callback.** `Ui::Hidden` scanned with no window shown, and `Delivery::Callback` brought
+       `MSG_XFERREADY`: `crates/twain-dsm.md`'s open question (a visible parent, a modal enable, delivery by
+       events) is answered for PaperStream IP; FUJITSU TWAIN32's waits for slice 12.
+     - **Its sets.** `ICAP_XFERMECH` native, `CAP_XFERCOUNT` 1 and -1, `CAP_INDICATORS` off, `ICAP_PIXELTYPE`
+       gray and both resolutions at 200 each answered `Exact`, and read back so; `CAP_FEEDERLOADED` read true
+       before each enable. None outlasts the session: the next open read black and white at 300 dpi, the
+       defaults.
+     - **It opens with settings that aren't its defaults.** `CAP_DUPLEXENABLED` current true, default false;
+       `ICAP_AUTODISCARDBLANKPAGES` current `TWBP_AUTO`, default `TWBP_DISABLE`. Neither was ever set from
+       here: the driver keeps a configuration of its own. So the backend sets every capability the model
+       covers, and the processing below, at every open, and takes neither the current value nor the default
+       as what it wants.
+     - **A batch, as it opens.** Seven sheets gave 11 transfers, the pending count 0xFFFF (`None`) after each
+       until the last, as the sample's: duplex on, and three blank backs dropped. Every transfer had extended
+       image info: `TWEI_PAGESIDE` `TWCS_TOP` (1) or `TWCS_BOTTOM` (2); `TWEI_PAGENUMBER` counting every side
+       scanned, dropped ones too (1, 2, 3, 5, 7, 8, 9, 11, 12, 13, 14: 4, 6 and 10 the blanks); and
+       `TWEI_DOCUMENTNUMBER` 1 throughout. So PaperStream IP reports the side (`SideKnown::Reported`; the seam
+       note's section 4, FUJITSU TWAIN32's still open), and a gap in the page numbers says where a page was
+       dropped. Dropping stays off in the backend all the same (section 2): blank pages are the app's call,
+       through `scan-cleanup`, and not every driver says the side.
+     - **Its own processing.** `ICAP_AUTOMATICBORDERDETECTION` is on, current and default: each page is
+       cropped to its sheet, so the batch's letter sheets came 1692 to 1702 by 2201 to 2212, no two alike.
+       `ICAP_AUTOMATICROTATE` is on too: the jammed sheet came back 2452 by 1269, wider than the feeder's 8.5
+       inches (1700 at 200 dpi), so turned a quarter turn after the scan; the batch's pages all came upright.
+       `ICAP_AUTOMATICDESKEW` reads off. Unsupported: `ICAP_AUTOSIZE`, `ICAP_AUTOMATICLENGTHDETECTION`,
+       `ICAP_AUTOMATICCROPUSESFRAME`, `CAP_AUTOMATICSENSEMEDIUM`. `CAP_DOUBLEFEEDDETECTION` is an empty list,
+       so nothing detects a double feed unless it's set (slice 12's double feed). `CAP_SUPPORTEDCAPS` lists
+       230, 102 standard and 128 PFU's own (0x8000 and above), where the rest of PaperStream's processing
+       lives. `Paper::Auto` is border detection here; rotation the model has no setting for, so the backend
+       turns it off or the model gains one (slice 9's call).
+     - **The DIB.** `DAT_IMAGEINFO` gave each page's size, 8 bits, gray, uncompressed, and each DIB agreed: a
+       `BITMAPINFOHEADER`, 8 bits with a 256-entry palette, the block exactly its header, palette and rows
+       (the first page's 3,759,764 bytes, each row padded to 1700).
+     - **The driver writes to the process's standard output.** Its image-processing timings
+       (`GetDocumentPosition took 32ms`, edges, rotation), about 25 lines a side, go to standard output and
+       none to standard error (the streams apart, twice). C's buffer holds them and writes them in chunks of
+       about 4 KB: in the batch twice mid-run and once at exit, one chunk ending mid-word (`GetMa`) with the
+       program's next line written straight after it. In a worker that stream carries the protocol
+       (`crates/scan-worker.md`; slice 4 builds it now), so a chunk can land between two messages or inside a
+       page's bytes. The worker keeps its protocol on a handle of its own, and points standard output, both
+       the Win32 handle and the C runtime's descriptor, at `NUL` (and `/dev/null` on Unix) before the DSM opens
+       (`MSG_OPENDSM` loads every installed driver: the seam note's section 1).
+     - **Not tried:** a memory transfer, a cancel, a jam the driver reports (the jammed sheet scanned all the
+       same), an empty feeder: slice 9's checks and slice 12's.
 10. **scan-device's `wia` backend:** its STA thread, the feeder and duplex, errors by code. Checked against a
     fake of the WIA calls behind a trait (no virtual WIA device installs without a person).
 11. **The model frozen:** the seam note's unknowns all answered, `scan-device` and `scan-worker` out of 0.0.x
