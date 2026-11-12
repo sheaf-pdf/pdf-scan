@@ -20,6 +20,9 @@ in-progress = "0.1.0"
 # its types is in this crate's API. A path alone while this crate isn't
 # published.
 sane-dl = { path = "../sane-dl", optional = true }
+# The `twain` backend's way to TWAIN on Windows, loaded at run time; private,
+# so none of its types is in this crate's API.
+twain-dsm = { path = "../twain-dsm", optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
@@ -33,13 +36,16 @@ serde = ["dep:serde"]
 # The SANE backend, `scan_device::sane`: SANE's scanners on Linux and the
 # other Unix-like systems, libsane loaded at run time, never linked.
 sane = ["dep:sane-dl"]
+# The TWAIN backend, `scan_device::twain`: TWAIN's scanners on Windows,
+# TWAINDSM.dll loaded at run time, never linked.
+twain = ["dep:twain-dsm"]
 
 [dev-dependencies]
 # The crate's own tests, doctests included, take the fake backend, the serde
-# form and the SANE backend: a dev-dependency on the crate itself turns the
-# features on for them alone, so a plain `cargo test` runs them, while a
-# build without the features has none of them in it.
-scan-device = { path = ".", features = ["fake", "serde", "sane"] }
+# form and the SANE and TWAIN backends: a dev-dependency on the crate itself
+# turns the features on for them alone, so a plain `cargo test` runs them,
+# while a build without the features has none of them in it.
+scan-device = { path = ".", features = ["fake", "serde", "sane", "twain"] }
 # A child process for each test of a fault that ends the process it runs in.
 rusty-fork.workspace = true
 # The serde form's tests write and read it as JSON.

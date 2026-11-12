@@ -295,10 +295,12 @@ mod tests {
             let refused = raw(image(format, depth, 1, 1, vec![0]), false, CAP).unwrap_err();
             assert!(message(refused).contains("isn't a raw format"));
         }
-        // A width past `u32`.
-        let mut wide = image(FrameFormat::GRAY, 8, 1, 1, vec![0]);
-        wide.width = u32::MAX as usize + 1;
-        assert!(message(raw(wide, false, CAP).unwrap_err()).contains("more than a page"));
+        // A width past `u32` (on platforms whose `usize` is wider than `u32`).
+        if let Some(past_u32) = (u32::MAX as usize).checked_add(1) {
+            let mut wide = image(FrameFormat::GRAY, 8, 1, 1, vec![0]);
+            wide.width = past_u32;
+            assert!(message(raw(wide, false, CAP).unwrap_err()).contains("more than a page"));
+        }
         // A buffer of the wrong length.
         let mut short = image(FrameFormat::GRAY, 8, 4, 4, vec![0; 4]);
         short.height = 2;
