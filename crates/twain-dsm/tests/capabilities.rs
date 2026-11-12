@@ -8,7 +8,8 @@ mod support;
 
 use support::Outcome;
 use twain_dsm::{
-    ConditionCode, Container, Delivery, Error, Fix32, Item, ItemType, SetOutcome, Source, ffi,
+    ConditionCode, Container, Delivery, Error, Fix32, Frame, Item, ItemType, SetOutcome, Source,
+    Ui, ffi,
 };
 
 fn one(source: &Source<'_, ()>, cap: u16) -> Item {
@@ -154,6 +155,67 @@ fn the_samples_answers(source: &Source<'_, ()>) {
         Err(Error::Container(_)) => {}
         other => panic!("a string too long: {other:?}"),
     }
+
+    // DAT_STATUS in state 4: cleared after the refusals above (`None` = TWCC_SUCCESS).
+    let _ = source.status();
+    assert_eq!(source.status(), None, "DAT_STATUS after clear");
+
+    // DAT_IMAGELAYOUT: default, get, set crop frame, readback, reset, and InvalidFrame refusal.
+    source
+        .set(ffi::ICAP_UNITS, Item::UInt16(ffi::TWUN_INCHES))
+        .expect("ICAP_UNITS = TWUN_INCHES");
+    let def_layout = source
+        .default_image_layout()
+        .expect("DAT_IMAGELAYOUT/MSG_GETDEFAULT");
+    let cur_layout = source.image_layout().expect("DAT_IMAGELAYOUT/MSG_GET");
+    assert_eq!(cur_layout.frame, def_layout.frame);
+
+    let crop = Frame {
+        left: Fix32::from_int(0),
+        top: Fix32::from_int(0),
+        right: Fix32::from_int(2),
+        bottom: Fix32::from_int(3),
+    };
+    source
+        .set_image_layout(crop)
+        .expect("DAT_IMAGELAYOUT/MSG_SET");
+    let after_crop = source.image_layout().expect("DAT_IMAGELAYOUT after set");
+    assert_eq!(after_crop.frame, crop);
+
+    let reset_layout = source
+        .reset_image_layout()
+        .expect("DAT_IMAGELAYOUT/MSG_RESET");
+    assert_eq!(reset_layout.frame, def_layout.frame);
+    assert_eq!(
+        source.image_layout().expect("after reset").frame,
+        def_layout.frame
+    );
+
+    for bad_frame in [
+        Frame {
+            left: Fix32::from_int(2),
+            top: Fix32::from_int(0),
+            right: Fix32::from_int(2),
+            bottom: Fix32::from_int(3),
+        },
+        Frame {
+            left: Fix32::from_int(3),
+            top: Fix32::from_int(0),
+            right: Fix32::from_int(2),
+            bottom: Fix32::from_int(3),
+        },
+        Frame {
+            left: Fix32::from_int(0),
+            top: Fix32::from_int(4),
+            right: Fix32::from_int(2),
+            bottom: Fix32::from_int(3),
+        },
+    ] {
+        match source.set_image_layout(bad_frame) {
+            Err(Error::InvalidFrame { frame }) => assert_eq!(frame, bad_frame),
+            other => panic!("bad frame {bad_frame:?}: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -178,6 +240,24 @@ fn the_sample_answers_through_either_delivery() {
                 assert_eq!(source.id().product_name(), support::SAMPLE_PRODUCT);
                 assert_ne!(source.id().id(), 0);
                 the_samples_answers(&source);
+                // Invalid parent HWND refused before calling DSM_Entry, preserving Source.
+                let source = match source.enable(Ui::ShownOwned(0)) {
+                    Err(refused) => {
+                        assert!(matches!(refused.error(), Error::InvalidWindow { hwnd: 0 }));
+                        refused.into_state()
+                    }
+                    Ok(_) => panic!("Ui::ShownOwned(0) should fail"),
+                };
+                let source = match source.settings_ui(Some(0xFFFF)) {
+                    Err(refused) => {
+                        assert!(matches!(
+                            refused.error(),
+                            Error::InvalidWindow { hwnd: 0xFFFF }
+                        ));
+                        refused.into_state()
+                    }
+                    Ok(_) => panic!("settings_ui(Some(0xFFFF)) should fail"),
+                };
                 opened = source
                     .close()
                     .map_err(|r| r.into_error())

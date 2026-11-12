@@ -63,6 +63,7 @@ fn ready<'t>(
 }
 
 fn first_ready<'t>(mut enabled: Enabled<'t, ()>) -> Ready<'t, ()> {
+    let _ = enabled.status();
     loop {
         match enabled
             .next_event(Duration::from_secs(20))
@@ -84,6 +85,12 @@ fn page<'t>(mut ready: Ready<'t, ()>, mechanism: Mechanism) -> (Image, Pending<'
         ready.stop_feeder(),
         ConditionCode::BADPROTOCOL,
         "MSG_STOPFEEDER",
+    );
+    let layout = ready.image_layout().expect("DAT_IMAGELAYOUT in state 6");
+    assert!(
+        layout.frame.right.to_f64() > layout.frame.left.to_f64()
+            && layout.frame.bottom.to_f64() > layout.frame.top.to_f64(),
+        "state 6 layout frame: {layout:?}"
     );
     let info = ready.image_info().expect("DAT_IMAGEINFO");
     let (width, length) = (info.width, info.length);

@@ -29,14 +29,15 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
     CreateSemaphoreW, GetCurrentProcessId, INFINITE, ReleaseSemaphore, WaitForSingleObject,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, MSG,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, IsWindow, MSG,
     MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
     QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, TranslateMessage, WM_APP, WM_CLOSE,
     WM_NULL, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
-use crate::error::RunError;
+use crate::error::{Error, RunError};
 use crate::ffi::{TW_IDENTITY, TWRC_SUCCESS};
 
 /// NUL-terminated UTF-16.
@@ -417,4 +418,125 @@ pub(crate) fn post(handle: usize, message: u32) -> bool {
     // handle under a lock the teardown takes; the callback's is disarmed. A
     // stranded run's window is never destroyed.
     unsafe { PostMessageW(handle as HWND, message, 0, 0) != 0 }
+}
+
+/// A caller's parent `HWND`, checked before an enable and restored to enabled
+/// on step-down if a modal driver disabled it and didn't re-enable it.
+#[derive(Clone, Copy)]
+pub(crate) struct OwnerGuard {
+    pub(crate) hwnd: HWND,
+    was_enabled: bool,
+}
+
+impl OwnerGuard {
+    /// Re-enables `hwnd` if it was enabled before the source opened its window
+    /// and a modal driver left it disabled.
+    pub(crate) fn restore(self) {
+        // SAFETY: IsWindow, IsWindowEnabled and EnableWindow check `hwnd` in
+        // User32's handle table without dereferencing it; if the window was
+        // destroyed meanwhile, IsWindow is 0 and nothing is sent.
+        unsafe {
+            if self.was_enabled && IsWindow(self.hwnd) != 0 && IsWindowEnabled(self.hwnd) == 0 {
+                EnableWindow(self.hwnd, 1);
+            }
+        }
+    }
+}
+
+/// Validates a caller's Win32 `HWND` integer: must be a canonical 32-bit
+/// handle (zero-extended `1..u32::MAX` or sign-extended `0xFFFF_FFFF_8000_0000..u64::MAX`)
+/// that `IsWindow` recognises as a live window.
+pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
+    let canonical =
+        (1..u64::from(u32::MAX)).contains(&raw) || (0xFFFF_FFFF_8000_0000..u64::MAX).contains(&raw);
+    if !canonical {
+        return Err(Error::InvalidWindow { hwnd: raw });
+    }
+    let zero_ext = (raw as u32 as usize) as HWND;
+    let sign_ext = (raw as u32 as i32 as isize) as HWND;
+    // SAFETY: IsWindow checks any integer in User32's handle table and touches
+    // no memory; 0, HWND_BROADCAST (0xFFFF) and INVALID_HANDLE_VALUE (-1) all
+    // return 0. Both zero-extended and LongToHandle sign-extended forms are
+    // checked for 32/64-bit interop.
+    let hwnd = if unsafe { IsWindow(zero_ext) } != 0 {
+        zero_ext
+    } else if unsafe { IsWindow(sign_ext) } != 0 {
+        sign_ext
+    } else {
+        return Err(Error::InvalidWindow { hwnd: raw });
+    };
+    // SAFETY: `hwnd` was just checked with IsWindow; IsWindowEnabled touches no
+    // memory.
+    let was_enabled = unsafe { IsWindowEnabled(hwnd) } != 0;
+    Ok(OwnerGuard { hwnd, was_enabled })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_owner_refuses_bogus_and_destroyed_handles() {
+        for bad in [
+            0,
+            0xFFFF, // HWND_BROADCAST
+            u64::from(u32::MAX),
+            u64::MAX, // INVALID_HANDLE_VALUE
+            0x0000_0001_0000_0001,
+            0xFFFF_FFFF_0000_0001,
+        ] {
+            match check_owner(bad) {
+                Err(Error::InvalidWindow { hwnd }) => assert_eq!(hwnd, bad),
+                Ok(_) => panic!("{bad:#x} was accepted"),
+                Err(other) => panic!("{bad:#x}: unexpected {other:?}"),
+            }
+        }
+
+        let win = Window::create().expect("hidden window");
+        let raw = win.handle() as u64;
+        assert!(check_owner(raw).is_ok(), "live window accepted");
+
+        // Non-canonical high bits on an otherwise live low-32-bit handle.
+        let non_canonical = (raw & 0xFFFF_FFFF) | (1 << 32);
+        match check_owner(non_canonical) {
+            Err(Error::InvalidWindow { hwnd }) => assert_eq!(hwnd, non_canonical),
+            Ok(_) => panic!("{non_canonical:#x} was accepted"),
+            Err(other) => panic!("unexpected {other:?}"),
+        }
+
+        win.destroy();
+        match check_owner(raw) {
+            Err(Error::InvalidWindow { hwnd }) => assert_eq!(hwnd, raw),
+            Ok(_) => panic!("destroyed window {raw:#x} was accepted"),
+            Err(other) => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn owner_guard_restores_only_windows_that_started_enabled() {
+        let win = Window::create().expect("hidden window");
+        let hwnd = win.hwnd();
+        let raw = win.handle() as u64;
+
+        // Enabled before -> modal driver disables -> restore re-enables.
+        let guard = check_owner(raw).expect("live window");
+        // SAFETY: `hwnd` is our live window on this thread.
+        unsafe {
+            EnableWindow(hwnd, 0);
+            assert_eq!(IsWindowEnabled(hwnd), 0);
+        }
+        guard.restore();
+        // SAFETY: `hwnd` is our live window on this thread.
+        assert_ne!(unsafe { IsWindowEnabled(hwnd) }, 0);
+
+        // Already disabled before -> restore leaves it disabled.
+        // SAFETY: `hwnd` is our live window on this thread.
+        unsafe { EnableWindow(hwnd, 0) };
+        let pre_disabled = check_owner(raw).expect("live disabled window");
+        pre_disabled.restore();
+        // SAFETY: `hwnd` is our live window on this thread.
+        assert_eq!(unsafe { IsWindowEnabled(hwnd) }, 0);
+
+        win.destroy();
+    }
 }

@@ -891,7 +891,7 @@ impl Dsm {
         // SAFETY: DAT_USERINTERFACE takes a TW_USERINTERFACE: `ui`, a Cell the
         // caller keeps at one address for the enable's length, which the source
         // may write (ModalUI) through the pointer; hParent is the hidden window,
-        // which outlives the source's use of it.
+        // or a caller's HWND checked with IsWindow before the enable.
         (triplet, unsafe {
             self.call(app, Some(source), triplet, ui.as_ptr().cast())
         })
@@ -925,6 +925,42 @@ impl Dsm {
         // frame for the call.
         let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut info).cast()) };
         (triplet, rc, info)
+    }
+
+    /// `DG_IMAGE/DAT_IMAGELAYOUT` read: `MSG_GET`, `MSG_GETDEFAULT` or
+    /// `MSG_RESET`.
+    pub(crate) fn image_layout_read(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        msg: u16,
+    ) -> (Triplet, ReturnCode, ffi::TW_IMAGELAYOUT) {
+        debug_assert!(matches!(
+            msg,
+            ffi::MSG_GET | ffi::MSG_GETDEFAULT | ffi::MSG_RESET
+        ));
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_IMAGELAYOUT, msg);
+        let mut layout = ffi::TW_IMAGELAYOUT::default();
+        // SAFETY: these messages of DAT_IMAGELAYOUT write a TW_IMAGELAYOUT into
+        // `layout`, on this frame for the call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut layout).cast()) };
+        (triplet, rc, layout)
+    }
+
+    /// `DG_IMAGE/DAT_IMAGELAYOUT/MSG_SET`.
+    pub(crate) fn image_layout_set(
+        &self,
+        app: &Cell<TW_IDENTITY>,
+        source: &Cell<TW_IDENTITY>,
+        layout: &ffi::TW_IMAGELAYOUT,
+    ) -> (Triplet, ReturnCode) {
+        let triplet = Triplet::new(ffi::DG_IMAGE, ffi::DAT_IMAGELAYOUT, ffi::MSG_SET);
+        let mut raw = *layout;
+        // SAFETY: DAT_IMAGELAYOUT/MSG_SET takes a TW_IMAGELAYOUT, which the
+        // source may adjust on TWRC_CHECKSTATUS; `raw` is on this frame for the
+        // call.
+        let rc = unsafe { self.call(app, Some(source), triplet, (&raw mut raw).cast()) };
+        (triplet, rc)
     }
 
     /// `DG_IMAGE/DAT_IMAGENATIVEXFER/MSG_GET`: on `TWRC_XFERDONE`, the DIB the

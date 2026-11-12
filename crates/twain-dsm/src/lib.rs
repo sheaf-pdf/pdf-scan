@@ -85,8 +85,10 @@ twain_dsm::run::<(), _>(|twain| -> Result<usize, twain_dsm::Error> {
 //! > consequential, as a result of the reproduction, modification,
 //! > distribution or other use of the TWAIN Toolkit.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Only the modules that call Windows or the DSM may hold unsafe code.
 #![deny(unsafe_code)]
+#![warn(missing_docs)]
 
 mod codes;
 // Pure, so tested everywhere; off Windows, nothing calls them but the tests.
@@ -123,15 +125,57 @@ pub use container::{
     Container, ContainerError, Enumeration, Fix32, Frame, Item, ItemType, Items, Range,
 };
 #[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
 pub use dsm::Dib;
 #[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
 pub use enabled::{
     Enabled, Event, ImageInfo, MemoryTransfer, Native, Next, Pending, Ready, Strip, Transferred, Ui,
 };
 #[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
 pub use error::{Error, Gone, LoadError, Refused, RunError};
 pub use ext_info::{ExtInfo, ExtValue};
 #[cfg(windows)]
-pub use states::{App, Delivery, Load, Loaded, Opened, SetOutcome, Source, SourceId};
+#[cfg_attr(docsrs, doc(cfg(windows)))]
+pub use states::{App, Delivery, ImageLayout, Load, Loaded, Opened, SetOutcome, Source, SourceId};
 #[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
 pub use thread::{Remote, RunReport, Twain, Wake, run};
+
+/// The README's example, compiled as a doctest on Windows.
+#[cfg(all(doctest, windows))]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
+#[cfg(test)]
+mod tests {
+    /// The README's licence links are the repository's URLs, which reach
+    /// the files from crates.io and docs.rs: the package holds no licence
+    /// file, and a relative link would climb out of it.
+    #[test]
+    fn the_readmes_licence_links_reach_the_files() {
+        let readme = include_str!("../README.md");
+        let repository = env!("CARGO_PKG_REPOSITORY");
+        for file in ["LICENSE-APACHE", "LICENSE-MIT"] {
+            let link = format!("[{file}]({repository}/blob/master/{file})");
+            assert!(
+                readme.contains(&link),
+                "{file}'s link isn't the repository's URL"
+            );
+        }
+        assert!(!readme.contains("](../"), "a link climbs out of the crate");
+    }
+
+    /// The changelog has an entry for the version the manifest gives, so a
+    /// version is never packaged unsaid.
+    #[test]
+    fn the_changelog_has_an_entry_for_this_version() {
+        let changelog = include_str!("../CHANGELOG.md");
+        let heading = format!("## {} (", env!("CARGO_PKG_VERSION"));
+        assert!(
+            changelog.lines().any(|line| line.starts_with(&heading)),
+            "the changelog has no entry headed {heading}…)"
+        );
+    }
+}

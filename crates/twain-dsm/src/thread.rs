@@ -106,6 +106,7 @@ pub fn run<T, R>(f: impl for<'t> FnOnce(&'t Twain<T>) -> R) -> Result<RunReport<
         source_open: Cell::new(None),
         level: Cell::new(Level::Open),
         forced_ui: Cell::new(false),
+        owner_guard: Cell::new(None),
         events: RefCell::new(VecDeque::new()),
         held: RefCell::new(VecDeque::new()),
         drop_errors: RefCell::new(Vec::new()),
@@ -207,6 +208,9 @@ pub struct Twain<T> {
     /// Whether `MSG_ENABLEDS` answered `TWRC_CHECKSTATUS`: the source showed
     /// its window though asked not to.
     pub(crate) forced_ui: Cell<bool>,
+    /// The caller's parent `HWND` for the current enable, if any, restored to
+    /// enabled when the source steps down to state 4.
+    pub(crate) owner_guard: Cell<Option<window::OwnerGuard>>,
     /// Messages from the source, as they came, not yet handed over.
     pub(crate) events: RefCell<VecDeque<u16>>,
     /// Requests taken from the channel and put back, ahead of it.
@@ -464,6 +468,9 @@ impl<T> Twain<T> {
         if rc == ReturnCode::SUCCESS {
             self.connected.set(false);
             self.source_open.set(None);
+            if let Some(guard) = self.owner_guard.take() {
+                guard.restore();
+            }
             return Ok(());
         }
         Err(Error::Failed {

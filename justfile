@@ -25,10 +25,10 @@ default:
 
 # What they need: `msrv` each crate's oldest Rust installed (`rustup
 # toolchain install <version>`), `gates` jq and readelf, `sane-dl-package`
-# the network, `public-api` jq and the nightly pinned above,
-# `public_api_nightly` (the recipe says how to install it).
+# and `twain-dsm-package` the network, `public-api` jq and the nightly
+# pinned above, `public_api_nightly` (the recipe says how to install it).
 # Everything CI runs.
-ci: fmt clippy test doc gates sane-dl-package public-api msrv
+ci: fmt clippy test doc gates sane-dl-package twain-dsm-package public-api msrv
 
 # Check formatting; `cargo fmt --all` fixes it.
 fmt:
@@ -104,7 +104,7 @@ sane-dl-package:
     dir=${CARGO_TARGET_DIR:-$PWD/target}/sane-dl-package
     rm -rf "$dir"
     CARGO_TARGET_DIR="$dir" cargo publish --dry-run --locked -p sane-dl
-    CARGO_TARGET_DIR="$dir" cargo package --list --locked -p sane-dl > "$dir/files.txt"
+    CARGO_TARGET_DIR="$dir" cargo package --list --locked -p sane-dl | tr '\\' '/' | tr -d '\r' > "$dir/files.txt"
     if grep -v -E '^(src/.*\.rs|build\.rs|README\.md|CHANGELOG\.md|Cargo\.toml|Cargo\.toml\.orig|Cargo\.lock|\.cargo_vcs_info\.json)$' "$dir/files.txt"; then
         echo "the package holds more than its sources, build script, README, CHANGELOG, manifest and lock (above)" >&2
         exit 1
@@ -113,6 +113,27 @@ sane-dl-package:
         grep -qxF -- "$file" "$dir/files.txt" || { echo "the package lacks $file" >&2; exit 1; }
     done
     echo "sane-dl-package: $(wc -l < "$dir/files.txt") files, each a source, the build script, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
+
+# Package twain-dsm as a publish would, in a fresh target directory of its
+# own, and check what the package holds: its sources, README, CHANGELOG,
+# manifest and lock, each there and nothing else. The dry run asks the
+# registry, so it needs the network, and it never publishes.
+# twain-dsm packaged as a publish would, and what the package holds checked.
+twain-dsm-package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=${CARGO_TARGET_DIR:-$PWD/target}/twain-dsm-package
+    rm -rf "$dir"
+    CARGO_TARGET_DIR="$dir" cargo publish --dry-run --locked -p twain-dsm
+    CARGO_TARGET_DIR="$dir" cargo package --list --locked -p twain-dsm | tr '\\' '/' | tr -d '\r' > "$dir/files.txt"
+    if grep -v -E '^(src/.*\.rs|README\.md|CHANGELOG\.md|Cargo\.toml|Cargo\.toml\.orig|Cargo\.lock|\.cargo_vcs_info\.json)$' "$dir/files.txt"; then
+        echo "the package holds more than its sources, README, CHANGELOG, manifest and lock (above)" >&2
+        exit 1
+    fi
+    for file in src/lib.rs README.md CHANGELOG.md Cargo.toml Cargo.lock; do
+        grep -qxF -- "$file" "$dir/files.txt" || { echo "the package lacks $file" >&2; exit 1; }
+    done
+    echo "twain-dsm-package: $(wc -l < "$dir/files.txt") files, each a source, the README, the CHANGELOG, the manifest or the lock ($dir/files.txt)"
 
 # Each crate made ready to publish, its public API read from rustdoc's JSON
 # on the pinned nightly, hidden items included, so `#[doc(hidden)]` hides
@@ -145,8 +166,15 @@ public-api:
         exit 1
     fi
     dir=${CARGO_TARGET_DIR:-$PWD/target}/public-api
+    host=$(rustc +"$toolchain" -vV | sed -n 's/^host: //p')
+    # twain-dsm's Windows items are #[cfg(windows)], so its full API is read
+    # on a Windows host; sane-dl's items are unconditional.
+    case "$host" in
+        *-windows-*) entries="sane-dl:1000 twain-dsm:3000" ;;
+        *)           entries="sane-dl:1000" ;;
+    esac
     failed=0
-    for entry in sane-dl:1000; do
+    for entry in $entries; do
         crate=${entry%%:*}
         floor=${entry##*:}
         json=$dir/doc/${crate//-/_}.json
@@ -163,7 +191,6 @@ public-api:
             jq -r '.shape[] | "  " + .' <<< "$report" >&2
             exit 1
         fi
-        host=$(rustc +"$toolchain" -vV | sed -n 's/^host: //p')
         {
             echo "# $crate's public API: rustdoc's JSON (format $format) on $toolchain, for $host, hidden items included; blanket impls left out."
             jq -r '.list[]' <<< "$report"

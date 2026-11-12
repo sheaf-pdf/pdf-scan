@@ -114,7 +114,7 @@ fn the_settings_window_shows_and_closes() {
                 other => panic!("CAP_ENABLEDSUIONLY: {other:?}"),
             }
             let enabled = source
-                .settings_ui()
+                .settings_ui(None)
                 .map_err(|r| r.into_error())
                 .expect("MSG_ENABLEDSUIONLY");
             assert!(enabled.settings_only());

@@ -68,6 +68,9 @@ impl FieldKind for [ffi::TW_INFO; 1] {
 impl FieldKind for ffi::TW_FIX32 {
     const KIND: Kind = Kind::Other;
 }
+impl FieldKind for ffi::TW_FRAME {
+    const KIND: Kind = Kind::Other;
+}
 impl FieldKind for ffi::TW_VERSION {
     const KIND: Kind = Kind::Other;
 }
@@ -114,6 +117,7 @@ fn layouts() -> Vec<Layout> {
             XResolution, YResolution, ImageWidth, ImageLength, SamplesPerPixel, BitsPerSample, BitsPerPixel, Planar,
             PixelType, Compression,
         }
+        TW_IMAGELAYOUT { Frame, DocumentNumber, PageNumber, FrameNumber }
         TW_SETUPMEMXFER { MinBufSize, MaxBufSize, Preferred }
         TW_MEMORY { Flags, Length, TheMem }
         TW_IMAGEMEMXFER { Compression, BytesPerRow, Columns, Rows, XOffset, YOffset, BytesWritten, Memory }

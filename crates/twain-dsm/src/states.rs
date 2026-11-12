@@ -7,8 +7,8 @@
 use core::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::codes::{ReturnCode, Triplet};
-use crate::container::{Container, ContainerError, ItemType};
+use crate::codes::{ConditionCode, ReturnCode, Triplet};
+use crate::container::{Container, ContainerError, Frame, ItemType};
 use crate::dsm::{self, Dsm};
 use crate::error::{Error, LoadError, Refused};
 use crate::ffi::{self, TW_IDENTITY, TW_STR32};
@@ -345,6 +345,44 @@ pub enum SetOutcome {
     Adjusted,
 }
 
+/// `DAT_IMAGELAYOUT`'s answer: the image's frame in `ICAP_UNITS`, and its
+/// document, page and frame numbers in the batch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImageLayout {
+    /// The rectangle to transfer, in `ICAP_UNITS`.
+    pub frame: Frame,
+    /// The document's number in the batch.
+    pub document_number: u32,
+    /// The page's number in the document.
+    pub page_number: u32,
+    /// The frame's number on the page.
+    pub frame_number: u32,
+}
+
+impl From<ffi::TW_IMAGELAYOUT> for ImageLayout {
+    fn from(layout: ffi::TW_IMAGELAYOUT) -> Self {
+        ImageLayout {
+            frame: layout.Frame.into(),
+            document_number: layout.DocumentNumber,
+            page_number: layout.PageNumber,
+            frame_number: layout.FrameNumber,
+        }
+    }
+}
+
+/// `DAT_IMAGELAYOUT` read (`MSG_GET`, `MSG_GETDEFAULT`, `MSG_RESET`).
+pub(crate) fn image_layout_read<T>(
+    twain: &Twain<T>,
+    dsm: &Dsm,
+    msg: u16,
+) -> Result<ImageLayout, Error> {
+    let (triplet, rc, layout) = dsm.image_layout_read(&twain.app, &twain.source, msg);
+    if rc != ReturnCode::SUCCESS {
+        return Err(twain.source_failure(dsm, &twain.source, triplet, rc));
+    }
+    Ok(layout.into())
+}
+
 /// State 4: a source open.
 pub struct Source<'t, T> {
     /// `None` once stepped down, so `Drop` doesn't do it again.
@@ -471,6 +509,57 @@ impl<'t, T> Source<'t, T> {
         ) else {
             return Err(Error::Allocation { size: bytes.len() });
         };
+        match rc {
+            ReturnCode::SUCCESS => Ok(SetOutcome::Exact),
+            ReturnCode::CHECKSTATUS => Ok(SetOutcome::Adjusted),
+            rc => Err(twain.source_failure(dsm, &twain.source, triplet, rc)),
+        }
+    }
+
+    /// The source's current condition code (`DG_CONTROL/DAT_STATUS/MSG_GET`,
+    /// which clears it): `None` if it has none (`TWCC_SUCCESS`) or couldn't
+    /// answer.
+    pub fn status(&self) -> Option<ConditionCode> {
+        self.dsm()
+            .status(&self.twain().app, Some(&self.twain().source))
+    }
+
+    /// The image layout (`DG_IMAGE/DAT_IMAGELAYOUT/MSG_GET`), in the source's
+    /// active `ICAP_UNITS`.
+    pub fn image_layout(&self) -> Result<ImageLayout, Error> {
+        image_layout_read(self.twain(), self.dsm(), ffi::MSG_GET)
+    }
+
+    /// The source's default image layout (`DG_IMAGE/DAT_IMAGELAYOUT/MSG_GETDEFAULT`).
+    pub fn default_image_layout(&self) -> Result<ImageLayout, Error> {
+        image_layout_read(self.twain(), self.dsm(), ffi::MSG_GETDEFAULT)
+    }
+
+    /// Resets the image layout to the source's default
+    /// (`DG_IMAGE/DAT_IMAGELAYOUT/MSG_RESET`), which comes back.
+    pub fn reset_image_layout(&self) -> Result<ImageLayout, Error> {
+        image_layout_read(self.twain(), self.dsm(), ffi::MSG_RESET)
+    }
+
+    /// Sets the image layout's frame (`DG_IMAGE/DAT_IMAGELAYOUT/MSG_SET`),
+    /// leaving the document, page and frame numbers `TWON_DONTCARE32`.
+    /// Refused with [`Error::InvalidFrame`] before calling the source if
+    /// `frame.left >= frame.right` or `frame.top >= frame.bottom`.
+    pub fn set_image_layout(&self, frame: Frame) -> Result<SetOutcome, Error> {
+        if frame.left.to_f64() >= frame.right.to_f64()
+            || frame.top.to_f64() >= frame.bottom.to_f64()
+        {
+            return Err(Error::InvalidFrame { frame });
+        }
+        let raw = ffi::TW_IMAGELAYOUT {
+            Frame: frame.into(),
+            DocumentNumber: ffi::TWON_DONTCARE32,
+            PageNumber: ffi::TWON_DONTCARE32,
+            FrameNumber: ffi::TWON_DONTCARE32,
+        };
+        let twain = self.twain();
+        let dsm = self.dsm();
+        let (triplet, rc) = dsm.image_layout_set(&twain.app, &twain.source, &raw);
         match rc {
             ReturnCode::SUCCESS => Ok(SetOutcome::Exact),
             ReturnCode::CHECKSTATUS => Ok(SetOutcome::Adjusted),
@@ -620,14 +709,17 @@ impl SourceId {
         self.identity.Id
     }
 
+    /// Its `ProductName` string (`TW_STR32`, decoded).
     pub fn product_name(&self) -> String {
         text(&self.identity.ProductName)
     }
 
+    /// Its `ProductFamily` string (`TW_STR32`, decoded).
     pub fn product_family(&self) -> String {
         text(&self.identity.ProductFamily)
     }
 
+    /// Its `Manufacturer` string (`TW_STR32`, decoded).
     pub fn manufacturer(&self) -> String {
         text(&self.identity.Manufacturer)
     }
