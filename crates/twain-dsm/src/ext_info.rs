@@ -23,6 +23,7 @@ use crate::ffi;
 pub struct ExtInfo {
     /// The `TWEI_` asked for.
     pub id: u16,
+    /// What the source returned for it.
     pub value: ExtValue,
 }
 

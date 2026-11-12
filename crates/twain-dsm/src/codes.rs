@@ -19,17 +19,29 @@ fn name_of(prefix: &str, value: i64) -> Option<&'static str> {
 pub struct ReturnCode(pub u16);
 
 impl ReturnCode {
+    /// `TWRC_SUCCESS`.
     pub const SUCCESS: Self = Self(ffi::TWRC_SUCCESS);
+    /// `TWRC_FAILURE`.
     pub const FAILURE: Self = Self(ffi::TWRC_FAILURE);
+    /// `TWRC_CHECKSTATUS`.
     pub const CHECKSTATUS: Self = Self(ffi::TWRC_CHECKSTATUS);
+    /// `TWRC_CANCEL`.
     pub const CANCEL: Self = Self(ffi::TWRC_CANCEL);
+    /// `TWRC_DSEVENT`.
     pub const DSEVENT: Self = Self(ffi::TWRC_DSEVENT);
+    /// `TWRC_NOTDSEVENT`.
     pub const NOTDSEVENT: Self = Self(ffi::TWRC_NOTDSEVENT);
+    /// `TWRC_XFERDONE`.
     pub const XFERDONE: Self = Self(ffi::TWRC_XFERDONE);
+    /// `TWRC_ENDOFLIST`.
     pub const ENDOFLIST: Self = Self(ffi::TWRC_ENDOFLIST);
+    /// `TWRC_INFONOTSUPPORTED`.
     pub const INFONOTSUPPORTED: Self = Self(ffi::TWRC_INFONOTSUPPORTED);
+    /// `TWRC_DATANOTAVAILABLE`.
     pub const DATANOTAVAILABLE: Self = Self(ffi::TWRC_DATANOTAVAILABLE);
+    /// `TWRC_BUSY`.
     pub const BUSY: Self = Self(ffi::TWRC_BUSY);
+    /// `TWRC_SCANNERLOCKED`.
     pub const SCANNERLOCKED: Self = Self(ffi::TWRC_SCANNERLOCKED);
 
     /// `twain.h`'s name for it, if it has one (`"TWRC_SUCCESS"`).
@@ -44,33 +56,61 @@ impl ReturnCode {
 pub struct ConditionCode(pub u16);
 
 impl ConditionCode {
+    /// `TWCC_SUCCESS`.
     pub const SUCCESS: Self = Self(ffi::TWCC_SUCCESS);
+    /// `TWCC_BUMMER`.
     pub const BUMMER: Self = Self(ffi::TWCC_BUMMER);
+    /// `TWCC_LOWMEMORY`.
     pub const LOWMEMORY: Self = Self(ffi::TWCC_LOWMEMORY);
+    /// `TWCC_NODS`.
     pub const NODS: Self = Self(ffi::TWCC_NODS);
+    /// `TWCC_MAXCONNECTIONS`.
     pub const MAXCONNECTIONS: Self = Self(ffi::TWCC_MAXCONNECTIONS);
+    /// `TWCC_OPERATIONERROR`.
     pub const OPERATIONERROR: Self = Self(ffi::TWCC_OPERATIONERROR);
+    /// `TWCC_BADCAP`.
     pub const BADCAP: Self = Self(ffi::TWCC_BADCAP);
+    /// `TWCC_BADPROTOCOL`.
     pub const BADPROTOCOL: Self = Self(ffi::TWCC_BADPROTOCOL);
+    /// `TWCC_BADVALUE`.
     pub const BADVALUE: Self = Self(ffi::TWCC_BADVALUE);
+    /// `TWCC_SEQERROR`.
     pub const SEQERROR: Self = Self(ffi::TWCC_SEQERROR);
+    /// `TWCC_BADDEST`.
     pub const BADDEST: Self = Self(ffi::TWCC_BADDEST);
+    /// `TWCC_CAPUNSUPPORTED`.
     pub const CAPUNSUPPORTED: Self = Self(ffi::TWCC_CAPUNSUPPORTED);
+    /// `TWCC_CAPBADOPERATION`.
     pub const CAPBADOPERATION: Self = Self(ffi::TWCC_CAPBADOPERATION);
+    /// `TWCC_CAPSEQERROR`.
     pub const CAPSEQERROR: Self = Self(ffi::TWCC_CAPSEQERROR);
+    /// `TWCC_DENIED`.
     pub const DENIED: Self = Self(ffi::TWCC_DENIED);
+    /// `TWCC_FILEEXISTS`.
     pub const FILEEXISTS: Self = Self(ffi::TWCC_FILEEXISTS);
+    /// `TWCC_FILENOTFOUND`.
     pub const FILENOTFOUND: Self = Self(ffi::TWCC_FILENOTFOUND);
+    /// `TWCC_NOTEMPTY`.
     pub const NOTEMPTY: Self = Self(ffi::TWCC_NOTEMPTY);
+    /// `TWCC_PAPERJAM`.
     pub const PAPERJAM: Self = Self(ffi::TWCC_PAPERJAM);
+    /// `TWCC_PAPERDOUBLEFEED`.
     pub const PAPERDOUBLEFEED: Self = Self(ffi::TWCC_PAPERDOUBLEFEED);
+    /// `TWCC_FILEWRITEERROR`.
     pub const FILEWRITEERROR: Self = Self(ffi::TWCC_FILEWRITEERROR);
+    /// `TWCC_CHECKDEVICEONLINE`.
     pub const CHECKDEVICEONLINE: Self = Self(ffi::TWCC_CHECKDEVICEONLINE);
+    /// `TWCC_INTERLOCK`.
     pub const INTERLOCK: Self = Self(ffi::TWCC_INTERLOCK);
+    /// `TWCC_DAMAGEDCORNER`.
     pub const DAMAGEDCORNER: Self = Self(ffi::TWCC_DAMAGEDCORNER);
+    /// `TWCC_FOCUSERROR`.
     pub const FOCUSERROR: Self = Self(ffi::TWCC_FOCUSERROR);
+    /// `TWCC_DOCTOOLIGHT`.
     pub const DOCTOOLIGHT: Self = Self(ffi::TWCC_DOCTOOLIGHT);
+    /// `TWCC_DOCTOODARK`.
     pub const DOCTOODARK: Self = Self(ffi::TWCC_DOCTOODARK);
+    /// `TWCC_NOMEDIA`.
     pub const NOMEDIA: Self = Self(ffi::TWCC_NOMEDIA);
 
     /// `twain.h`'s name for it, if it has one (`"TWCC_SEQERROR"`).
@@ -83,8 +123,11 @@ impl ConditionCode {
 /// (`DG_CONTROL`/`DAT_PARENT`/`MSG_OPENDSM`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Triplet {
+    /// Data group (`DG_`).
     pub dg: u32,
+    /// Data argument type (`DAT_`).
     pub dat: u16,
+    /// Message (`MSG_`).
     pub msg: u16,
 }
 

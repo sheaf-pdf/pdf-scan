@@ -34,8 +34,14 @@
 //! > consequential, as a result of the reproduction, modification,
 //! > distribution or other use of the TWAIN Toolkit.
 
-// A bindings module: twain.h's names.
-#![allow(non_camel_case_types, non_snake_case, clippy::upper_case_acronyms)]
+// A bindings module: twain.h's names, and its generated constants carry no
+// doc comments beyond their names.
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    clippy::upper_case_acronyms,
+    missing_docs
+)]
 
 use core::ffi::c_void;
 use core::ptr::null_mut;
@@ -261,6 +267,17 @@ pub struct TW_IMAGEINFO {
     pub Compression: u16,
 }
 
+/// `TW_IMAGELAYOUT`: the image's frame in `ICAP_UNITS`, and its document, page
+/// and frame numbers.
+#[repr(C, packed(2))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TW_IMAGELAYOUT {
+    pub Frame: TW_FRAME,
+    pub DocumentNumber: u32,
+    pub PageNumber: u32,
+    pub FrameNumber: u32,
+}
+
 /// `TW_SETUPMEMXFER`.
 #[repr(C, packed(2))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -448,6 +465,8 @@ const _: () = {
     assert!(size_of::<TW_IMAGEINFO>() == 42);
     assert!(offset_of!(TW_IMAGEINFO, BitsPerSample) == 18);
     assert!(offset_of!(TW_IMAGEINFO, PixelType) == 38);
+    assert!(size_of::<TW_IMAGELAYOUT>() == 28);
+    assert!(offset_of!(TW_IMAGELAYOUT, DocumentNumber) == 16);
     assert!(size_of::<TW_SETUPMEMXFER>() == 12);
     assert!(size_of::<TW_STATUS>() == 4);
     assert!(size_of::<TW_DEVICEEVENT>() == 294);

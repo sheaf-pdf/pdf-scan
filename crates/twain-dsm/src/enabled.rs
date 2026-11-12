@@ -13,7 +13,7 @@ use crate::dsm::{Dib, Dsm};
 use crate::error::{Error, Refused};
 use crate::ext_info::{self, ExtInfo};
 use crate::ffi;
-use crate::states::{Delivery, Source};
+use crate::states::{Delivery, ImageLayout, Source, image_layout_read};
 use crate::thread::{Level, Pumped, Twain, deadline};
 use crate::window;
 
@@ -25,6 +25,12 @@ pub enum Ui {
     /// The source's window shown, parented to the hidden window; the user
     /// starts the scan there.
     Shown,
+    /// The source's window shown, parented to the caller's Win32 `HWND`
+    /// integer. Checked with `IsWindow` before the enable, and re-enabled on
+    /// step-down if a modal driver left it disabled; if the window belongs to
+    /// another thread, that thread must keep pumping its messages while the
+    /// source's window is open.
+    ShownOwned(u64),
 }
 
 /// The state a step down stops at: TWAIN's number, 3 for no source.
@@ -139,12 +145,18 @@ impl<T> Twain<T> {
                         // Disabled: the messages of that enable are stale.
                         window::new_generation();
                         self.events.borrow_mut().clear();
+                        if let Some(guard) = self.owner_guard.take() {
+                            guard.restore();
+                        }
                     }
                 }
                 None => {
                     self.source_open.set(None);
                     self.level.set(Level::Open);
                     self.events.borrow_mut().clear();
+                    if let Some(guard) = self.owner_guard.take() {
+                        guard.restore();
+                    }
                 }
             }
         }
@@ -178,19 +190,42 @@ impl<'t, T> Source<'t, T> {
     /// Enables it (`MSG_ENABLEDS`, state 4 to 5), its window shown or not.
     /// Its messages come through [`Enabled::next_event`].
     pub fn enable(self, ui: Ui) -> Result<Enabled<'t, T>, Refused<Self>> {
-        self.enable_with(ffi::MSG_ENABLEDS, ui == Ui::Shown)
+        match ui {
+            Ui::Hidden => self.enable_with(ffi::MSG_ENABLEDS, false, None),
+            Ui::Shown => self.enable_with(ffi::MSG_ENABLEDS, true, None),
+            Ui::ShownOwned(owner) => self.enable_with(ffi::MSG_ENABLEDS, true, Some(owner)),
+        }
     }
 
     /// Shows the source's window for its settings only
-    /// (`MSG_ENABLEDSUIONLY`, state 4 to 5), where `CAP_ENABLEDSUIONLY` says
-    /// it has one: no transfer follows, and the source says
+    /// (`MSG_ENABLEDSUIONLY`, state 4 to 5), parented to `owner`'s Win32
+    /// `HWND` (or the hidden window when `None`), where `CAP_ENABLEDSUIONLY`
+    /// says it has one: no transfer follows, and the source says
     /// [`Event::CloseOk`] when the user saves them, [`Event::CloseRequest`]
     /// when they cancel.
-    pub fn settings_ui(self) -> Result<Enabled<'t, T>, Refused<Self>> {
-        self.enable_with(ffi::MSG_ENABLEDSUIONLY, true)
+    ///
+    /// When `owner` is `Some(hwnd)`, `hwnd` is checked with `IsWindow` before
+    /// the source sees it ([`Error::InvalidWindow`]), and re-enabled on
+    /// step-down if a modal driver left it disabled. If `hwnd` belongs to
+    /// another thread, that thread must keep pumping its messages while the
+    /// source's window is open.
+    pub fn settings_ui(self, owner: Option<u64>) -> Result<Enabled<'t, T>, Refused<Self>> {
+        self.enable_with(ffi::MSG_ENABLEDSUIONLY, true, owner)
     }
 
-    fn enable_with(self, msg: u16, show: bool) -> Result<Enabled<'t, T>, Refused<Self>> {
+    fn enable_with(
+        self,
+        msg: u16,
+        show: bool,
+        owner: Option<u64>,
+    ) -> Result<Enabled<'t, T>, Refused<Self>> {
+        let guard = match owner {
+            Some(raw) => match window::check_owner(raw) {
+                Ok(guard) => Some(guard),
+                Err(error) => return Err(Refused { state: self, error }),
+            },
+            None => None,
+        };
         let twain = self.twain();
         let dsm = self.dsm();
         // Whatever an earlier enable left unread is stale: a new generation
@@ -205,7 +240,7 @@ impl<'t, T> Source<'t, T> {
         twain.ui.set(ffi::TW_USERINTERFACE {
             ShowUI: u16::from(show),
             ModalUI: 0,
-            hParent: twain.window.hwnd(),
+            hParent: guard.map_or_else(|| twain.window.hwnd(), |g| g.hwnd),
         });
         let (triplet, rc) = dsm.user_interface(&twain.app, &twain.source, msg, &twain.ui);
         // TWRC_CHECKSTATUS: enabled, the UI shown though not asked for (a
@@ -215,6 +250,7 @@ impl<'t, T> Source<'t, T> {
             return Err(Refused { state: self, error });
         }
         twain.forced_ui.set(rc == ReturnCode::CHECKSTATUS);
+        twain.owner_guard.set(guard);
         // A message the callback kept inside MSG_ENABLEDS is still unread, so
         // the record moves to 5 first and the pump takes it to 6.
         if twain.level.get() < Level::Enabled {
@@ -296,6 +332,14 @@ impl<'t, T> Enabled<'t, T> {
     /// as the source left it).
     pub fn modal(&self) -> bool {
         self.twain().ui.get().ModalUI != 0
+    }
+
+    /// The source's current condition code (`DG_CONTROL/DAT_STATUS/MSG_GET`,
+    /// which clears it): `None` if it has none (`TWCC_SUCCESS`) or couldn't
+    /// answer.
+    pub fn status(&self) -> Option<ConditionCode> {
+        self.dsm()
+            .status(&self.twain().app, Some(&self.twain().source))
     }
 
     /// The source's next message, or a request, pumping the thread's messages
@@ -391,15 +435,21 @@ impl<T> fmt::Debug for Enabled<'_, T> {
 /// other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageInfo {
+    /// Horizontal resolution in the active `ICAP_UNITS` (pixels per unit).
     pub x_resolution: Fix32,
+    /// Vertical resolution in the active `ICAP_UNITS` (pixels per unit).
     pub y_resolution: Fix32,
     /// Columns; -1 if not known (a memory transfer's, before its end).
     pub width: i32,
     /// Rows; -1 if not known (the length a feeder measures as it scans).
     pub length: i32,
+    /// Samples (channels) in each pixel.
     pub samples_per_pixel: i16,
+    /// Bits in each sample; only `bits_per_sample[0]` is reliable across sources.
     pub bits_per_sample: [i16; 8],
+    /// Total bits in each pixel.
     pub bits_per_pixel: i16,
+    /// `true` if channels arrive plane by plane (`TWPC_PLANAR`) rather than chunky.
     pub planar: bool,
     /// `TWPT_`.
     pub pixel_type: i16,
@@ -471,6 +521,13 @@ impl<'t, T> Ready<'t, T> {
     pub fn image_info(&self) -> Result<ImageInfo, Error> {
         self.twain().still_at(Level::Ready)?;
         image_info(self.twain(), self.dsm())
+    }
+
+    /// The image layout for the transfer (`DG_IMAGE/DAT_IMAGELAYOUT/MSG_GET`),
+    /// in the source's active `ICAP_UNITS`.
+    pub fn image_layout(&self) -> Result<ImageLayout, Error> {
+        self.twain().still_at(Level::Ready)?;
+        image_layout_read(self.twain(), self.dsm(), ffi::MSG_GET)
     }
 
     /// A native transfer (`DAT_IMAGENATIVEXFER`, state 6 to 7): the DIB, or
@@ -728,12 +785,19 @@ pub struct MemoryTransfer<'t, T> {
 /// bytes the part of the caller's buffer the source wrote.
 #[derive(Debug)]
 pub struct Strip<'b> {
+    /// `TWCP_` compression of the strip's bytes.
     pub compression: u16,
+    /// Bytes per row in `bytes` (including any row padding).
     pub bytes_per_row: u32,
+    /// Pixel columns in this strip.
     pub columns: u32,
+    /// Pixel rows in this strip.
     pub rows: u32,
+    /// Starting pixel column of this strip within the image.
     pub x_offset: u32,
+    /// Starting pixel row of this strip within the image.
     pub y_offset: u32,
+    /// Slice of the caller's buffer filled by the source (`BytesWritten` bytes).
     pub bytes: &'b [u8],
 }
 

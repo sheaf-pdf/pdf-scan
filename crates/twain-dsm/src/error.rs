@@ -5,7 +5,7 @@ use core::fmt;
 use std::path::PathBuf;
 
 use crate::codes::{ConditionCode, ReturnCode, Triplet};
-use crate::container::ContainerError;
+use crate::container::{ContainerError, Frame};
 
 /// A step TWAIN refused, or data that doesn't hold up.
 #[derive(Debug, thiserror::Error)]
@@ -16,9 +16,13 @@ pub enum Error {
     /// none, or wasn't asked (the source, when none was open).
     #[error("{triplet}: {rc}{}{}", by(" (source: ", .by_source), by(" (DSM: ", .by_dsm))]
     Failed {
+        /// The `(DG_*, DAT_*, MSG_*)` triplet that failed.
         triplet: Triplet,
+        /// The `TWRC_*` return code from `DSM_Entry`.
         rc: ReturnCode,
+        /// The source's `TWCC_*` condition code, if a source was open and reported one.
         by_source: Option<ConditionCode>,
+        /// The DSM's `TWCC_*` condition code, if it reported one.
         by_dsm: Option<ConditionCode>,
     },
     /// The DSM couldn't be loaded.
@@ -37,27 +41,55 @@ pub enum Error {
     CallbackUnsupported,
     /// A block for the DSM couldn't be allocated.
     #[error("a block of {size} bytes couldn't be allocated")]
-    Allocation { size: usize },
+    Allocation {
+        /// Requested byte count.
+        size: usize,
+    },
     /// A memory transfer's buffer smaller than the source's smallest
     /// (`TW_SETUPMEMXFER`'s `MinBufSize`).
     #[error("a buffer of {len} bytes, and the source takes {min} at least")]
-    BufferTooSmall { len: usize, min: u32 },
+    BufferTooSmall {
+        /// Caller buffer length in bytes.
+        len: usize,
+        /// Minimum buffer size (`MinBufSize`) required by the source.
+        min: u32,
+    },
     /// A memory transfer's buffer larger than the source's largest
     /// (`MaxBufSize`).
     #[error("a buffer of {len} bytes, and the source takes {max} at most")]
-    BufferTooLarge { len: usize, max: u32 },
+    BufferTooLarge {
+        /// Caller buffer length in bytes.
+        len: usize,
+        /// Maximum buffer size (`MaxBufSize`) accepted by the source.
+        max: u32,
+    },
     /// A memory transfer's buffer of an odd length, or not at a 4-byte
     /// boundary: TWAIN asks both.
     #[error("a buffer of {len} bytes of odd length or off a 4-byte boundary")]
-    BufferMisaligned { len: usize },
+    BufferMisaligned {
+        /// Caller buffer length in bytes.
+        len: usize,
+    },
     /// A memory transfer's buffer of another length than its first: TWAIN
     /// asks one for the whole transfer.
     #[error("a buffer of {len} bytes, after one of {first}")]
-    BufferSizeChanged { len: usize, first: usize },
+    BufferSizeChanged {
+        /// Subsequent buffer length in bytes.
+        len: usize,
+        /// First buffer length in bytes.
+        first: usize,
+    },
     /// The source's buffer sizes no buffer can meet: its smallest past 64 MiB,
     /// or larger than its largest.
     #[error("the source's buffer sizes can't be met (min {min}, max {max}, preferred {preferred})")]
-    BufferSizes { min: u32, max: u32, preferred: u32 },
+    BufferSizes {
+        /// Source's `MinBufSize`.
+        min: u32,
+        /// Source's `MaxBufSize`.
+        max: u32,
+        /// Source's `Preferred`.
+        preferred: u32,
+    },
     /// The source asked to be closed (`MSG_CLOSEDSREQ`) during a transfer, and
     /// is back in state 5: the user cancelled on its window, or it failed.
     #[error("the source asked to be closed")]
@@ -70,6 +102,25 @@ pub enum Error {
     /// refused to close it: nothing more is opened until it is.
     #[error("a connection or a source is still open, the DSM having refused to close it")]
     StillOpen,
+    /// A parent window handle (`HWND`) that isn't a live Win32 window.
+    #[error("window handle {hwnd:#x} isn't a live Win32 window")]
+    InvalidWindow {
+        /// The handle refused.
+        hwnd: u64,
+    },
+    /// An image frame whose right isn't past its left or whose bottom isn't
+    /// past its top, refused before the source sees it.
+    #[error(
+        "an empty or inverted image frame (left {}, top {}, right {}, bottom {})",
+        frame.left.to_f64(),
+        frame.top.to_f64(),
+        frame.right.to_f64(),
+        frame.bottom.to_f64()
+    )]
+    InvalidFrame {
+        /// The frame refused.
+        frame: Frame,
+    },
 }
 
 fn by(label: &str, code: &Option<ConditionCode>) -> String {
@@ -86,23 +137,36 @@ fn by(label: &str, code: &Option<ConditionCode>) -> String {
 pub enum LoadError {
     /// No file there.
     #[error("{} isn't there", path.display())]
-    NotFound { path: PathBuf },
+    NotFound {
+        /// Path checked.
+        path: PathBuf,
+    },
     /// The file couldn't be opened for reading, others kept from writing or
     /// deleting it while it's checked and loaded.
     #[error("{} couldn't be opened: {error}", path.display())]
     Open {
+        /// Path opened.
         path: PathBuf,
+        /// Underlying I/O error.
         error: std::io::Error,
     },
     /// A DLL of that name is already loaded in this process, from another
     /// file: loading would hand back that one.
     #[error("another {name} is loaded already, from {}", loaded.display())]
-    Elsewhere { name: String, loaded: PathBuf },
+    Elsewhere {
+        /// File name of the DLL.
+        name: String,
+        /// Path of the already-loaded module.
+        loaded: PathBuf,
+    },
     /// The DSM is loaded in this process already by something else (another
     /// TWAIN client, another copy of this crate): using it too would race
     /// whatever uses it, as the DSM has no locks.
     #[error("the DSM is in use in this process already, loaded from {}", loaded.display())]
-    InUse { loaded: PathBuf },
+    InUse {
+        /// Path of the already-loaded DSM module.
+        loaded: PathBuf,
+    },
     /// The file has no signature that verifies: none in it, and none found for
     /// it in the system's catalogs (a check of the file may or may not find a
     /// catalog's: Windows' own files come back so, or as `WrongSigner`).
@@ -110,20 +174,37 @@ pub enum LoadError {
     Unsigned,
     /// The signature doesn't verify: `WinVerifyTrust`'s answer.
     #[error("the signature doesn't verify ({code:#010x})")]
-    BadSignature { code: i32 },
+    BadSignature {
+        /// `HRESULT` returned by `WinVerifyTrust`.
+        code: i32,
+    },
     /// Signed and valid, but not by the TWAIN Working Group (a Windows file
     /// whose catalog signature is found is Microsoft's).
     #[error("signed by {subject:?}, not the TWAIN Working Group")]
-    WrongSigner { subject: String },
+    WrongSigner {
+        /// Signer certificate's subject name.
+        subject: String,
+    },
     /// Built for another machine than this process's.
     #[error("built for machine {found:#06x?}, and this process is {expected:#06x}")]
-    Machine { found: Option<u16>, expected: u16 },
+    Machine {
+        /// PE `Machine` field found in the file, or `None` if not a valid PE header.
+        found: Option<u16>,
+        /// PE `Machine` value of the running process.
+        expected: u16,
+    },
     /// `LoadLibraryExW` refused it: its error.
     #[error("the loader refused it (error {code})")]
-    Loader { code: u32 },
+    Loader {
+        /// Win32 error code from `GetLastError`.
+        code: u32,
+    },
     /// Loaded, the module isn't the file checked.
     #[error("the module loaded is {}, not the file checked", loaded.display())]
-    NotTheFileChecked { loaded: PathBuf },
+    NotTheFileChecked {
+        /// Path reported by the loader for the module handle.
+        loaded: PathBuf,
+    },
     /// It exports no `DSM_Entry`.
     #[error("it exports no DSM_Entry")]
     MissingEntry,
@@ -145,13 +226,22 @@ pub enum RunError {
     /// The thread couldn't be made a single-threaded apartment: it's in a
     /// multithreaded one already, or COM refused (its `HRESULT`).
     #[error("the thread couldn't enter a single-threaded apartment ({code:#010x})")]
-    Apartment { code: i32 },
+    Apartment {
+        /// `HRESULT` returned by `CoInitializeEx`.
+        code: i32,
+    },
     /// The hidden window couldn't be made: the error.
     #[error("the hidden window couldn't be made (error {code})")]
-    Window { code: u32 },
+    Window {
+        /// Win32 error code from `GetLastError`.
+        code: u32,
+    },
     /// The process's run lock couldn't be made: the error.
     #[error("the run lock couldn't be made (error {code})")]
-    Lock { code: u32 },
+    Lock {
+        /// Win32 error code from `GetLastError`.
+        code: u32,
+    },
 }
 
 /// A step refused: the error, and the state it was asked of, unchanged.
@@ -178,6 +268,7 @@ impl<S> Refused<S> {
         (self.state, self.error)
     }
 
+    /// Borrows the refusal error without consuming the state.
     pub fn error(&self) -> &Error {
         &self.error
     }

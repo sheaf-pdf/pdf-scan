@@ -1,14 +1,21 @@
 [package]
 name = "twain-dsm"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "TWAIN through the system's Data Source Manager on Windows, its states as types and its API safe: bindings checked against twain.h, capabilities decoded, native and memory transfers"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
-# Not until the twain backend has used the API (S0 slice 9): its README,
-# changelog and package contents come then.
-publish = false
+documentation = "https://docs.rs/twain-dsm"
+keywords = ["twain", "scanner", "scanning", "windows", "ffi"]
+categories = ["api-bindings", "external-ffi-bindings", "hardware-support", "os::windows-apis"]
+# Only what users need: the sources, the README and the changelog. The tests
+# stay in the repository, since they drive the sample source (`just
+# twain-dsm-package` checks the list).
+include = ["/src", "/README.md", "/CHANGELOG.md"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
 
 [dependencies]
 thiserror.workspace = true
@@ -29,6 +36,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

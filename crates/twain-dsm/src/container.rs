@@ -35,8 +35,11 @@ impl From<Item> for Container {
 /// in range or not; one sent to a source must be in range.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Enumeration {
+    /// The items to choose from.
     pub items: Items,
+    /// Index of the current item in `items`.
     pub current: u32,
+    /// Index of the default item in `items`.
     pub default: u32,
 }
 
@@ -59,20 +62,35 @@ impl Enumeration {
 /// TWAIN's item types (`TWTY_`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemType {
+    /// `TWTY_INT8`.
     Int8,
+    /// `TWTY_INT16`.
     Int16,
+    /// `TWTY_INT32`.
     Int32,
+    /// `TWTY_UINT8`.
     UInt8,
+    /// `TWTY_UINT16`.
     UInt16,
+    /// `TWTY_UINT32`.
     UInt32,
+    /// `TWTY_BOOL`.
     Bool,
+    /// `TWTY_FIX32`.
     Fix32,
+    /// `TWTY_FRAME`.
     Frame,
+    /// `TWTY_STR32`.
     Str32,
+    /// `TWTY_STR64`.
     Str64,
+    /// `TWTY_STR128`.
     Str128,
+    /// `TWTY_STR255`.
     Str255,
+    /// `TWTY_STR1024`.
     Str1024,
+    /// `TWTY_UNI512`.
     Uni512,
     /// `TWTY_HANDLE`: a handle the source allocated, pointer-sized.
     Handle,
@@ -187,7 +205,9 @@ impl fmt::Display for ItemType {
 /// `TW_FIX32`: `whole + frac / 65536`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Fix32 {
+    /// Signed integer part.
     pub whole: i16,
+    /// Unsigned fractional part, in 65536ths.
     pub frac: u16,
 }
 
@@ -263,30 +283,71 @@ impl From<Fix32> for ffi::TW_FIX32 {
 /// `TW_FRAME`: a rectangle in `ICAP_UNITS`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Frame {
+    /// Left edge, in `ICAP_UNITS`.
     pub left: Fix32,
+    /// Top edge, in `ICAP_UNITS`.
     pub top: Fix32,
+    /// Right edge, in `ICAP_UNITS`.
     pub right: Fix32,
+    /// Bottom edge, in `ICAP_UNITS`.
     pub bottom: Fix32,
+}
+
+impl From<ffi::TW_FRAME> for Frame {
+    fn from(frame: ffi::TW_FRAME) -> Self {
+        Frame {
+            left: frame.Left.into(),
+            top: frame.Top.into(),
+            right: frame.Right.into(),
+            bottom: frame.Bottom.into(),
+        }
+    }
+}
+
+impl From<Frame> for ffi::TW_FRAME {
+    fn from(frame: Frame) -> Self {
+        ffi::TW_FRAME {
+            Left: frame.left.into(),
+            Top: frame.top.into(),
+            Right: frame.right.into(),
+            Bottom: frame.bottom.into(),
+        }
+    }
 }
 
 /// One item. A string is its bytes up to its NUL, as TWAIN gives them: in
 /// the system's code page, not UTF-8; `Uni512`'s, UTF-16 units.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Item {
+    /// `TWTY_INT8`.
     Int8(i8),
+    /// `TWTY_INT16`.
     Int16(i16),
+    /// `TWTY_INT32`.
     Int32(i32),
+    /// `TWTY_UINT8`.
     UInt8(u8),
+    /// `TWTY_UINT16`.
     UInt16(u16),
+    /// `TWTY_UINT32`.
     UInt32(u32),
+    /// `TWTY_BOOL`.
     Bool(bool),
+    /// `TWTY_FIX32`.
     Fix32(Fix32),
+    /// `TWTY_FRAME`.
     Frame(Frame),
+    /// `TWTY_STR32` bytes before its NUL.
     Str32(Vec<u8>),
+    /// `TWTY_STR64` bytes before its NUL.
     Str64(Vec<u8>),
+    /// `TWTY_STR128` bytes before its NUL.
     Str128(Vec<u8>),
+    /// `TWTY_STR255` bytes before its NUL.
     Str255(Vec<u8>),
+    /// `TWTY_STR1024` bytes before its NUL.
     Str1024(Vec<u8>),
+    /// `TWTY_UNI512` UTF-16 code units before its NUL.
     Uni512(Vec<u16>),
     /// A handle a source sent. Its value only: a source's handle is never
     /// read through here, and none is sent to a source.
@@ -496,22 +557,27 @@ impl Items {
         Ok(Items { item_type, items })
     }
 
+    /// The type shared by every item in this list.
     pub fn item_type(&self) -> ItemType {
         self.item_type
     }
 
+    /// The items as a slice.
     pub fn as_slice(&self) -> &[Item] {
         &self.items
     }
 
+    /// The items as an owned vector.
     pub fn into_vec(self) -> Vec<Item> {
         self.items
     }
 
+    /// Number of items.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
+    /// Whether there are no items.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -609,21 +675,27 @@ impl Range {
         })
     }
 
+    /// The type shared by all five values in this range.
     pub fn item_type(&self) -> ItemType {
         self.item_type
     }
+    /// `MinValue`.
     pub fn min(&self) -> &Item {
         &self.min
     }
+    /// `MaxValue`.
     pub fn max(&self) -> &Item {
         &self.max
     }
+    /// `StepSize`.
     pub fn step(&self) -> &Item {
         &self.step
     }
+    /// `DefaultValue`.
     pub fn default(&self) -> &Item {
         &self.default
     }
+    /// `CurrentValue`.
     pub fn current(&self) -> &Item {
         &self.current
     }
@@ -633,34 +705,73 @@ impl Range {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ContainerError {
+    /// A container type other than TWAIN's four (`TWON_`).
     #[error("container type {0:#06x} is none of TWAIN's four")]
     UnknownContainer(u16),
+    /// An item type TWAIN doesn't define (`TWTY_`).
     #[error("item type {0:#06x} is none that TWAIN defines")]
     UnknownItemType(u16),
+    /// A block shorter than the items it describes need.
     #[error("the block holds {len} bytes, and its contents need {needed}")]
-    Short { len: usize, needed: u64 },
+    Short {
+        /// Bytes in the block.
+        len: usize,
+        /// Bytes its header and items need.
+        needed: u64,
+    },
+    /// A `TW_RANGE` of an item type that isn't numeric.
     #[error("a range of {0}, which isn't a number")]
     RangeOf(ItemType),
+    /// An item of another type than the container's.
     #[error("an item of {found} among items of {expected}")]
-    MixedTypes { expected: ItemType, found: ItemType },
+    MixedTypes {
+        /// The container's item type.
+        expected: ItemType,
+        /// The item's type.
+        found: ItemType,
+    },
+    /// A string longer than its `TWTY_STR*` or `TWTY_UNI512` type holds.
     #[error("a string of {len} is longer than {item_type} holds ({max})")]
     TooLong {
+        /// The string's item type.
         item_type: ItemType,
+        /// Units in the string.
         len: usize,
+        /// Most units the type holds before its NUL.
         max: usize,
     },
+    /// A string containing an interior NUL, where TWAIN would end it early.
     #[error("a string with a NUL at {at}, where TWAIN would end it")]
-    Nul { at: usize },
+    Nul {
+        /// Index of the first NUL byte or UTF-16 unit.
+        at: usize,
+    },
+    /// An enumeration's current or default index out of bounds.
     #[error("index {index} of an enumeration of {len} items")]
-    Index { index: u32, len: usize },
+    Index {
+        /// The out-of-range index.
+        index: u32,
+        /// Number of items in the enumeration.
+        len: usize,
+    },
+    /// More items than the crate's cap (65,536).
     #[error("{0} items: more than a container is taken with")]
     TooMany(usize),
+    /// A container block larger than the crate's cap (16 MiB).
     #[error("a block of {len} bytes: more than the {max} a container is taken in")]
-    TooLarge { len: u64, max: u64 },
+    TooLarge {
+        /// Bytes asked for or returned.
+        len: u64,
+        /// Cap in bytes.
+        max: u64,
+    },
+    /// Another container where `TWON_ONEVALUE` was required.
     #[error("container type {0:#06x} where one value was expected")]
     NotOneValue(u16),
+    /// Extended image info naming the same handle in two entries.
     #[error("a handle another entry named already")]
     RepeatedHandle,
+    /// `Item::Handle` passed in a container to send to a source.
     #[error("a handle, which only a source gives")]
     Handle,
 }
