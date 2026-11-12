@@ -13,16 +13,16 @@ mod common;
 
 use std::time::Duration;
 
-use sane_dl::{Call, Device, DeviceName, Error, Status};
+use sane_dl::{Call, Device, DeviceName, Error, SaneString, Status};
 
 const BACKENDS: &[&str] = &["test", "pnm"];
 
 fn device(name: &str, model: &str) -> Device {
     Device {
         name: DeviceName::from(name),
-        vendor: "Noname".to_owned(),
-        model: model.to_owned(),
-        kind: "virtual device".to_owned(),
+        vendor: SaneString::from("Noname"),
+        model: SaneString::from(model),
+        kind: SaneString::from("virtual device"),
     }
 }
 

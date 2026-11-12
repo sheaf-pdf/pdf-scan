@@ -12,7 +12,13 @@ gone, so the library is always the one the system's loader finds under SANE's na
 function-pointer types (`SaneInitFn` and the rest, and `SANE_Auth_Callback`) are inside the crate; on
 Linux one SANE per process holds across copies of the crate, with `LoadError::SlotTaken` and
 `LoadError::SlotRefused` new, and `AlreadyLoaded` now this copy's own load alone; Apple's systems other than
-macOS have no default library; and `Image`'s `Debug` gives its data's length rather than every byte.
+macOS have no default library; `Image`'s `Debug` gives its data's length rather than every byte; and
+`Device`'s `vendor`, `model` and `kind` are `SaneString`, SANE's bytes as the backend sent them, where they
+were a `String` with any byte that isn't UTF-8 replaced, which lost a Latin-1 vendor's accented letters. Code
+that showed them calls `to_string_lossy()` for the same text as before, or reads `as_bytes()` and decodes
+them as it chooses (the crate's example: as UTF-8 where they are, else as Latin-1). `SaneString`'s and
+`DeviceName`'s `Debug` show their bytes, escaped as a byte string is (`SaneString(b"Caf\xe9")`), where it
+showed them as text with any byte that isn't UTF-8 replaced; their `Display` still does that.
 
 - **SANE loaded at run time.** `Sane::load` opens the system's library (`Sane::DEFAULT_LIBRARIES`:
   `libsane.so.1`; on macOS `libsane.1.dylib` at Homebrew's and MacPorts' paths, never a bare name; none on
@@ -49,7 +55,8 @@ macOS have no default library; and `Image`'s `Debug` gives its data's length rat
 - **Devices under a deadline.** `Sane::devices(local_only, deadline)` lists on a thread of its own and
   copies the list there; past the deadline, `DeadlineExceeded`, and until the listing returns, calls are
   `ListingPending` and a handle dropped is closed by the listing's thread. `Device` keeps its name as SANE's
-  bytes (`DeviceName`), for `sane_open`, and its vendor, model and type as text.
+  bytes (`DeviceName`), for `sane_open`, and its vendor, model and type as SANE's bytes too (`SaneString`),
+  never decoded.
 - **A known device, fast.** `Sane::open` by name, no listing needed. `ConfigDir` writes a `dll.conf`
   naming the backends given, checked, and an empty `dll.d`, and gives the value for `SANE_CONFIG_DIR`,
   alone (`Search::Isolated`) or before the system's directories (`Search::BeforeSystem`); `backend_of` gives

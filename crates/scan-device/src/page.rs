@@ -144,7 +144,9 @@ pub enum SideKnown {
 pub enum Event {
     /// The settings set, before the first sheet: what the device took, and what it changed.
     Applied(Applied),
-    /// Sheet `n` begins, counted on from the batch's `first_sheet`.
+    /// Sheet `n`, counted on from the batch's `first_sheet`, before its pages: as it begins, or,
+    /// where the driver says a sheet is there only by scanning it, with its front once that's
+    /// read.
     Sheet(u32),
     /// A page, whole, once it's complete.
     Page(RawPage),

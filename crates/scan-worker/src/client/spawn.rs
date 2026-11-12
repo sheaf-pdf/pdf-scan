@@ -1,7 +1,10 @@
-//! A worker's process started: its private directory, a SANE open's configuration in it, and
-//! the process itself, apart from the app's terminal or console.
+//! A worker's process started: its private directory, its command's variables, a SANE open's
+//! configuration in the directory, and the process itself, apart from the app's terminal or
+//! console.
 
 use std::{
+    env,
+    ffi::{OsStr, OsString},
     io,
     path::Path,
     process::{Child, Command, Stdio},
@@ -47,6 +50,9 @@ pub(super) fn spawn(
     let mut process = Command::new(&command.program);
     process
         .args(&command.args)
+        // After the app's own environment, which the worker inherits; in order, so the last
+        // given of a variable is its value.
+        .envs(command.env.iter().map(|(key, value)| (key, value)))
         .current_dir(dir.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -54,17 +60,52 @@ pub(super) fn spawn(
     if driver == Driver::Sane
         && let Some(id) = opens
     {
-        // SANE reads this directory, then its current directory (the same one), then the
-        // system's: so only the id's backend loads, and nothing SANE reads is anyone else's.
+        // SANE reads this directory first, so its `dll.conf` and empty `dll.d` load the id's
+        // backend alone; then what a listing's worker reads, where each backend finds its own
+        // configuration. Set after the command's variables, so it takes the place of one the
+        // command gives.
         let name = sane_name(id);
         let backend = name.as_deref().and_then(backend_of);
         let config = ConfigDir::write(dir.path(), backend, Search::BeforeSystem)
             .map_err(|error| NotStarted::WorkDir(io::Error::other(error)))?;
-        process.env(CONFIG_DIR_VARIABLE, config.value());
+        let listing = listing_config(command, env::var_os(CONFIG_DIR_VARIABLE));
+        process.env(
+            CONFIG_DIR_VARIABLE,
+            open_config(&config, listing.as_deref()),
+        );
     }
     set_apart(&mut process);
     let child = process.spawn().map_err(NotStarted::Program)?;
     Ok((child, dir))
+}
+
+/// The `SANE_CONFIG_DIR` a listing's worker reads: the last the command gives, else the one the
+/// app has (`inherited`), which the worker inherits; `None` where neither gives one.
+fn listing_config(command: &WorkerCommand, inherited: Option<OsString>) -> Option<OsString> {
+    command
+        .env
+        .iter()
+        .rev()
+        .find(|(key, _)| key == CONFIG_DIR_VARIABLE)
+        .map(|(_, value)| value.clone())
+        .or(inherited)
+}
+
+/// A SANE open's `SANE_CONFIG_DIR`: `config`'s directory, then the directories `listing` names,
+/// as a listing's worker reads them (an empty value naming none); where there's no `listing`,
+/// SANE's own list (its current directory, the worker's own, then the system's).
+fn open_config(config: &ConfigDir, listing: Option<&OsStr>) -> OsString {
+    match listing {
+        // The directory then `:`, which SANE reads as "then my own list".
+        None => config.value(),
+        Some(listing) if listing.is_empty() => config.path().as_os_str().to_owned(),
+        Some(listing) => {
+            let mut value = config.path().as_os_str().to_owned();
+            value.push(":");
+            value.push(listing);
+            value
+        }
+    }
 }
 
 fn invalid(reason: &'static str) -> io::Error {
@@ -141,6 +182,46 @@ mod tests {
         assert_eq!(name("fake:test:0"), None);
         assert_eq!(name("SANE:test:0"), None);
         assert_eq!(name("test:0"), None);
+    }
+
+    #[test]
+    fn an_open_s_configuration_is_its_directory_then_what_a_listing_reads() {
+        let given = WorkerCommand::new("/bin/worker")
+            .env(CONFIG_DIR_VARIABLE, "/first")
+            .env("OTHER", "x")
+            .env(CONFIG_DIR_VARIABLE, "/etc/app/sane:");
+        let none = WorkerCommand::new("/bin/worker").env("OTHER", "x");
+        let app = Some(OsString::from("/app"));
+        // The command's last, else the app's.
+        assert_eq!(
+            listing_config(&given, app.clone()).as_deref(),
+            Some(OsStr::new("/etc/app/sane:"))
+        );
+        assert_eq!(
+            listing_config(&none, app).as_deref(),
+            Some(OsStr::new("/app"))
+        );
+        assert_eq!(listing_config(&none, None), None);
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigDir::write(dir.path(), Some("test"), Search::BeforeSystem).unwrap();
+        let path = dir.path().as_os_str().to_owned();
+        let with = |after: &str| {
+            let mut value = path.clone();
+            value.push(after);
+            value
+        };
+        assert_eq!(
+            open_config(&config, Some(OsStr::new("/etc/app/sane:"))),
+            with(":/etc/app/sane:")
+        );
+        assert_eq!(
+            open_config(&config, Some(OsStr::new("/a:/b"))),
+            with(":/a:/b")
+        );
+        // None given: SANE's own list after it.
+        assert_eq!(open_config(&config, None), with(":"));
+        // An empty value, which names no directory: the directory alone.
+        assert_eq!(open_config(&config, Some(OsStr::new(""))), path);
     }
 
     #[test]

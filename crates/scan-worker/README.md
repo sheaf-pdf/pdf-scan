@@ -21,20 +21,25 @@ error, not a negotiation.
 A `Client`, given the worker binary for each driver API, starts a worker for each listing and each device it
 opens, and makes the device model's calls through it, with an error of its own beside the device's. Each worker
 starts in a private directory of its own, where a SANE worker opening a stored device finds a configuration
-naming only that device's backend. The client trusts nothing a worker says: every line and page is capped
-before it's read, a page checked against its format and size before anything is allocated, and the model's
-rules checked, a batch's order among them. A watchdog kills a worker silent past its time, a cancel allowed to
-finish the sheet in flight, and a silent worker's process is watched, so its end is seen even where a process
-its driver started holds its pipes; the pages sent before any failure are the caller's, and a crash says how the
-worker exited and keeps the end of its standard error. On Unix, an app keeps `SIGPIPE` ignored, as Rust's
-runtime leaves it.
+naming only that device's backend, and inherits the app's environment with its command's own variables set after
+it (the loader's search path that chooses the SANE library it loads, say). The client trusts nothing a worker
+says: every line and page is capped before it's read, a page checked against its format and size before anything
+is allocated, and the model's rules checked, a batch's order among them. A watchdog kills a worker silent past
+its time, a cancel allowed to finish the sheet in flight, and a silent worker's process is watched, so its end
+is seen even where a process its driver started holds its pipes; the pages sent before any failure are the
+caller's, and a crash says how the worker exited and keeps the end of its standard error. On Unix, an app keeps
+`SIGPIPE` ignored, as Rust's runtime leaves it.
 
 ## Features
 
-- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, and workers that break the
-  protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang, crash and exit by
-  design. It turns on `scan-device`'s own `fake`, which then appears through the re-exported
-  `scan_worker::scan_device::fake`; the rest of the library is the same with it or without.
+- `sane`: `scan-device`'s SANE backend, `scan_worker::scan_device::sane::SaneBackend`, for an app's SANE
+  worker to serve: named through the re-export, it's of the `scan-device` this crate's `serve` takes. It turns
+  on `scan-device`'s own `sane`; the rest of the library is the same with it or without.
+- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE backend (the
+  scenario this crate's tests run SANE's own `test` backend and a stand-in for libsane through), and workers
+  that break the protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang,
+  crash and exit by design. It turns on `scan-device`'s own `fake` and `sane`, which then appear through the
+  re-exported `scan_worker::scan_device`; the rest of the library is the same with it or without.
 
 Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
 together. No `unsafe` code.

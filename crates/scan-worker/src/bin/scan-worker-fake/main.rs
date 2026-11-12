@@ -4,18 +4,19 @@
 //!
 //! Its first argument names a scenario, a second a count of sheets where one takes it (3 if
 //! none). Through `serve`: those of `scenarios.rs`; `env`, a backend reporting where it was
-//! started; `slow-listing`, whose listing takes a minute and whose exit is held; `slow-exit`,
-//! whose device opens at once and whose exit is held, a minute or the seconds its second
-//! argument says. By hand, the protocol written as literal lines: `version`, `later-hello`,
-//! `not-json`, `no-hello`, `silent`, `deaf`, `long-line`, `out-of-place`, `refuses`,
-//! `opened-another`, `renamed-elsewhere`, `no-source`, `big-page`, `page-length`, `padding`,
-//! `zero-dpi`, `cut-short`, `page-then-end`, `page-first`, `applied-late`, `sheet-out-of-turn`,
-//! `empty-after-page`, `encoded-unasked`, `huge-paper`, `helper-window` and `helper-batch`.
-//! And `held`, the process the last two start: it holds the pipes it inherits until its input
-//! ends.
+//! started; `sane`, SANE's backend, with the arguments `sane.rs` gives; `slow-listing`, whose
+//! listing takes a minute and whose exit is held; `slow-exit`, whose device opens at once and
+//! whose exit is held, a minute or the seconds its second argument says. By hand, the protocol
+//! written as literal lines: `version`, `later-hello`, `not-json`, `no-hello`, `silent`, `deaf`,
+//! `long-line`, `out-of-place`, `refuses`, `opened-another`, `renamed-elsewhere`, `no-source`,
+//! `big-page`, `page-length`, `padding`, `zero-dpi`, `cut-short`, `page-then-end`, `page-first`,
+//! `applied-late`, `sheet-out-of-turn`, `empty-after-page`, `encoded-unasked`, `huge-paper`,
+//! `helper-window` and `helper-batch`. And `held`, the process the last two start: it holds the
+//! pipes it inherits until its input ends.
 
 #![forbid(unsafe_code)]
 
+mod sane;
 mod scenarios;
 
 use std::{
@@ -46,6 +47,7 @@ fn main() -> ExitCode {
     }
     match name {
         "env" => scan_worker::serve(vec![Box::new(Env)]),
+        "sane" => sane::main(&args[1..]),
         "slow-listing" => {
             let backend = FakeBackend::new()
                 .with(scenarios::desk())
@@ -66,10 +68,14 @@ fn main() -> ExitCode {
 }
 
 /// A backend whose devices say where their worker was started: its current directory as their
-/// name, `SANE_CONFIG_DIR` as their maker (`<unset>` where it isn't set), and what the directory
-/// holds as their model, in JSON; SANE's, so a client starts it as it starts a SANE worker.
-/// Opened, a device is the scripted one, with an empty feeder.
+/// name, `SANE_CONFIG_DIR` as their maker (`<unset>` where it isn't set), and as their model, in
+/// JSON, what the directory holds and the value of [`GIVEN`] (`null` where it isn't set); SANE's,
+/// so a client starts it as it starts a SANE worker. Opened, a device is the scripted one, with
+/// an empty feeder.
 struct Env;
+
+/// The variable the `env` backend's devices report, which a test sets on the worker's command.
+const GIVEN: &str = "SCAN_WORKER_TEST_GIVEN";
 
 impl Backend for Env {
     fn list(&mut self, _deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
@@ -112,13 +118,15 @@ fn started(id: DeviceId) -> DeviceInfo {
             Err(_) => Value::Null,
         }
     };
+    let given = env::var_os(GIVEN).map(|value| value.to_string_lossy().into_owned());
     let model = match &here {
         Ok(dir) => json!({
             "entries": entries(dir),
             "dll_conf": fs::read_to_string(dir.join("dll.conf")).ok(),
             "dll_d": entries(&dir.join("dll.d")),
+            "given": given,
         }),
-        Err(_) => Value::Null,
+        Err(_) => json!({ "given": given }),
     };
     DeviceInfo::new(id, name, maker, model.to_string(), Driver::Sane)
 }

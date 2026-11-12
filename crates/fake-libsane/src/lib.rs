@@ -129,6 +129,7 @@
 //! | `select-fd N` | `sane_get_select_fd` answers `GOOD` with `N` (without, `UNSUPPORTED`) |
 //! | `parameters-status STATUS` | `sane_get_parameters` answers `STATUS` |
 //! | `start-inval-deactivates NAME...` | A start answering `INVAL` makes these options inactive, saying nothing |
+//! | `start-inval-resets NAME...` | A start answering `INVAL` sets these options back to the value the script gave them, saying nothing |
 //!
 //! `sane_set_io_mode` and `sane_get_select_fd` answer `INVAL` with no frame
 //! in progress, as the standard says (but for `io-mode-unsupported`). A

@@ -96,7 +96,8 @@ pub(crate) enum Reply {
     Window(WindowClosed),
     /// A batch's settings applied.
     Applied(Applied),
-    /// A batch's sheet begins.
+    /// A batch's sheet, before its pages: as it begins, or with its front where the driver says a
+    /// sheet is there only by scanning it.
     Sheet(u32),
     /// A batch's page: its bytes follow the line.
     Page(PageHeader),

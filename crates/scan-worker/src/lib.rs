@@ -53,6 +53,13 @@
 //! }
 //! ```
 //!
+//! A SANE worker is built the same way with this crate's `sane` feature, which turns on
+//! `scan-device`'s: its `main` serves `scan_worker::scan_device::sane::SaneBackend::new()` where
+//! this one serves the scripted backend, and the client is given it for `Driver::Sane`. Named
+//! through the re-export, the backend is one of the `scan-device` this crate's [`serve`] takes; a
+//! `scan-device` of another version, a dependency of the app's own, is another crate, whose
+//! backends `serve` doesn't take.
+//!
 //! # The client
 //!
 //! A listing ([`Client::list`]) starts a worker of its own, which lists, answers and is quit, so
@@ -66,13 +73,22 @@
 //! name, on Unix its owner's alone, and removed once the worker has exited. A SANE worker that
 //! opens a stored device finds there a SANE configuration naming only the backend the stored id
 //! names (the id's text after `sane:` up to its first `:`, each character up to U+00FF a byte;
-//! none where the id gives none), given as `SANE_CONFIG_DIR` with SANE's own list after it, so
-//! SANE loads that backend alone and reads nothing anyone else wrote: the directory, then its
-//! current directory (the same), then the system's. That replaces any `SANE_CONFIG_DIR` the app
-//! has; a listing's directory is empty and leaves the app's. Whatever the id, the worker's
-//! backend is the one to refuse it. On Unix a worker leads a process group of its own, so a
-//! terminal's interrupt reaches the app, which decides, and not the worker mid-sheet; on Windows
-//! it's started with no console window. Otherwise it inherits the app's environment.
+//! none where the id gives none), which SANE reads first (`SANE_CONFIG_DIR`), so that backend
+//! alone loads, whatever else SANE reads; then the directories a listing's worker reads, so each
+//! backend finds the same configuration of its own as it did when it listed the device: the
+//! `SANE_CONFIG_DIR` the worker's command gives, else the app's, else SANE's own list (the
+//! worker's current directory, the same one, then the system's). A listing's directory is empty,
+//! and its worker reads what the command or the app gives, or SANE's own list. Whatever the id,
+//! the worker's backend is the one to refuse it. On Unix a worker leads a process group of its
+//! own, so a terminal's interrupt reaches the app, which decides, and not the worker mid-sheet;
+//! on Windows it's started with no console window.
+//!
+//! A worker inherits the app's environment, and its command's variables are set after it, in
+//! order ([`WorkerCommand::env`]), then a SANE open's `SANE_CONFIG_DIR`: so an app gives a
+//! worker what its process reads as it starts, such as the system loader's search path that
+//! chooses the SANE library it loads, and the configuration of an app's own SANE, without
+//! changing its own environment. The client sets each as given, the app's own choice, as its
+//! program is; a search path holds absolute entries alone.
 //!
 //! The client trusts nothing a worker says, since a driver's code runs there: every line is
 //! capped before it's read whole ([`Limits::line`]); a page's bytes are capped
@@ -201,7 +217,8 @@
 //!
 //! - `{"applied":Applied}`, the settings the device took and what it changed;
 //! - `{"status":Status}`, such as `{"status":"WarmingUp"}`;
-//! - `{"sheet":N}`, as sheet `N` begins;
+//! - `{"sheet":N}`, sheet `N`, before its pages: as it begins, or with its front where the
+//!   driver says a sheet is there only by scanning it;
 //! - `{"page":...}` and its bytes, for each page, whole (below);
 //! - `{"progress":{"done":B,"total":T}}`: the bytes done of the page in flight, and its total,
 //!   `null` while it isn't known;

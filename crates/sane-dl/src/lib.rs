@@ -12,8 +12,16 @@
 //! use std::time::Duration;
 //!
 //! let sane = sane_dl::Sane::load()?;
+//! // A device's strings are SANE's bytes: Latin-1 by SANE's standard, UTF-8
+//! // from some backends. Read as UTF-8 where they are, else as Latin-1.
+//! let text = |bytes: &[u8]| match std::str::from_utf8(bytes) {
+//!     Ok(text) => text.to_owned(),
+//!     Err(_) => bytes.iter().copied().map(char::from).collect(),
+//! };
 //! for device in sane.devices(false, Duration::from_secs(30))? {
-//!     println!("{} ({} {})", device.name, device.vendor, device.model);
+//!     let vendor = text(device.vendor.as_bytes());
+//!     let model = text(device.model.as_bytes());
+//!     println!("{} ({vendor} {model})", text(device.name.as_bytes()));
 //! }
 //! let mut handle = sane.open("test:0")?;
 //! if let Some(resolution) = handle.find_option("resolution") {

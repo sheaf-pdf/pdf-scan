@@ -185,8 +185,11 @@ jobs:
 
   # The crate's sources have no platform code, and the check job runs its
   # tests on all three systems, so one runner checks what the oldest Rust can
-  # break. Its crash test's Windows branch (a constant, an exit code read) is
-  # left uncompiled on that Rust, which is accepted.
+  # break. Its tests' Windows branches (the crash test's constant and exit
+  # code read, and the SANE backend's test that SANE isn't installed there)
+  # are left uncompiled on that Rust, which is accepted. SANE isn't
+  # installed here, so the SANE backend's tests through the real libsane say
+  # they skipped, while those through the fake libsane run.
   scan-device-msrv:
     name: scan-device on its minimum Rust
     runs-on: ubuntu-latest
@@ -202,10 +205,13 @@ jobs:
         run: just scan-device-msrv
 
   # The check job runs the crate's tests on all three systems, so one runner
-  # checks what the oldest Rust can break. Its Windows branch (the worker
-  # started with creation_flags, stable since Rust 1.16) is left uncompiled
-  # on that Rust, which is accepted. Its tests run for the crate alone (-p),
-  # as a dependent's build has it, beside the check job's workspace run.
+  # checks what the oldest Rust can break. Its Windows branches (the worker
+  # started with creation_flags, stable since Rust 1.16, and its tests'
+  # constant and exit code read) are left uncompiled on that Rust, which is
+  # accepted. SANE isn't installed here, so the SANE worker's tests through
+  # the real libsane say they skipped, while those through the fake libsane
+  # run. Its tests run for the crate alone (-p), as a dependent's build has
+  # it, beside the check job's workspace run.
   scan-worker-msrv:
     name: scan-worker on its minimum Rust
     runs-on: ubuntu-latest

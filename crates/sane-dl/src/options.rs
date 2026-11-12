@@ -300,12 +300,15 @@ fn words_in(size: i32) -> usize {
     usize::try_from(size).unwrap_or(0) / WORD
 }
 
-/// A string as SANE's bytes: an option's string value, or an entry of a
-/// string list.
+/// A string as SANE's bytes: an option's string value, an entry of a string
+/// list, or a device's vendor, model or kind ([`Device`](crate::Device)).
 ///
-/// Kept as bytes, never decoded, since it goes back to the backend exactly as
-/// it came. It holds no `NUL` when SANE gives it; one given to
-/// [`set`](crate::Handle::set) with a `NUL` inside is refused.
+/// Kept as bytes, never decoded: an option's value goes back to the backend
+/// exactly as it came, and a device's strings are as the backend sent them,
+/// which the standard makes Latin-1 and some backends send as UTF-8, so
+/// what they mean is the caller's to say. It holds no `NUL` when SANE gives
+/// it; one given to [`set`](crate::Handle::set) with a `NUL` inside is
+/// refused.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct SaneString(Vec<u8>);
 
@@ -368,9 +371,12 @@ impl fmt::Display for SaneString {
     }
 }
 
+/// The string's bytes, as a byte string is written in Rust (`SaneString(b"Caf\xe9")`): ASCII's
+/// printable characters as they are, every other byte escaped, so bytes that aren't UTF-8 are
+/// shown as they came.
 impl fmt::Debug for SaneString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SaneString({:?})", self.to_string_lossy())
+        write!(f, "SaneString(b\"{}\")", self.0.escape_ascii())
     }
 }
 
@@ -945,7 +951,12 @@ mod tests {
         let string = SaneString::new(b"ADF \xff".to_vec());
         assert_eq!(string.as_bytes(), b"ADF \xff");
         assert_eq!(string.to_string(), "ADF \u{fffd}");
-        assert_eq!(format!("{string:?}"), "SaneString(\"ADF \u{fffd}\")");
+        assert_eq!(format!("{string:?}"), "SaneString(b\"ADF \\xff\")");
+        // Latin-1 and UTF-8 alike, as they came.
+        assert_eq!(
+            format!("{:?}", SaneString::from(b"Caf\xe9 \"\xc3\xa8\"".as_slice())),
+            "SaneString(b\"Caf\\xe9 \\\"\\xc3\\xa8\\\"\")"
+        );
         assert_eq!(
             SaneString::from("Flatbed"),
             SaneString::from(b"Flatbed".as_slice())

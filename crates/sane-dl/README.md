@@ -23,8 +23,16 @@ use sane_dl::{Page, Sane};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sane = Sane::load()?;
+    // A device's strings are SANE's bytes: Latin-1 by SANE's standard, UTF-8 from some backends.
+    // Read as UTF-8 where they are, else as Latin-1.
+    let text = |bytes: &[u8]| match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => bytes.iter().copied().map(char::from).collect(),
+    };
     for device in sane.devices(false, Duration::from_secs(30))? {
-        println!("{} ({} {})", device.name, device.vendor, device.model);
+        let vendor = text(device.vendor.as_bytes());
+        let model = text(device.model.as_bytes());
+        println!("{} ({vendor} {model})", text(device.name.as_bytes()));
     }
     let mut handle = sane.open("test:0")?;
     if let Some(mode) = handle.find_option("mode") {
@@ -58,7 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Another SANE is loaded through the loader's own search path, given to the process as it starts (below).
   Then `sane_init`, with no authorization callback, so a backend that asks for a password gets none.
 - **Devices under a deadline.** `Sane::devices` lists them on a thread of its own, and stops waiting at the
-  deadline: listing can take seconds, as every backend loaded looks for its devices, and some hang.
+  deadline: listing can take seconds, as every backend loaded looks for its devices, and some hang. Each
+  device's name, vendor, model and kind come as SANE's bytes, never decoded: the standard makes them Latin-1,
+  and some backends send UTF-8, so what they mean is the program's to say.
 - **A known device, fast.** `Sane::open` opens a device by its name, with no listing first. `ConfigDir`
   writes a configuration that loads only the backends it names (`backend_of` gives a device's), for the
   process that loads SANE to be given as `SANE_CONFIG_DIR`, so a listing doesn't wait on every backend.

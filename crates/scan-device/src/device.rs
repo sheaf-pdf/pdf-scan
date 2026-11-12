@@ -124,9 +124,10 @@ pub trait Device: Send {
     /// it ends.
     ///
     /// The settings are clamped to what the device can do, and said in [`Event::Applied`] before
-    /// the first sheet. Then each sheet is [`Event::Sheet`] as it begins and each of its pages an
-    /// [`Event::Page`], whole, once it's complete; [`Event::Status`] says what the user should know
-    /// meanwhile. Each `send` on `events` waits while the channel holds as many events as its
+    /// the first sheet. Then each sheet is [`Event::Sheet`] before its pages (as it begins, or with
+    /// its front where the driver says a sheet is there only by scanning it) and each of its pages
+    /// an [`Event::Page`], whole, once it's complete; [`Event::Status`] says what the user should
+    /// know meanwhile. Each `send` on `events` waits while the channel holds as many events as its
     /// bound, so once that many wait untaken the backend holds at its next `send`, its driver with
     /// it, until one is taken; on a rendezvous channel (`sync_channel(0)`) each `send` waits until
     /// its event is taken. A `send` that fails, the receiver gone, ends the batch at once as

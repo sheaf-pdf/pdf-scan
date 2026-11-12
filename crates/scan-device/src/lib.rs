@@ -32,8 +32,10 @@
 //!    device took, and what it changed of those asked for ([`Clamped`]);
 //! 2. [`Event::Status`], at any point, for what the user should know meanwhile, such as the scanner
 //!    warming up;
-//! 3. [`Event::Sheet`]`(n)` as sheet `n` begins, counted on from the `first_sheet` given, then an
-//!    [`Event::Page`] for each side of it scanned, each page whole and sent once it's complete.
+//! 3. [`Event::Sheet`]`(n)` for sheet `n`, counted on from the `first_sheet` given, before its
+//!    pages: as it begins, or, where the driver says a sheet is there only by scanning it, with
+//!    its front once that's read; then an [`Event::Page`] for each side of it scanned, each page
+//!    whole and sent once it's complete.
 //!
 //! It returns how the batch ended, a [`Done`] (the feeder emptied, a flatbed's one page, or
 //! cancelled), or a [`ScanError`]. [`ScanError::FeederEmpty`] comes only before any page: after
@@ -103,6 +105,18 @@
 //!   another program checks them for being finite itself.
 //!   Provisional, as the model is: until it's frozen, a change to the model changes the form, and
 //!   what was stored before may not read.
+//!
+//! - `sane`: `scan_device::sane::SaneBackend`, SANE's scanners on Linux and the other Unix-like
+//!   systems, through libsane loaded at run time and never linked, so a program built with it runs
+//!   where SANE isn't installed and hears so as [`ScanError::NotInstalled`]. Its devices' ids are
+//!   `sane:` and SANE's names, a stored one opened after a listing of its backend (a renamed USB
+//!   connection found by its maker and model), and what each source can do is read through tables
+//!   of the names backends give a feeder, duplex and a mode. A batch's settings are set in order
+//!   and read back for [`Event::Applied`], so what the device moved is said, and its pages come
+//!   in the raw layout, each sheet's event with its front. `SaneBackend::with_option` sets an
+//!   option the model doesn't carry by its SANE name. SANE's backends run in the process that
+//!   loads them, so an app runs this one in a worker process of its own. Builds on every system;
+//!   where there's no SANE (Windows among them), listing and opening say it isn't installed.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
@@ -179,6 +193,8 @@ mod image;
 mod page;
 #[cfg(all(test, feature = "serde"))]
 mod round_trip;
+#[cfg(feature = "sane")]
+pub mod sane;
 
 pub use caps::{Applied, Caps, Clamped, Paper, Resolutions, Settings, SizeMm, Source, SourceCaps};
 pub use device::{

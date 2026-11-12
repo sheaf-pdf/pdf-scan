@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
+use crate::SaneString;
 use crate::config::backend_of;
 
 /// A device's name, as SANE's bytes.
@@ -79,26 +80,37 @@ impl fmt::Display for DeviceName {
     }
 }
 
+/// The name's bytes, as a byte string is written in Rust (`DeviceName(b"test:0")`): ASCII's
+/// printable characters as they are, every other byte escaped, so bytes that aren't UTF-8 are
+/// shown as they came.
 impl fmt::Debug for DeviceName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DeviceName({:?})", self.to_string_lossy())
+        write!(f, "DeviceName(b\"{}\")", self.0.escape_ascii())
     }
 }
 
 /// A device as `sane_get_devices` lists it.
 ///
-/// The name is kept as SANE's bytes; the rest is text for people, any bytes
-/// that aren't UTF-8 replaced, and empty where the backend gave none.
+/// Each string is kept as SANE's bytes, never decoded: the name, which goes
+/// back to `sane_open` as it came, and the vendor, model and kind, for
+/// people, empty where the backend gave none. The standard makes SANE's
+/// strings Latin-1, but backends send UTF-8 too, so what the bytes mean is
+/// the caller's to say: read as UTF-8 where they are and as Latin-1
+/// otherwise (each byte the character of its number), as the crate's
+/// example does, both kinds of backend show as they mean.
+/// [`SaneString::to_string_lossy`] reads them as UTF-8 alone, any bytes
+/// that aren't replaced, which loses a Latin-1 vendor's accented letters;
+/// their `Debug` shows the bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Device {
     /// The device's name, which [`Sane::open`](crate::Sane::open) takes.
     pub name: DeviceName,
     /// Its vendor.
-    pub vendor: String,
+    pub vendor: SaneString,
     /// Its model.
-    pub model: String,
+    pub model: SaneString,
     /// What kind of device it is, such as "flatbed scanner".
-    pub kind: String,
+    pub kind: SaneString,
 }
 
 #[cfg(test)]
@@ -115,8 +127,9 @@ mod tests {
         assert_eq!(DeviceName::from("test:0").to_string(), "test:0");
         assert_eq!(
             format!("{:?}", DeviceName::from("test:0")),
-            "DeviceName(\"test:0\")"
+            "DeviceName(b\"test:0\")"
         );
+        assert_eq!(format!("{name:?}"), "DeviceName(b\"odd:\\xff\\x01\")");
         assert_eq!(
             DeviceName::from("test:0"),
             DeviceName::from(b"test:0".as_slice())

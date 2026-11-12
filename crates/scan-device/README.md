@@ -14,7 +14,8 @@ in a form the app asked for. The types are plain data, so they can cross a pipe 
 drivers, encoded through the `serde` feature.
 
 Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits, each behind a feature of its
-own. This version has the model, and a scripted backend for tests; none for a driver API yet.
+own. This version has the model, a scripted backend for tests, and SANE's scanners: devices listed and opened,
+what each can do, and batches.
 
 Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
 once a second one has been through it. No `unsafe` code.
@@ -38,6 +39,21 @@ None is on by default.
   drivers and an app can store a device to open again later. In serde's default form: Rust's names, an enum
   tagged by its variant's name. Not a page or an event, which may carry one: a page's bytes travel beside the
   text, not in it. Provisional, as the model is.
+- `sane`: `scan_device::sane::SaneBackend`, SANE's scanners on Linux and the other Unix-like systems, through
+  libsane loaded at run time and never linked, so a program built with it runs where SANE isn't installed and
+  hears so when it lists or opens a device (as on Windows). A device's id is `sane:` and SANE's name for it,
+  each byte the character of its number, so it goes back to SANE byte for byte; its name, maker and model are
+  read as UTF-8 where they are, else as Latin-1. A stored device is opened after a listing of its backend:
+  a name now another model's is taken as gone, a USB connection's name that a replugging changed is found by
+  its maker and model, and ids no listing gives (those SANE would read as its testing modes, or hand to a
+  backend the id never named) are refused before SANE sees them. What each source can do is read through
+  tables of the names backends give a feeder, duplex and a scan mode, each with where it's seen. A batch sets
+  its settings in order, each clamped to what the device allows as it's set, then reads them back, so what
+  the device moved is said as applied; its pages come in the raw layout (black and white inverted, 16-bit
+  samples little-endian, 1-bit color expanded), each sheet's event with its front, since SANE says a sheet is
+  there only by giving its page. Options the model doesn't carry are set by their SANE names, as the app
+  chooses (`with_option`), at each open and each batch. SANE's backends are C code that runs in the process
+  that loads them, so an app runs this one in a worker process of its own.
 
 ## License
 
