@@ -147,7 +147,9 @@ mod windows_live {
     use std::sync::OnceLock;
     use std::time::Duration;
 
-    use scan_worker::scan_device::{Done, Driver, Format, Pixels, ScanError, Settings, Source};
+    use scan_worker::scan_device::{
+        DeviceInfo, Done, Driver, Format, Pixels, ScanError, Settings, Source,
+    };
     use scan_worker::{Client, Error, WorkerCommand};
 
     use super::support::{pages, scan, worker};
@@ -162,11 +164,12 @@ mod windows_live {
     /// Builds (or uses `SCAN_WORKER_I686_EXE`) the 32-bit `i686-pc-windows-msvc` test worker
     /// binary so a 64-bit `Client` can drive both 64-bit and 32-bit TWAIN workers in one test.
     ///
-    /// Returns `Err` only when the `i686-pc-windows-msvc` target toolchain isn't installed; any
-    /// real compile failure panics immediately.
+    /// Returns `Err` only when `!require_sample()` and the `i686-pc-windows-msvc` target toolchain
+    /// isn't installed; any real compile failure (or missing target under
+    /// `TWAIN_DSM_REQUIRE_SAMPLE=1`) panics immediately.
     fn i686_worker_exe() -> Result<&'static Path, String> {
         static I686_EXE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-        I686_EXE
+        let res = I686_EXE
             .get_or_init(|| {
                 if let Some(prebuilt) = std::env::var_os("SCAN_WORKER_I686_EXE") {
                     let path = PathBuf::from(prebuilt);
@@ -221,10 +224,17 @@ mod windows_live {
                 Ok(built)
             })
             .as_deref()
-            .map_err(Clone::clone)
+            .map_err(Clone::clone);
+        if let Err(ref missing) = res {
+            assert!(
+                !require_sample(),
+                "{missing} with TWAIN_DSM_REQUIRE_SAMPLE=1"
+            );
+        }
+        res
     }
 
-    fn twain_worker_64() -> WorkerCommand {
+    fn current_arch_twain_worker() -> WorkerCommand {
         worker("twain")
             .arg("--noisy-stdout")
             .env("TWAIN_SHOWCONSOLEMESSAGES", "1")
@@ -239,28 +249,33 @@ mod windows_live {
             .env("CAP_XFERCOUNT", "10")
     }
 
+    /// Lists `bits` on `client` and finds `SAMPLE_NAME`, allowing `NotInstalled` only when
+    /// `!require_sample()` and panicking on any worker crash, timeout, or protocol error.
+    fn list_sample_for_bits(client: &Client, bits: u8) -> Option<DeviceInfo> {
+        match client.list(Driver::Twain { bits }, DEADLINE) {
+            Ok(devs) => devs.into_iter().find(|d| d.name == SAMPLE_NAME),
+            Err(Error::Scan(ScanError::NotInstalled { what })) => {
+                assert!(
+                    !require_sample(),
+                    "{bits}-bit {what} missing with TWAIN_DSM_REQUIRE_SAMPLE=1"
+                );
+                None
+            }
+            Err(other) => panic!("{bits}-bit TWAIN list failed unexpectedly: {other:?}"),
+        }
+    }
+
     #[test]
     fn client_drives_both_64_bit_and_32_bit_twain_sample_workers_with_noisy_stdout() {
-        // When compiled for 32-bit Windows directly, `worker("twain")` is already 32-bit.
         if cfg!(target_pointer_width = "32") {
-            let client = Client::new().worker(Driver::Twain { bits: 32 }, twain_worker_64());
-            let listed = match client.list(Driver::Twain { bits: 32 }, DEADLINE) {
-                Ok(devs) => devs,
-                Err(Error::Scan(ScanError::NotInstalled { what })) => {
-                    assert!(
-                        !require_sample(),
-                        "{what} missing with TWAIN_DSM_REQUIRE_SAMPLE=1"
-                    );
-                    let _ = writeln!(std::io::stderr(), "twain_worker (32-bit): skipped ({what})");
-                    return;
-                }
-                Err(other) => panic!("32-bit list failed: {other:?}"),
-            };
-            let Some(sample_32) = listed.into_iter().find(|d| d.name == SAMPLE_NAME) else {
+            let client =
+                Client::new().worker(Driver::Twain { bits: 32 }, current_arch_twain_worker());
+            let Some(sample_32) = list_sample_for_bits(&client, 32) else {
                 assert!(
                     !require_sample(),
                     "{SAMPLE_NAME} missing in 32-bit with TWAIN_DSM_REQUIRE_SAMPLE=1"
                 );
+                let _ = writeln!(std::io::stderr(), "twain_worker (32-bit): skipped");
                 return;
             };
             let mut dev_32 = client.open(&sample_32, DEADLINE).expect("open 32-bit");
@@ -272,23 +287,29 @@ mod windows_live {
             return;
         }
 
-        // On runners without `TWAIN_DSM_REQUIRE_SAMPLE=1` (e.g. `check` or `msrv` on Windows,
-        // where neither TWAIN nor the `i686-pc-windows-msvc` target is installed), check 64-bit
-        // availability and `i686` target availability cleanly before requiring dual bitness.
+        // Probe 64-bit TWAIN first when `!require_sample()` so runners without TWAIN installed
+        // (`check` / `msrv`) skip cleanly before invoking a nested `cargo build --target i686`.
+        let probe_64 =
+            Client::new().worker(Driver::Twain { bits: 64 }, current_arch_twain_worker());
+        let sample_64 = list_sample_for_bits(&probe_64, 64);
+        if !require_sample() && sample_64.is_none() {
+            let _ = writeln!(
+                std::io::stderr(),
+                "twain_worker: skipped (no 64-bit sample source)"
+            );
+            return;
+        }
+
         let exe_32 = match i686_worker_exe() {
             Ok(exe) => exe,
             Err(missing) => {
-                assert!(
-                    !require_sample(),
-                    "{missing} with TWAIN_DSM_REQUIRE_SAMPLE=1"
-                );
                 let _ = writeln!(std::io::stderr(), "twain_worker: skipped ({missing})");
                 return;
             }
         };
 
         let client = Client::new()
-            .worker(Driver::Twain { bits: 64 }, twain_worker_64())
+            .worker(Driver::Twain { bits: 64 }, current_arch_twain_worker())
             .worker(Driver::Twain { bits: 32 }, twain_worker_32(exe_32));
 
         // 1. Merged listing deduplicates dual-installed `TWAIN2 Software Scanner` in favour of 64-bit.
@@ -327,16 +348,8 @@ mod windows_live {
             "dual-installed sample source must deduplicate to 1 entry: {sample_entries:?}"
         );
 
-        // 2. Query 64-bit and 32-bit individually to verify whether both sample bitnesses exist,
-        // and scan 10 pages through each!
-        let sample_64 = client
-            .list(Driver::Twain { bits: 64 }, DEADLINE)
-            .ok()
-            .and_then(|devs| devs.into_iter().find(|d| d.name == SAMPLE_NAME));
-        let sample_32 = client
-            .list(Driver::Twain { bits: 32 }, DEADLINE)
-            .ok()
-            .and_then(|devs| devs.into_iter().find(|d| d.name == SAMPLE_NAME));
+        // 2. Query 32-bit individually too and scan 10 pages through both bitnesses!
+        let sample_32 = list_sample_for_bits(&client, 32);
 
         if require_sample() {
             assert!(
@@ -344,7 +357,6 @@ mod windows_live {
                 "TWAIN_DSM_REQUIRE_SAMPLE=1 requires both 64-bit and 32-bit sample sources \
                  (got 64={sample_64:?}, 32={sample_32:?})"
             );
-            // When both are installed, `list_twain` must pick `twain64:`.
             assert_eq!(sample_entries[0].driver, Driver::Twain { bits: 64 });
             assert_eq!(sample_entries[0].id.0, format!("twain64:{SAMPLE_NAME}"));
         }

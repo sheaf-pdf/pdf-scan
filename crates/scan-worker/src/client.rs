@@ -162,9 +162,11 @@ impl Client {
     /// If one bitness answers [`ScanError::NotInstalled`] while the other succeeds, the missing
     /// DSM is ignored cleanly (`other_failed` is `None`). If one bitness crashes, times out, or
     /// fails to start while the other succeeds, the working bitness's scanners are returned with
-    /// the failure recorded in [`TwainList::other_failed`]. If only one TWAIN bitness is
-    /// registered on this client, only that worker runs; if neither is registered, answers
-    /// [`Error::NoWorker`].
+    /// the failure recorded in [`TwainList::other_failed`]. If both bitnesses fail, a real failure
+    /// takes precedence over [`ScanError::NotInstalled`], and the 64-bit error takes precedence
+    /// when both fail with real errors (or both answer [`ScanError::NotInstalled`]). If only one
+    /// TWAIN bitness is registered on this client, only that worker runs; if neither is
+    /// registered, answers [`Error::NoWorker`].
     pub fn list_twain(&self, deadline: Duration) -> Result<TwainList, Error> {
         let d64 = Driver::Twain { bits: 64 };
         let d32 = Driver::Twain { bits: 32 };

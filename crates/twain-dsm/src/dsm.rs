@@ -462,6 +462,16 @@ impl Dib {
         // SAFETY: `handle` is the global block a native transfer handed over;
         // GlobalSize measures it (0 if it can't).
         let len = unsafe { GlobalSize(handle) };
+        if len == 0 || len > isize::MAX as usize {
+            // `core::slice::from_raw_parts` requires `len <= isize::MAX` (e.g.
+            // on 32-bit `/LARGEADDRESSAWARE` WoW64); keep `handle` so `Drop`
+            // still frees it while exposing an empty byte slice.
+            return Dib {
+                handle,
+                at: null(),
+                len: 0,
+            };
+        }
         // SAFETY: as above; locked once here, unlocked once in Drop if it
         // locked.
         let at = unsafe { GlobalLock(handle) }.cast::<u8>().cast_const();

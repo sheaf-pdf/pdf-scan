@@ -188,6 +188,23 @@ fn stop_after_a_prior_crash_or_close_keeps_ended() {
     assert!(matches!(device.caps(), Err(Error::Ended)));
     device.close().expect("closed");
     stop.stop();
+
+    // Un-reaped idle exit: the worker exits on its own *before* any client call reaps `live`, then
+    // `stop.stop()` runs. `stop` must see `try_wait() == Ok(Some(_))` and leave `aborted` false so
+    // the next call surfaces `Error::Crashed` (with status + stderr) rather than `Error::Aborted`!
+    let mut exited_idle = open(&client("exit-after-open"));
+    let idle_stop = exited_idle.stop_handle();
+    thread::sleep(Duration::from_millis(150));
+    idle_stop.stop();
+    match exited_idle.caps() {
+        Err(Error::Crashed { status, stderr, .. }) => {
+            assert_eq!(status.and_then(|s| s.code()), Some(9));
+            assert!(stderr.contains("idle crash"), "stderr={stderr:?}");
+        }
+        other => panic!("expected Crashed after un-reaped idle exit, got {other:?}"),
+    }
+    assert!(matches!(exited_idle.caps(), Err(Error::Ended)));
+    exited_idle.close().expect("closed");
 }
 
 #[test]
@@ -361,7 +378,24 @@ mod windows {
         assert!(dev.caps().is_ok());
         dev.close().unwrap();
 
-        // 2. Cross-thread live HWND pumped on a dedicated UI thread.
+        // 2. Cross-thread live HWND pumped on a dedicated UI thread (with a Drop guard so unwind
+        // always sends `WM_QUIT` and joins).
+        struct UiPump {
+            tid: u32,
+            handle: Option<thread::JoinHandle<()>>,
+        }
+        impl Drop for UiPump {
+            fn drop(&mut self) {
+                // SAFETY: posts `WM_QUIT` to shut down `self.tid` and joins the thread.
+                unsafe {
+                    PostThreadMessageW(self.tid, WM_QUIT, 0, 0);
+                }
+                if let Some(h) = self.handle.take() {
+                    let _ = h.join();
+                }
+            }
+        }
+
         let (ui_tx, ui_rx) = mpsc::channel();
         let ui_thread = thread::spawn(move || {
             // SAFETY: queries current thread id and creates a hidden top-level window pumped on
@@ -402,6 +436,10 @@ mod windows {
         });
 
         let (ui_tid, raw_usize) = ui_rx.recv().unwrap();
+        let _ui_pump = UiPump {
+            tid: ui_tid,
+            handle: Some(ui_thread),
+        };
         let hwnd = raw_usize as HWND;
         let owner = Some(WindowOwner(raw_usize as u64));
         let dir = tempfile::tempdir().unwrap();
@@ -478,14 +516,8 @@ mod windows {
         });
         assert!(matches!(dev_c.settings_window(owner), Err(Error::Aborted)));
         actor_c.join().unwrap();
-        // SAFETY: `hwnd` is live on `ui_thread`.
+        // SAFETY: `hwnd` is live on `_ui_pump`.
         let enabled_c = unsafe { IsWindowEnabled(hwnd) };
         assert_eq!(enabled_c, 0, "pre-disabled window must remain disabled");
-
-        // SAFETY: posts `WM_QUIT` to shut down `ui_thread`.
-        unsafe {
-            PostThreadMessageW(ui_tid, WM_QUIT, 0, 0);
-        }
-        ui_thread.join().unwrap();
     }
 }

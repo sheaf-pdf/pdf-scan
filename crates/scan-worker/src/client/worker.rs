@@ -92,6 +92,9 @@ impl StopHandle {
     pub fn stop(&self) {
         let mut guard = lock_live(&self.live);
         if let Some(live) = guard.as_mut() {
+            if matches!(live.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
             self.aborted.store(true, Ordering::Release);
             live.kill();
         }

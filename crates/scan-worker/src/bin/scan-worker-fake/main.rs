@@ -318,8 +318,8 @@ fn by_hand(name: &str) -> ExitCode {
         // Its hello, and never an answer.
         "deaf" => say(HELLO, &[]),
         "long-line" | "out-of-place" | "refuses" | "opened-another" | "renamed-elsewhere"
-        | "no-source" | "big-page" | "page-length" | "padding" | "zero-dpi" | "cut-short"
-        | "page-then-end" | "page-first" | "applied-late" | "sheet-out-of-turn"
+        | "exit-after-open" | "no-source" | "big-page" | "page-length" | "padding" | "zero-dpi"
+        | "cut-short" | "page-then-end" | "page-first" | "applied-late" | "sheet-out-of-turn"
         | "empty-after-page" | "encoded-unasked" | "huge-paper" | "helper-window"
         | "helper-batch" => {
             say(HELLO, &[]);
@@ -349,6 +349,10 @@ fn by_hand(name: &str) -> ExitCode {
                         &json!({"opened": {"info": device, "renamed_from": null}}).to_string(),
                         &[],
                     );
+                    if name == "exit-after-open" {
+                        eprintln!("scan-worker-fake: idle crash");
+                        std::process::exit(9);
+                    }
                     // `caps`, `scan` or `settings_window`, answered as one would be.
                     let Some(asked) = request(&mut input) else {
                         return ExitCode::SUCCESS;

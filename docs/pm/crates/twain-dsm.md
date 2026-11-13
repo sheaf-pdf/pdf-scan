@@ -108,12 +108,15 @@ in S0 slice 9** (`slices/s0-9-twain-backend.md`), from what the TWAIN spike (S0 
   - **The driver's window and image layout (completed in S0 slice 9):** `Source::enable(Ui::Shown)` (parented to
     the hidden window) or `Ui::ShownOwned(u64)`, and `Source::settings_ui(owner: Option<u64>)`
     (`MSG_ENABLEDSUIONLY`, `Event::CloseOk` when saved), where `owner` is validated for canonical 32-bit Win32
-    `HWND` range (`Error::InvalidWindow { hwnd }`), `IsWindow(hwnd) != 0`, and non-owning caller thread
-    (`window_belongs_to_current_thread`), with an `EnableWindow` restore guard on step-down/drop if a modal
-    driver left `hParent` disabled. `DG_IMAGE / DAT_IMAGELAYOUT` (`ImageLayout`, `Source::image_layout`,
-    `default_image_layout`, `reset_image_layout`, `set_image_layout` with `Error::InvalidFrame` pre-check, and
-    `Ready::image_layout`) uses `MSG_GET` / `MSG_GETDEFAULT` / `MSG_RESET` / `MSG_SET`, and `Source::status` /
-    `Enabled::status` read `DG_CONTROL / DAT_STATUS / MSG_GET`.
+    `HWND` range and `IsWindow(hwnd) != 0` (`Error::InvalidWindow { hwnd }`), `window_belongs_to_current_thread`
+    lets blocking cross-thread callers refuse same-thread `HWND`s before blocking, and `OwnerGuard` restores
+    `EnableWindow` on enable failure and step-down/drop if a modal driver left `hParent` disabled (probing
+    cross-thread `HWND`s with a 250 ms `SendMessageTimeoutW` first). `DG_IMAGE / DAT_IMAGELAYOUT` (`ImageLayout`,
+    `Source::image_layout`, `default_image_layout`, `reset_image_layout`, `set_image_layout` with
+    `Error::InvalidFrame` pre-check, and `Ready::image_layout`) uses `MSG_GET` / `MSG_GETDEFAULT` / `MSG_RESET` /
+    `MSG_SET`; `status` reads `DG_CONTROL / DAT_STATUS / MSG_GET` across states 4 to 7 (`Source`, `Enabled`,
+    `Ready`, `Transferred`, `MemoryTransfer`), alongside `Ready::{opened, take_request}` and `Transferred` /
+    `MemoryTransfer` `reset`.
   - **Release packaging (`0.1.0-alpha.1`, S0 slice 9):** `#![warn(missing_docs)]` (with `#[allow(missing_docs)]`
     on `pub mod ffi`), `#![cfg_attr(docsrs, feature(doc_cfg))]`, `[package.metadata.docs.rs] default-target =
     "x86_64-pc-windows-msvc"`, `include = ["/src", "/README.md", "/CHANGELOG.md"]`, `README.md`, `CHANGELOG.md`,

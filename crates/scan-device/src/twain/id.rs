@@ -4,8 +4,15 @@
 
 use crate::{DeviceId, DeviceInfo, Driver, ScanError};
 
-/// The longest `ProductName` a `TW_STR32` holds before its terminating `NUL`.
-pub(super) const MAX_PRODUCT_NAME_BYTES: usize = 32;
+/// The maximum raw byte length of a `TW_STR32` string (`twain.h`: 32 content bytes plus its
+/// terminating `NUL` and 1 alignment byte in `[u8; 34]`).
+///
+/// Because `twain-dsm` decodes `TW_STR32` via `String::from_utf8_lossy`, a single non-UTF-8
+/// codepage byte (such as CP1252 `0xAE` `®`) expands to `U+FFFD` (3 UTF-8 bytes). Counting 1 raw
+/// byte per `U+FFFD` and `c.len_utf8()` raw bytes per valid UTF-8 scalar accepts every 32-byte
+/// `TW_STR32` string (including legacy codepage bytes) while rejecting any 33+ byte string as
+/// [`ScanError::BadId`].
+pub(super) const MAX_TW_STR32_RAW_BYTES: usize = 32;
 
 /// The running process's TWAIN bitness (`32` or `64`).
 pub(super) const fn host_bits() -> u8 {
@@ -36,8 +43,8 @@ pub(super) fn id_for_bits(bits: u8, product_name: &str) -> DeviceId {
 /// Refused with [`ScanError::BadId`]:
 /// - any `Driver` other than `Driver::Twain { bits }` matching `bits`;
 /// - an id lacking the matching `twain32:` or `twain64:` prefix;
-/// - an empty `ProductName`, one containing a `NUL` byte, or one longer than 32 bytes
-///   (`TW_STR32`'s capacity before its terminating `NUL`).
+/// - an empty `ProductName`, one containing a `NUL` byte, or one past
+///   `MAX_TW_STR32_RAW_BYTES` (`32`) `TW_STR32` bytes.
 pub(super) fn product_name_for_bits(bits: u8, stored: &DeviceInfo) -> Result<&str, ScanError> {
     let prefix = prefix_for(bits).ok_or(ScanError::BadId)?;
     if stored.driver != (Driver::Twain { bits }) {
@@ -55,14 +62,23 @@ pub(super) fn product_name(stored: &DeviceInfo) -> Result<&str, ScanError> {
     product_name_for_bits(host_bits(), stored)
 }
 
-/// Whether `name` fits a valid non-empty `TW_STR32` product name (`1..=32` bytes, no `NUL`).
+/// Whether `name` fits a valid non-empty `TW_STR32` product name (`1..=32` `TW_STR32` bytes after
+/// accounting for `String::from_utf8_lossy` `U+FFFD` replacement, with no `NUL`).
 pub(super) fn valid_product_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= MAX_PRODUCT_NAME_BYTES && !name.as_bytes().contains(&0)
+    if name.is_empty() || name.as_bytes().contains(&0) {
+        return false;
+    }
+    let min_raw_bytes: usize = name
+        .chars()
+        .map(|c| if c == '\u{FFFD}' { 1 } else { c.len_utf8() })
+        .sum();
+    min_raw_bytes <= MAX_TW_STR32_RAW_BYTES
 }
 
 /// Builds a [`DeviceInfo`] from a listed TWAIN source's three identity strings for `bits`, or
-/// `None` if the source reported an unusable `ProductName` (empty, `NUL`-containing, or past 32
-/// bytes), so `list` never returns a device `open` would refuse as [`ScanError::BadId`].
+/// `None` if the source reported an unusable `ProductName` (empty, `NUL`-containing, or past
+/// `MAX_TW_STR32_RAW_BYTES`), so `list` never returns a device `open` would refuse as
+/// [`ScanError::BadId`].
 pub(super) fn device_info_for_bits(
     bits: u8,
     product_name: String,
@@ -183,19 +199,45 @@ mod tests {
     }
 
     #[test]
-    fn boundary_lengths_accept_32_bytes_and_refuse_empty_or_33_bytes() {
-        let exact_32 = "12345678901234567890123456789012";
-        assert_eq!(exact_32.len(), 32);
-        let at_cap = stored(64, &format!("twain64:{exact_32}"), "Maker", "Family");
-        assert_eq!(product_name_for_bits(64, &at_cap), Ok(exact_32));
+    fn boundary_lengths_accept_utf8_lossy_tw_str32_and_refuse_empty_or_past_cap() {
+        // 32 ASCII bytes is accepted; 33 ASCII bytes is `BadId`.
+        let ascii_32 = "12345678901234567890123456789012";
+        assert_eq!(ascii_32.len(), MAX_TW_STR32_RAW_BYTES);
+        let at_ascii_cap = stored(64, &format!("twain64:{ascii_32}"), "Maker", "Family");
+        assert_eq!(product_name_for_bits(64, &at_ascii_cap), Ok(ascii_32));
 
-        let too_long = "123456789012345678901234567890123";
-        assert_eq!(too_long.len(), 33);
+        let ascii_33 = "123456789012345678901234567890123";
+        assert_eq!(ascii_33.len(), MAX_TW_STR32_RAW_BYTES + 1);
+        let past_ascii_cap = stored(64, &format!("twain64:{ascii_33}"), "Maker", "Family");
+        assert_eq!(
+            product_name_for_bits(64, &past_ascii_cap),
+            Err(ScanError::BadId)
+        );
+        assert!(
+            device_info_for_bits(64, ascii_33.to_owned(), String::new(), String::new()).is_none()
+        );
+
+        // A 31-byte CP1252 `TW_STR32` with two high bytes (`®` -> `U+FFFD`, 3 UTF-8 bytes each)
+        // expands to 35 UTF-8 bytes while representing 31 raw `TW_STR32` bytes (`<= 32`), and must
+        // be accepted so real scanners with trademark/localized bytes list and open cleanly.
+        let with_two = "Canon DR-C225 II\u{FFFD}\u{FFFD} TWAIN Driver";
+        assert_eq!(with_two.len(), 35);
+        assert!(
+            device_info_for_bits(64, with_two.to_owned(), "CANON".into(), "DR".into()).is_some()
+        );
+
+        let exact_lossy_cap = "\u{FFFD}".repeat(MAX_TW_STR32_RAW_BYTES);
+        assert_eq!(exact_lossy_cap.len(), MAX_TW_STR32_RAW_BYTES * 3);
+        let at_cap = stored(64, &format!("twain64:{exact_lossy_cap}"), "Maker", "Family");
+        assert_eq!(
+            product_name_for_bits(64, &at_cap),
+            Ok(exact_lossy_cap.as_str())
+        );
+
+        let too_long = format!("{exact_lossy_cap}x");
         let past_cap = stored(64, &format!("twain64:{too_long}"), "Maker", "Family");
         assert_eq!(product_name_for_bits(64, &past_cap), Err(ScanError::BadId));
-        assert!(
-            device_info_for_bits(64, too_long.to_owned(), String::new(), String::new()).is_none()
-        );
+        assert!(device_info_for_bits(64, too_long, String::new(), String::new()).is_none());
 
         let empty = stored(64, "twain64:", "Maker", "Family");
         assert_eq!(product_name_for_bits(64, &empty), Err(ScanError::BadId));

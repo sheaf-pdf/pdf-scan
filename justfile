@@ -243,10 +243,12 @@ scan-device-clippy target:
     cargo clippy --locked -p scan-device --all-targets --all-features --target {{ target }} -- -D warnings
 
 # scan-worker's 32-bit unit tests, Windows Job Object / StopHandle /
-# WindowGuard tests, and dual-bitness (64-bit + i686) TWAIN worker tests.
+# WindowGuard tests (64-bit and 32-bit), and dual-bitness (64-bit + i686)
+# TWAIN worker tests.
 # scan-worker's 32-bit unit tests and Windows TWAIN worker tests.
 scan-worker-twain-test:
     cargo test --locked -p scan-worker --lib --target i686-pc-windows-msvc
+    cargo test --locked -p scan-worker --test stop_handle --target i686-pc-windows-msvc
     cargo test --locked -p scan-worker --test stop_handle --test twain_worker
 
 # scan-worker's lints for `target` with every feature and target built.

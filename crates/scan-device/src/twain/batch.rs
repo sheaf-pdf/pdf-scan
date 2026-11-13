@@ -1,7 +1,7 @@
 //! Running a TWAIN batch scan: negotiating settings, pre-checking feeder state, pumping state 5
 //! with 100 ms cancellation checks and concurrent `Remote` request servicing, transferring pages
-//! via `TWSX_MEMORY` or `TWSX_NATIVE`, reading `TWEI_PAGESIDE`, and stepping cleanly back to
-//! state 4 on completion, cancellation, or error.
+//! via `TWSX_MEMORY` or `TWSX_NATIVE`, tracking duplex sheets via [`SheetTracker`], and stepping
+//! cleanly back to state 4 on completion, cancellation, or error.
 
 #[cfg(windows)]
 use std::sync::mpsc::SyncSender;
@@ -15,20 +15,109 @@ use twain_dsm::{ExtInfo, ExtValue, Fix32, ffi};
 #[cfg(windows)]
 use super::caps::LiveSource;
 use super::caps::Units;
-#[cfg(windows)]
 use super::error;
 #[cfg(windows)]
 use super::pixels::{self, ImageDesc};
 #[cfg(windows)]
 use super::settings::{self, Taken, TransferMech};
 #[cfg(windows)]
-use crate::{Done, Event, Pixels, RawImage, RawPage, ScanError, Settings, Source};
-use crate::{Side, SideKnown};
+use crate::{Done, Event, Format, Paper, Pixels, RawImage, RawPage, Settings, Source};
+use crate::{ScanError, Side, SideKnown};
 
 /// Polling interval while waiting in state 5 (`MSG_ENABLEDS` -> `MSG_XFERREADY`) so sheet
 /// cancellation is noticed promptly even if a source stalls before producing its first page.
 #[cfg(windows)]
 const STATE5_POLL: Duration = Duration::from_millis(100);
+
+/// Pure state machine assigning sheet numbers and enforcing protocol ordering (`Event::Sheet`
+/// before its `Event::Page`s, and never two identical `Side`s on the same `sheet`) across simplex
+/// and duplex batches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SheetTracker {
+    first_sheet: u32,
+    duplex: bool,
+    completed_sheets: u64,
+    open_sheet: Option<(u32, Side)>,
+}
+
+impl SheetTracker {
+    /// Creates a tracker starting at `first_sheet`.
+    pub(super) fn new(first_sheet: u32, duplex: bool) -> Self {
+        SheetTracker {
+            first_sheet,
+            duplex,
+            completed_sheets: 0,
+            open_sheet: None,
+        }
+    }
+
+    /// True when at least one sheet has finished and no duplex sheet is half-open — the exact
+    /// boundary where sheet-granular cancellation may stop a feeder batch.
+    pub(super) fn is_between_sheets(&self) -> bool {
+        self.open_sheet.is_none() && self.completed_sheets > 0
+    }
+
+    /// Default `Side` when `DAT_EXTIMAGEINFO` (`TWEI_PAGESIDE`) is absent or inconclusive:
+    /// `Side::Front` when opening a sheet, and the opposite of the first side when closing an open
+    /// duplex sheet (so back-first duplex scanners still pair cleanly).
+    pub(super) fn inferred_side(&self) -> Side {
+        match self.open_sheet {
+            Some((_, Side::Front)) => Side::Back,
+            Some((_, Side::Back)) => Side::Front,
+            None => Side::Front,
+        }
+    }
+
+    /// Validates before starting a new sheet (`open_sheet.is_none()`) that its sheet number fits in
+    /// `u32`, so an overflowing sheet stays in the feeder untransferred.
+    pub(super) fn ensure_can_start_page(&self) -> Result<(), ScanError> {
+        if self.open_sheet.is_none() {
+            let _ = self.sheet_at(self.completed_sheets)?;
+        }
+        Ok(())
+    }
+
+    /// Records a transferred page of `side`, returning `(emit_sheet, page_sheet)` where
+    /// `emit_sheet` is `Some(s)` iff `Event::Sheet(s)` must be emitted before `Event::Page`.
+    pub(super) fn accept_page(&mut self, side: Side) -> Result<(Option<u32>, u32), ScanError> {
+        if !self.duplex {
+            let sheet = self.sheet_at(self.completed_sheets)?;
+            self.completed_sheets += 1;
+            return Ok((Some(sheet), sheet));
+        }
+        match self.open_sheet {
+            None => {
+                let sheet = self.sheet_at(self.completed_sheets)?;
+                self.open_sheet = Some((sheet, side));
+                Ok((Some(sheet), sheet))
+            }
+            Some((sheet, first_side)) if side != first_side => {
+                self.open_sheet = None;
+                self.completed_sheets += 1;
+                Ok((None, sheet))
+            }
+            Some((_, _)) => {
+                // Hardware blank-page skip dropped the previous sheet's second side (or a driver
+                // reported the same `TWEI_PAGESIDE` twice in a row): close the previous sheet as
+                // single-sided and open the next sheet for this page so `Order::take` never sees a
+                // duplicate `(sheet, side)` and subsequent duplex pairs stay aligned.
+                self.completed_sheets += 1;
+                let next_sheet = self.sheet_at(self.completed_sheets)?;
+                self.open_sheet = Some((next_sheet, side));
+                Ok((Some(next_sheet), next_sheet))
+            }
+        }
+    }
+
+    fn sheet_at(&self, offset: u64) -> Result<u32, ScanError> {
+        u32::try_from(u64::from(self.first_sheet).saturating_add(offset)).map_err(|_| {
+            error::driver_msg(format!(
+                "no sheet is numbered past {}: the sheet after it stays in the feeder",
+                u32::MAX
+            ))
+        })
+    }
+}
 
 /// Returns a `len`-byte mutable subslice of `storage` whose start address is 4-byte aligned, as
 /// `DAT_IMAGEMEMXFER` (`MemoryTransfer::next_buffer`) requires.
@@ -82,7 +171,7 @@ pub(super) fn page_side_from_ext(ext: Option<&[ExtInfo]>, inferred: Side) -> (Si
         }
         if let ExtValue::Items(ref values) = info.value
             && let Some(first) = values.as_slice().first()
-            && let Some(raw) = first.as_i64()
+            && let Some(raw) = super::caps::item_as_int(first)
         {
             match u16::try_from(raw) {
                 Ok(ffi::TWCS_TOP) => return (Side::Front, SideKnown::Reported),
@@ -112,6 +201,7 @@ pub(super) fn scan<'t, T>(
         Err(err) => return (Some(source), Err(err)),
     };
     let applied_settings = taken.applied.settings.clone();
+    let source_kind = applied_settings.source;
     if events.send(Event::Applied(taken.applied.clone())).is_err() {
         return (Some(source), Ok(Done::Cancelled));
     }
@@ -122,7 +212,7 @@ pub(super) fn scan<'t, T>(
         return (Some(source), Ok(Done::Cancelled));
     }
 
-    if applied_settings.source == Source::Feeder {
+    if source_kind == Source::Feeder {
         let detectable =
             match settings::read_bool_cap(&mut LiveSource(&source), ffi::CAP_PAPERDETECTABLE) {
                 Ok(v) => v,
@@ -144,14 +234,14 @@ pub(super) fn scan<'t, T>(
         Ok(enabled) => enabled,
         Err(refused) => {
             let (source, err) = refused.into_parts();
-            return (
-                Some(source),
-                Err(error::map_enable(applied_settings.source, &err)),
-            );
+            return (Some(source), Err(error::map_enable(source_kind, &err)));
         }
     };
 
     let mut ready = loop {
+        if progress.check().is_err() {
+            return finish_with_enabled(enabled, Ok(Done::Cancelled));
+        }
         match enabled.next_event(STATE5_POLL) {
             Ok(twain_dsm::Next::Ready(ready)) => break ready,
             Ok(twain_dsm::Next::Request(back, req)) => {
@@ -159,16 +249,13 @@ pub(super) fn scan<'t, T>(
                 enabled = back;
             }
             Ok(twain_dsm::Next::Timeout(back)) => {
-                if progress.check().is_err() {
-                    return finish_with_enabled(back, Ok(Done::Cancelled));
-                }
                 enabled = back;
             }
             Ok(twain_dsm::Next::Quit(back, _)) => {
                 return finish_with_enabled(back, Ok(Done::Cancelled));
             }
             Ok(twain_dsm::Next::Event(back, twain_dsm::Event::CloseRequest)) => {
-                return resolve_close_request(back, applied_settings.source, 0, 0, progress);
+                return resolve_close_request(Some(back), None, source_kind, 0, 0, progress);
             }
             Ok(twain_dsm::Next::Event(back, twain_dsm::Event::CloseOk)) => {
                 return finish_with_enabled(back, Ok(Done::Cancelled));
@@ -183,99 +270,94 @@ pub(super) fn scan<'t, T>(
         }
     };
 
-    let sides: &[Side] = if applied_settings.duplex {
-        &[Side::Front, Side::Back]
-    } else {
-        &[Side::Front]
-    };
-
-    let mut sheets: u64 = 0;
+    let mut tracker = SheetTracker::new(first_sheet, applied_settings.duplex);
     let mut pages_sent: u32 = 0;
     let mut last_bytes: u64 = 0;
 
     loop {
-        // Sheet-granular cancellation: sheet 0 was checked before `enable` and while waiting for
-        // `MSG_XFERREADY`, so once sheet 0 enters `Ready` it finishes in flight; subsequent sheets
-        // check `progress` before their front side is transferred.
-        if sheets > 0 && progress.check().is_err() {
-            let _ = ready.stop_feeder();
+        while let Some(req) = ready.take_request() {
+            on_request(ready.opened(), req);
+        }
+
+        // Sheet-granular cancellation: sheet 0 was checked before `enable` and while waiting in
+        // state 5, so once sheet 0 enters `Ready` it finishes in flight (including its back side
+        // on duplex); subsequent sheets check `progress` between sheets.
+        if tracker.is_between_sheets() && progress.check().is_err() {
+            if source_kind == Source::Feeder {
+                let _ = ready.stop_feeder();
+            }
             return finish_with_ready(ready, Ok(Done::Cancelled));
         }
 
-        let Ok(sheet) = u32::try_from(u64::from(first_sheet) + sheets) else {
-            let _ = ready.stop_feeder();
-            return finish_with_ready(
-                ready,
-                Err(error::driver_msg(format!(
-                    "no sheet is numbered past {}: the sheet after it stays in the feeder",
-                    u32::MAX
-                ))),
-            );
-        };
-
-        for (side_idx, &inferred_side) in sides.iter().enumerate() {
-            match transfer_one_page(ready, &taken, inferred_side, progress) {
-                TransferOutcome::Page {
-                    raw,
-                    dpi,
-                    side,
-                    side_known,
-                    bytes_read,
-                    pending,
-                } => {
-                    last_bytes = bytes_read;
-                    pages_sent = pages_sent.saturating_add(1);
-                    let page = RawPage::new(Pixels::Raw(raw), dpi, sheet, side, side_known);
-                    if side_idx == 0 && events.send(Event::Sheet(sheet)).is_err() {
-                        return finish_with_pending(pending, Ok(Done::Cancelled));
-                    }
-                    if events.send(Event::Page(page)).is_err() {
-                        return finish_with_pending(pending, Ok(Done::Cancelled));
-                    }
-                    if applied_settings.source == Source::Flatbed {
-                        return finish_with_pending(pending, Ok(Done::OnePage));
-                    }
-                    match pending {
-                        twain_dsm::Pending::More(next_ready, _) => {
-                            ready = next_ready;
-                        }
-                        twain_dsm::Pending::Done(back) => {
-                            return finish_with_enabled(back, Ok(Done::FeederEmpty));
-                        }
-                    }
-                }
-                TransferOutcome::Cancelled(src) => {
-                    return (src, Ok(Done::Cancelled));
-                }
-                TransferOutcome::CloseRequested(Some(back)) => {
-                    return resolve_close_request(
-                        back,
-                        applied_settings.source,
-                        pages_sent,
-                        last_bytes,
-                        progress,
-                    );
-                }
-                TransferOutcome::CloseRequested(None) => {
-                    let outcome = error::unexpected_close_request(
-                        applied_settings.source,
-                        pages_sent,
-                        None,
-                        None,
-                    );
-                    if outcome == Ok(Done::FeederEmpty) && pages_sent > 0 {
-                        progress.set_total(Some(last_bytes), Unit::Bytes);
-                        progress.set(last_bytes);
-                    }
-                    return (None, outcome);
-                }
-                TransferOutcome::Failed(src, err) => {
-                    return (src, Err(err));
-                }
+        if let Err(err) = tracker.ensure_can_start_page() {
+            if source_kind == Source::Feeder {
+                let _ = ready.stop_feeder();
             }
+            return finish_with_ready(ready, Err(err));
         }
 
-        sheets += 1;
+        let inferred_side = tracker.inferred_side();
+        match transfer_one_page(ready, &taken, inferred_side, pages_sent, progress) {
+            TransferOutcome::Page {
+                raw,
+                dpi,
+                side,
+                side_known,
+                bytes_read,
+                pending,
+            } => {
+                let (emit_sheet, page_sheet) = match tracker.accept_page(side) {
+                    Ok(pair) => pair,
+                    Err(err) => return finish_with_pending(pending, source_kind, Err(err)),
+                };
+                last_bytes = bytes_read;
+                pages_sent = pages_sent.saturating_add(1);
+                let page = RawPage::new(Pixels::Raw(raw), dpi, page_sheet, side, side_known);
+                if let Some(sheet) = emit_sheet
+                    && events.send(Event::Sheet(sheet)).is_err()
+                {
+                    return finish_with_pending(pending, source_kind, Ok(Done::Cancelled));
+                }
+                if events.send(Event::Page(page)).is_err() {
+                    return finish_with_pending(pending, source_kind, Ok(Done::Cancelled));
+                }
+                if source_kind == Source::Flatbed {
+                    return finish_with_pending(pending, source_kind, Ok(Done::OnePage));
+                }
+                match pending {
+                    twain_dsm::Pending::More(next_ready, _) => {
+                        ready = next_ready;
+                    }
+                    twain_dsm::Pending::Done(back) => {
+                        return finish_with_enabled(back, Ok(Done::FeederEmpty));
+                    }
+                }
+            }
+            TransferOutcome::FeederEmpty(src) => {
+                if pages_sent > 0 {
+                    progress.set_total(Some(last_bytes), Unit::Bytes);
+                    progress.set(last_bytes);
+                    return (src, Ok(Done::FeederEmpty));
+                }
+                return (src, Err(ScanError::FeederEmpty));
+            }
+            TransferOutcome::Cancelled(src) => {
+                return (src, Ok(Done::Cancelled));
+            }
+            TransferOutcome::CloseRequested(back, pre_status) => {
+                return resolve_close_request(
+                    back,
+                    pre_status,
+                    source_kind,
+                    pages_sent,
+                    last_bytes,
+                    progress,
+                );
+            }
+            TransferOutcome::Failed(src, err) => {
+                return (src, Err(err));
+            }
+        }
     }
 }
 
@@ -289,9 +371,53 @@ enum TransferOutcome<'t, T> {
         bytes_read: u64,
         pending: twain_dsm::Pending<'t, T>,
     },
+    FeederEmpty(Option<twain_dsm::Source<'t, T>>),
     Cancelled(Option<twain_dsm::Source<'t, T>>),
-    CloseRequested(Option<twain_dsm::Enabled<'t, T>>),
+    CloseRequested(
+        Option<twain_dsm::Enabled<'t, T>>,
+        Option<twain_dsm::ConditionCode>,
+    ),
     Failed(Option<twain_dsm::Source<'t, T>>, ScanError),
+}
+
+/// Synthesizes an undefined-dimensions (`-1 × -1`) [`ImageDesc`] from `format` for drivers under
+/// `TWSX_MEMORY` + `ICAP_UNDEFINEDIMAGESIZE` that defer `DAT_IMAGEINFO` until state 7.
+#[cfg(windows)]
+fn undefined_desc_for_format(format: Format) -> ImageDesc {
+    let (pixel_type, samples_per_pixel, bits_per_sample, bits_per_pixel) = match format {
+        Format::Bw1 => (ffi::TWPT_BW as i16, 1, 1, 1),
+        Format::Gray8 => (ffi::TWPT_GRAY as i16, 1, 8, 8),
+        Format::Gray16 => (ffi::TWPT_GRAY as i16, 1, 16, 16),
+        Format::Rgb8 => (ffi::TWPT_RGB as i16, 3, 8, 24),
+        Format::Rgb16 => (ffi::TWPT_RGB as i16, 3, 16, 48),
+    };
+    ImageDesc {
+        width: -1,
+        length: -1,
+        samples_per_pixel,
+        bits_per_sample,
+        bits_per_pixel,
+        planar: false,
+        pixel_type,
+        compression: ffi::TWCP_NONE,
+    }
+}
+
+/// Checks whether `err` failed specifically with `TWCC_NOMEDIA` on `Source::Feeder`.
+#[cfg(windows)]
+fn is_feeder_nomedia(source_kind: Source, err: &twain_dsm::Error) -> bool {
+    source_kind == Source::Feeder
+        && matches!(
+            err,
+            twain_dsm::Error::Failed {
+                by_source: Some(twain_dsm::ConditionCode::NOMEDIA),
+                ..
+            } | twain_dsm::Error::Failed {
+                by_source: None,
+                by_dsm: Some(twain_dsm::ConditionCode::NOMEDIA),
+                ..
+            }
+        )
 }
 
 /// Transfers one page in state 6 via `taken.transfer` (`Memory` or `Native`), reporting byte
@@ -301,29 +427,54 @@ fn transfer_one_page<'t, T>(
     ready: twain_dsm::Ready<'t, T>,
     taken: &Taken,
     inferred_side: Side,
+    pages_sent: u32,
     progress: &dyn Progress,
 ) -> TransferOutcome<'t, T> {
+    let source_kind = taken.applied.settings.source;
     progress.set_total(None, Unit::Bytes);
     progress.set(0);
 
-    let info = match ready.image_info() {
-        Ok(info) => info,
+    let (desc, page_dpi) = match ready.image_info() {
+        Ok(info) => (
+            ImageDesc::from(info),
+            dpi_from_image_res(info.x_resolution, info.y_resolution, taken.units, taken.dpi),
+        ),
         Err(twain_dsm::Error::CloseRequested) => {
-            return TransferOutcome::CloseRequested(ready.reset().ok());
+            let status = ready.status();
+            return TransferOutcome::CloseRequested(ready.reset().ok(), status);
         }
         Err(err) => {
+            if is_feeder_nomedia(source_kind, &err) {
+                return TransferOutcome::FeederEmpty(step_down_ready(ready).ok());
+            }
             let mapped = error::map(&err);
-            return TransferOutcome::Failed(step_down_ready(ready).ok(), mapped);
+            if taken.transfer == TransferMech::Memory
+                && taken.applied.settings.paper == Paper::Auto
+                && !error::is_fatal_scan_error(&mapped)
+            {
+                (
+                    undefined_desc_for_format(taken.applied.settings.format),
+                    taken.dpi,
+                )
+            } else {
+                return TransferOutcome::Failed(step_down_ready(ready).ok(), mapped);
+            }
         }
     };
-    let desc = ImageDesc::from(info);
-    let page_dpi = dpi_from_image_res(info.x_resolution, info.y_resolution, taken.units, taken.dpi);
 
     match taken.transfer {
-        TransferMech::Memory => {
-            transfer_memory(ready, &desc, page_dpi, taken, inferred_side, progress)
+        TransferMech::Memory => transfer_memory(
+            ready,
+            &desc,
+            page_dpi,
+            taken,
+            inferred_side,
+            pages_sent,
+            progress,
+        ),
+        TransferMech::Native => {
+            transfer_native(ready, source_kind, page_dpi, inferred_side, progress)
         }
-        TransferMech::Native => transfer_native(ready, page_dpi, inferred_side, progress),
     }
 }
 
@@ -334,8 +485,10 @@ fn transfer_memory<'t, T>(
     page_dpi: (f32, f32),
     taken: &Taken,
     inferred_side: Side,
+    pages_sent: u32,
     progress: &dyn Progress,
 ) -> TransferOutcome<'t, T> {
+    let source_kind = taken.applied.settings.source;
     let mut assembler = match pixels::Assembler::new(desc) {
         Ok(asm) => asm,
         Err(err) => return TransferOutcome::Failed(step_down_ready(ready).ok(), err),
@@ -346,7 +499,11 @@ fn transfer_memory<'t, T>(
         Err(refused) => {
             let (ready, err) = refused.into_parts();
             if matches!(err, twain_dsm::Error::CloseRequested) {
-                return TransferOutcome::CloseRequested(ready.reset().ok());
+                let status = ready.status();
+                return TransferOutcome::CloseRequested(ready.reset().ok(), status);
+            }
+            if is_feeder_nomedia(source_kind, &err) {
+                return TransferOutcome::FeederEmpty(step_down_ready(ready).ok());
             }
             let mapped = error::map(&err);
             return TransferOutcome::Failed(step_down_ready(ready).ok(), mapped);
@@ -354,7 +511,18 @@ fn transfer_memory<'t, T>(
     };
 
     let preferred = transfer.preferred_size();
-    let mut storage = vec![0u8; preferred + 4];
+    let alloc_len = preferred.saturating_add(4);
+    let mut storage = Vec::new();
+    if storage.try_reserve_exact(alloc_len).is_err() {
+        let src = abort_memory_transfer(transfer, source_kind);
+        return TransferOutcome::Failed(
+            src,
+            error::driver_msg(format!(
+                "couldn't allocate a {alloc_len}-byte memory transfer buffer"
+            )),
+        );
+    }
+    storage.resize(alloc_len, 0);
     let buf = aligned_slice(&mut storage, preferred);
 
     let mut total: Option<u64> = None;
@@ -382,35 +550,58 @@ fn transfer_memory<'t, T>(
                 progress.set(bytes_read);
 
                 if let Err(err) = assembler.place(strip.into()) {
-                    let src = abort_memory_transfer(transfer);
+                    let src = abort_memory_transfer(transfer, source_kind);
                     return TransferOutcome::Failed(src, err);
                 }
             }
             Ok(None) => break,
             Err(twain_dsm::Error::CloseRequested) => {
-                return TransferOutcome::CloseRequested(memory_to_enabled(transfer));
+                let status = transfer.status();
+                return TransferOutcome::CloseRequested(transfer.reset().ok(), status);
             }
             Err(err) => {
+                if bytes_read == 0 && is_feeder_nomedia(source_kind, &err) {
+                    let src = abort_memory_transfer(transfer, source_kind);
+                    return TransferOutcome::FeederEmpty(src);
+                }
+                if pages_sent == 0 && is_feeder_nomedia(source_kind, &err) {
+                    let src = abort_memory_transfer(transfer, source_kind);
+                    return TransferOutcome::Failed(src, ScanError::FeederEmpty);
+                }
                 let mapped = error::map(&err);
-                let src = abort_memory_transfer(transfer);
+                let src = abort_memory_transfer(transfer, source_kind);
                 return TransferOutcome::Failed(src, mapped);
             }
         }
     }
 
     if transfer.cancelled() {
-        let src = abort_memory_transfer(transfer);
+        let src = abort_memory_transfer(transfer, source_kind);
         return TransferOutcome::Cancelled(src);
     }
 
-    let state7_dims = transfer.image_info().ok().map(|i| (i.width, i.length));
-    let ext = transfer.ext_image_info(&[ffi::TWEI_PAGESIDE]).ok();
+    let state7_dims = match transfer.image_info() {
+        Ok(i) => Some((i.width, i.length)),
+        Err(twain_dsm::Error::CloseRequested) => {
+            let status = transfer.status();
+            return TransferOutcome::CloseRequested(transfer.reset().ok(), status);
+        }
+        Err(_) => None,
+    };
+    let ext = match transfer.ext_image_info(&[ffi::TWEI_PAGESIDE]) {
+        Ok(items) => Some(items),
+        Err(twain_dsm::Error::CloseRequested) => {
+            let status = transfer.status();
+            return TransferOutcome::CloseRequested(transfer.reset().ok(), status);
+        }
+        Err(_) => None,
+    };
     let (side, side_known) = page_side_from_ext(ext.as_deref(), inferred_side);
 
     let raw = match assembler.finish(taken.polarity, state7_dims) {
         Ok(raw) => raw,
         Err(err) => {
-            let src = abort_memory_transfer(transfer);
+            let src = abort_memory_transfer(transfer, source_kind);
             return TransferOutcome::Failed(src, err);
         }
     };
@@ -431,11 +622,12 @@ fn transfer_memory<'t, T>(
         },
         Err(refused) => {
             let (transfer, err) = refused.into_parts();
-            drop(transfer);
             if matches!(err, twain_dsm::Error::CloseRequested) {
-                TransferOutcome::CloseRequested(None)
+                let status = transfer.status();
+                TransferOutcome::CloseRequested(transfer.reset().ok(), status)
             } else {
-                TransferOutcome::Failed(None, error::map(&err))
+                let src = abort_memory_transfer(transfer, source_kind);
+                TransferOutcome::Failed(src, error::map(&err))
             }
         }
     }
@@ -444,6 +636,7 @@ fn transfer_memory<'t, T>(
 #[cfg(windows)]
 fn transfer_native<'t, T>(
     ready: twain_dsm::Ready<'t, T>,
+    source_kind: Source,
     page_dpi: (f32, f32),
     inferred_side: Side,
     progress: &dyn Progress,
@@ -451,16 +644,17 @@ fn transfer_native<'t, T>(
     let (dib, transferred) = match ready.native() {
         Ok(twain_dsm::Native::Done(dib, transferred)) => (dib, transferred),
         Ok(twain_dsm::Native::Cancelled(transferred)) => {
-            let src = transferred
-                .end()
-                .ok()
-                .and_then(|p| step_down_pending(p).ok());
+            let src = abort_native_transfer(transferred, source_kind);
             return TransferOutcome::Cancelled(src);
         }
         Err(refused) => {
             let (ready, err) = refused.into_parts();
             if matches!(err, twain_dsm::Error::CloseRequested) {
-                return TransferOutcome::CloseRequested(ready.reset().ok());
+                let status = ready.status();
+                return TransferOutcome::CloseRequested(ready.reset().ok(), status);
+            }
+            if is_feeder_nomedia(source_kind, &err) {
+                return TransferOutcome::FeederEmpty(step_down_ready(ready).ok());
             }
             let mapped = error::map(&err);
             return TransferOutcome::Failed(step_down_ready(ready).ok(), mapped);
@@ -477,15 +671,19 @@ fn transfer_native<'t, T>(
     let raw = match decoded {
         Ok(raw) => raw,
         Err(err) => {
-            let src = transferred
-                .end()
-                .ok()
-                .and_then(|p| step_down_pending(p).ok());
+            let src = abort_native_transfer(transferred, source_kind);
             return TransferOutcome::Failed(src, err);
         }
     };
 
-    let ext = transferred.ext_image_info(&[ffi::TWEI_PAGESIDE]).ok();
+    let ext = match transferred.ext_image_info(&[ffi::TWEI_PAGESIDE]) {
+        Ok(items) => Some(items),
+        Err(twain_dsm::Error::CloseRequested) => {
+            let status = transferred.status();
+            return TransferOutcome::CloseRequested(transferred.reset().ok(), status);
+        }
+        Err(_) => None,
+    };
     let (side, side_known) = page_side_from_ext(ext.as_deref(), inferred_side);
 
     match transferred.end() {
@@ -499,11 +697,12 @@ fn transfer_native<'t, T>(
         },
         Err(refused) => {
             let (transferred, err) = refused.into_parts();
-            drop(transferred);
             if matches!(err, twain_dsm::Error::CloseRequested) {
-                TransferOutcome::CloseRequested(None)
+                let status = transferred.status();
+                TransferOutcome::CloseRequested(transferred.reset().ok(), status)
             } else {
-                TransferOutcome::Failed(None, error::map(&err))
+                let src = abort_native_transfer(transferred, source_kind);
+                TransferOutcome::Failed(src, error::map(&err))
             }
         }
     }
@@ -511,19 +710,35 @@ fn transfer_native<'t, T>(
 
 #[cfg(windows)]
 fn resolve_close_request<'t, T>(
-    enabled: twain_dsm::Enabled<'t, T>,
+    enabled: Option<twain_dsm::Enabled<'t, T>>,
+    pre_status: Option<twain_dsm::ConditionCode>,
     source_kind: Source,
     pages_sent: u32,
     last_bytes: u64,
     progress: &dyn Progress,
 ) -> (Option<twain_dsm::Source<'t, T>>, Result<Done, ScanError>) {
+    let Some(enabled) = enabled else {
+        let outcome = error::unexpected_close_request(source_kind, pages_sent, pre_status, None);
+        if outcome == Ok(Done::FeederEmpty) && pages_sent > 0 {
+            progress.set_total(Some(last_bytes), Unit::Bytes);
+            progress.set(last_bytes);
+        }
+        return (None, outcome);
+    };
+
     if enabled.forced_ui() {
         return finish_with_enabled(enabled, Ok(Done::Cancelled));
     }
-    let status = enabled.status();
+    let status = pre_status.or_else(|| enabled.status());
     let src = match enabled.disable() {
         Ok(src) => src,
         Err(refused) => {
+            if let Err(specific) =
+                error::unexpected_close_request(source_kind, pages_sent, status, None)
+                && !matches!(specific, ScanError::Driver { shown: false, .. })
+            {
+                return (None, Err(specific));
+            }
             let err = refused.into_error();
             return (None, Err(error::map(&err)));
         }
@@ -550,13 +765,9 @@ fn finish_with_enabled<'t, T>(
 ) -> (Option<twain_dsm::Source<'t, T>>, Result<Done, ScanError>) {
     match enabled.disable() {
         Ok(src) => (Some(src), outcome),
-        Err(refused) => {
-            let err = refused.into_error();
-            match outcome {
-                Ok(_) => (None, Err(error::map(&err))),
-                Err(primary) => (None, Err(primary)),
-            }
-        }
+        // Preserve `outcome` (all delivered pages remain valid; `None` marks the device for
+        // close + reopen before its next operation).
+        Err(_) => (None, outcome),
     }
 }
 
@@ -567,24 +778,19 @@ fn finish_with_ready<'t, T>(
 ) -> (Option<twain_dsm::Source<'t, T>>, Result<Done, ScanError>) {
     match step_down_ready(ready) {
         Ok(src) => (Some(src), outcome),
-        Err(step_err) => match outcome {
-            Ok(_) => (None, Err(step_err)),
-            Err(primary) => (None, Err(primary)),
-        },
+        Err(_) => (None, outcome),
     }
 }
 
 #[cfg(windows)]
 fn finish_with_pending<'t, T>(
     pending: twain_dsm::Pending<'t, T>,
+    source_kind: Source,
     outcome: Result<Done, ScanError>,
 ) -> (Option<twain_dsm::Source<'t, T>>, Result<Done, ScanError>) {
-    match step_down_pending(pending) {
+    match step_down_pending(pending, source_kind) {
         Ok(src) => (Some(src), outcome),
-        Err(step_err) => match outcome {
-            Ok(_) => (None, Err(step_err)),
-            Err(primary) => (None, Err(primary)),
-        },
+        Err(_) => (None, outcome),
     }
 }
 
@@ -599,10 +805,13 @@ fn step_down_ready<'t, T>(
 #[cfg(windows)]
 fn step_down_pending<'t, T>(
     pending: twain_dsm::Pending<'t, T>,
+    source_kind: Source,
 ) -> Result<twain_dsm::Source<'t, T>, ScanError> {
     match pending {
         twain_dsm::Pending::More(mut ready, _) => {
-            let _ = ready.stop_feeder();
+            if source_kind == Source::Feeder {
+                let _ = ready.stop_feeder();
+            }
             step_down_ready(ready)
         }
         twain_dsm::Pending::Done(enabled) => {
@@ -614,17 +823,32 @@ fn step_down_pending<'t, T>(
 #[cfg(windows)]
 fn abort_memory_transfer<'t, T>(
     transfer: twain_dsm::MemoryTransfer<'t, T>,
+    source_kind: Source,
 ) -> Option<twain_dsm::Source<'t, T>> {
-    transfer.end().ok().and_then(|p| step_down_pending(p).ok())
+    match transfer.end() {
+        Ok(p) => step_down_pending(p, source_kind).ok(),
+        Err(refused) => refused
+            .into_parts()
+            .0
+            .reset()
+            .ok()
+            .and_then(|e| e.disable().ok()),
+    }
 }
 
 #[cfg(windows)]
-fn memory_to_enabled<'t, T>(
-    transfer: twain_dsm::MemoryTransfer<'t, T>,
-) -> Option<twain_dsm::Enabled<'t, T>> {
-    match transfer.end().ok()? {
-        twain_dsm::Pending::Done(enabled) => Some(enabled),
-        twain_dsm::Pending::More(ready, _) => ready.reset().ok(),
+fn abort_native_transfer<'t, T>(
+    transferred: twain_dsm::Transferred<'t, T>,
+    source_kind: Source,
+) -> Option<twain_dsm::Source<'t, T>> {
+    match transferred.end() {
+        Ok(p) => step_down_pending(p, source_kind).ok(),
+        Err(refused) => refused
+            .into_parts()
+            .0
+            .reset()
+            .ok()
+            .and_then(|e| e.disable().ok()),
     }
 }
 
@@ -703,5 +927,85 @@ mod tests {
             ),
             (200.0, 400.0)
         );
+    }
+
+    #[test]
+    fn sheet_tracker_pairs_normal_duplex_and_checks_cancellation_only_between_sheets() {
+        let mut t = SheetTracker::new(5, true);
+        assert!(!t.is_between_sheets());
+        assert_eq!(t.inferred_side(), Side::Front);
+        assert_eq!(t.accept_page(Side::Front).unwrap(), (Some(5), 5));
+        // Mid-sheet after side 0: must NOT allow sheet-granular cancellation!
+        assert!(!t.is_between_sheets());
+        assert_eq!(t.inferred_side(), Side::Back);
+
+        assert_eq!(t.accept_page(Side::Back).unwrap(), (None, 5));
+        // Now sheet 5 is complete -> between sheets!
+        assert!(t.is_between_sheets());
+        assert_eq!(t.inferred_side(), Side::Front);
+
+        assert_eq!(t.accept_page(Side::Front).unwrap(), (Some(6), 6));
+        assert!(!t.is_between_sheets());
+        assert_eq!(t.accept_page(Side::Back).unwrap(), (None, 6));
+        assert!(t.is_between_sheets());
+    }
+
+    #[test]
+    fn sheet_tracker_handles_blank_back_skip_stuck_top_and_back_first_duplex() {
+        // 1) Hardware blank-page skip drops sheet 0's back (`Front`, `Front`, `Back`):
+        //    sheet 0 closes as single-sided and sheet 1 pairs `(Front, Back)` without duplicate
+        //    `(sheet, side)` or half-sheet misalignment!
+        let mut skip = SheetTracker::new(0, true);
+        assert_eq!(skip.accept_page(Side::Front).unwrap(), (Some(0), 0));
+        assert_eq!(skip.accept_page(Side::Front).unwrap(), (Some(1), 1));
+        assert!(!skip.is_between_sheets());
+        assert_eq!(skip.accept_page(Side::Back).unwrap(), (None, 1));
+        assert!(skip.is_between_sheets());
+
+        // 2) Driver stuck reporting `TWCS_TOP` (`Side::Front`) on every duplex transfer:
+        //    every transfer opens its own sheet cleanly instead of emitting two `Front`s on one
+        //    sheet.
+        let mut stuck = SheetTracker::new(10, true);
+        assert_eq!(stuck.accept_page(Side::Front).unwrap(), (Some(10), 10));
+        assert_eq!(stuck.accept_page(Side::Front).unwrap(), (Some(11), 11));
+        assert_eq!(stuck.accept_page(Side::Front).unwrap(), (Some(12), 12));
+
+        // 3) Back-first duplex scanner reporting `TWCS_BOTTOM` on side 0 and omitting
+        //    `TWEI_PAGESIDE` on side 1: `inferred_side()` flips to `Side::Front` so both sides
+        //    land on sheet 0!
+        let mut back_first = SheetTracker::new(0, true);
+        let (s0, _) = page_side_from_ext(
+            Some(&[ExtInfo {
+                id: ffi::TWEI_PAGESIDE,
+                value: ExtValue::Items(
+                    Items::new(ItemType::UInt16, vec![Item::UInt16(ffi::TWCS_BOTTOM)]).unwrap(),
+                ),
+            }]),
+            back_first.inferred_side(),
+        );
+        assert_eq!(s0, Side::Back);
+        assert_eq!(back_first.accept_page(s0).unwrap(), (Some(0), 0));
+        assert_eq!(back_first.inferred_side(), Side::Front);
+        let (s1, k1) = page_side_from_ext(None, back_first.inferred_side());
+        assert_eq!((s1, k1), (Side::Front, SideKnown::Inferred));
+        assert_eq!(back_first.accept_page(s1).unwrap(), (None, 0));
+        assert!(back_first.is_between_sheets());
+
+        // 4) `u32::MAX` overflow is caught both before a sheet starts and when a duplicate side
+        //    forces advancing past `u32::MAX`.
+        let mut max_simplex = SheetTracker::new(u32::MAX, false);
+        assert!(max_simplex.ensure_can_start_page().is_ok());
+        assert_eq!(
+            max_simplex.accept_page(Side::Front).unwrap(),
+            (Some(u32::MAX), u32::MAX)
+        );
+        assert!(max_simplex.ensure_can_start_page().is_err());
+
+        let mut max_dup = SheetTracker::new(u32::MAX, true);
+        assert_eq!(
+            max_dup.accept_page(Side::Front).unwrap(),
+            (Some(u32::MAX), u32::MAX)
+        );
+        assert!(max_dup.accept_page(Side::Front).is_err());
     }
 }

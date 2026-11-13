@@ -135,7 +135,7 @@ impl Units {
     }
 
     /// Physical units per inch (`None` for dimensionless `TWUN_PIXELS`).
-    fn per_inch(self) -> Option<f64> {
+    pub(super) fn per_inch(self) -> Option<f64> {
         Some(match self {
             Units::Inches => 1.0,
             Units::Centimeters => 2.54,
@@ -433,7 +433,7 @@ pub(super) fn duplex_supported(source: &mut dyn CapSource) -> Result<bool, ScanE
         if let Some(en) = opt(source.get(ffi::CAP_DUPLEXENABLED))? {
             return match &en {
                 Container::One(item) => {
-                    if item.as_i64() == Some(1) {
+                    if item_as_int(item) == Some(1) {
                         Ok(true)
                     } else if let Some(qc) = opt(source.query_support(ffi::CAP_DUPLEXENABLED))? {
                         Ok(qc & u32::from(ffi::TWQC_SET) != 0)
@@ -579,17 +579,65 @@ pub(super) fn read_resolutions(
     Ok(resolutions_from_container(&container, units))
 }
 
+/// Whether `container` under `TWUN_PIXELS` holds only TWAIN's dimensionless `<= 1.0` sentinel
+/// (as opposed to a source that reports real DPI values under `TWUN_PIXELS`).
+pub(super) fn container_is_dimensionless_pixels(container: &Container, units: Units) -> bool {
+    if units != Units::Pixels {
+        return false;
+    }
+    let positive_finite = |item: &Item| item_as_f64(item).filter(|v| v.is_finite() && *v > 0.0);
+    match container {
+        Container::One(item) => positive_finite(item).is_some_and(|v| v <= 1.0),
+        Container::Enumeration(e) => {
+            let mut any = false;
+            for v in e.items.as_slice().iter().filter_map(positive_finite) {
+                any = true;
+                if v > 1.0 {
+                    return false;
+                }
+            }
+            any
+        }
+        Container::Array(items) => {
+            let mut any = false;
+            for v in items.as_slice().iter().filter_map(positive_finite) {
+                any = true;
+                if v > 1.0 {
+                    return false;
+                }
+            }
+            any
+        }
+        Container::Range(range) => {
+            let (Some(min_raw), Some(max_raw)) =
+                (item_as_f64(range.min()), item_as_f64(range.max()))
+            else {
+                return false;
+            };
+            min_raw.is_finite()
+                && max_raw.is_finite()
+                && max_raw > 0.0
+                && min_raw <= max_raw
+                && max_raw <= 1.0
+        }
+    }
+}
+
 /// Converts a resolution [`Container`] into [`Resolutions`] in whole dots per inch.
 pub(super) fn resolutions_from_container(
     container: &Container,
     units: Units,
 ) -> Option<Resolutions> {
+    if container_is_dimensionless_pixels(container, units) {
+        return Some(Resolutions::List(vec![NO_RESOLUTION_DPI]));
+    }
+    let scale = units.per_inch().unwrap_or(1.0);
     let to_whole_dpi = |item: &Item| -> Option<u32> {
         let raw = item_as_f64(item)?;
         if !raw.is_finite() || raw <= 0.0 {
             return None;
         }
-        let dpi = units.res_to_dpi(raw).round();
+        let dpi = (raw * scale).round();
         if dpi.is_finite() && (1.0..=f64::from(u32::MAX)).contains(&dpi) {
             Some(dpi as u32)
         } else {
@@ -618,8 +666,8 @@ pub(super) fn resolutions_from_container(
             if !min_raw.is_finite() || !max_raw.is_finite() || max_raw <= 0.0 || min_raw > max_raw {
                 return None;
             }
-            let min_dpi = units.res_to_dpi(min_raw.max(0.0)).ceil().max(1.0);
-            let max_dpi = units.res_to_dpi(max_raw).floor();
+            let min_dpi = (min_raw.max(0.0) * scale).ceil().max(1.0);
+            let max_dpi = (max_raw * scale).floor();
             if !min_dpi.is_finite()
                 || !max_dpi.is_finite()
                 || min_dpi > max_dpi
@@ -630,7 +678,7 @@ pub(super) fn resolutions_from_container(
             let min = min_dpi as u32;
             let max = max_dpi.min(f64::from(u32::MAX)) as u32;
             let step_dpi = if step_raw.is_finite() && step_raw > 0.0 {
-                units.res_to_dpi(step_raw).ceil()
+                (step_raw * scale).ceil()
             } else {
                 1.0
             };
@@ -667,19 +715,25 @@ pub(super) fn read_current_dpi(
 /// Physical area bounds in the source's active `ICAP_UNITS`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PhysicalBounds {
+    /// Origin left coordinate (`0` when `ICAP_PHYSICAL*` is used; `frame.left` when derived from
+    /// `DAT_IMAGELAYOUT`).
+    pub left: Fix32,
+    /// Origin top coordinate (`0` when `ICAP_PHYSICAL*` is used; `frame.top` when derived from
+    /// `DAT_IMAGELAYOUT`).
+    pub top: Fix32,
     pub min_width: f64,
     pub min_height: f64,
     pub max_width: f64,
     pub max_height: f64,
-    /// Exact `Fix32` ceiling when `ICAP_PHYSICAL*` or `DAT_IMAGELAYOUT` reported `Fix32`, so
-    /// clamping never overshoots by `1/65536` unit.
-    pub max_width_fix: Option<Fix32>,
-    pub max_height_fix: Option<Fix32>,
+    /// Exact `Fix32` right/bottom ceilings when `ICAP_PHYSICAL*` or `DAT_IMAGELAYOUT` reported
+    /// `Fix32`, so clamping never overshoots by `1/65536` unit.
+    pub max_right_fix: Option<Fix32>,
+    pub max_bottom_fix: Option<Fix32>,
 }
 
 /// Reads the source's physical bounds in active `ICAP_UNITS` from `ICAP_PHYSICALWIDTH` /
-/// `ICAP_PHYSICALHEIGHT` (or `default_image_layout` / `image_layout` fallback) and optional
-/// `ICAP_MINIMUMWIDTH` / `ICAP_MINIMUMHEIGHT`.
+/// `ICAP_PHYSICALHEIGHT` (falling back to `default_image_layout` / `image_layout` when absent or
+/// non-positive) and optional `ICAP_MINIMUMWIDTH` / `ICAP_MINIMUMHEIGHT`.
 pub(super) fn read_physical_bounds(
     source: &mut dyn CapSource,
 ) -> Result<Option<PhysicalBounds>, ScanError> {
@@ -688,32 +742,44 @@ pub(super) fn read_physical_bounds(
     let phys_h = opt(source.get_current(ffi::ICAP_PHYSICALHEIGHT))?
         .or(opt(source.get(ffi::ICAP_PHYSICALHEIGHT))?);
 
-    let (max_w, max_h, max_w_fix, max_h_fix) = match (phys_w, phys_h) {
-        (Some(cw), Some(ch)) => {
-            let (Some(w), Some(h)) = (current_f64(&cw), current_f64(&ch)) else {
+    let valid_phys = phys_w.zip(phys_h).and_then(|(cw, ch)| {
+        let w = current_f64(&cw)?;
+        let h = current_f64(&ch)?;
+        (w.is_finite() && w > 0.0 && h.is_finite() && h > 0.0).then_some((
+            Fix32::from_int(0),
+            Fix32::from_int(0),
+            w,
+            h,
+            current_fix32(&cw),
+            current_fix32(&ch),
+        ))
+    });
+
+    let (left, top, max_w, max_h, max_r_fix, max_b_fix) = match valid_phys {
+        Some(found) => found,
+        None => {
+            let positive_frame = |f: Frame| {
+                let w = f.right.to_f64() - f.left.to_f64();
+                let h = f.bottom.to_f64() - f.top.to_f64();
+                (w.is_finite() && w > 0.0 && h.is_finite() && h > 0.0).then_some((f, w, h))
+            };
+            let chosen = match opt(source.default_image_layout())?.and_then(positive_frame) {
+                Some(found) => Some(found),
+                None => opt(source.image_layout())?.and_then(positive_frame),
+            };
+            let Some((frame, w, h)) = chosen else {
                 return Ok(None);
             };
-            (w, h, current_fix32(&cw), current_fix32(&ch))
-        }
-        _ => {
-            let frame = match opt(source.default_image_layout())? {
-                Some(f) => Some(f),
-                None => opt(source.image_layout())?,
-            };
-            let Some(frame) = frame else {
-                return Ok(None);
-            };
-            let w = frame.right.to_f64() - frame.left.to_f64();
-            let h = frame.bottom.to_f64() - frame.top.to_f64();
-            let wf = (frame.left == Fix32::from_int(0)).then_some(frame.right);
-            let hf = (frame.top == Fix32::from_int(0)).then_some(frame.bottom);
-            (w, h, wf, hf)
+            (
+                frame.left,
+                frame.top,
+                w,
+                h,
+                Some(frame.right),
+                Some(frame.bottom),
+            )
         }
     };
-
-    if !max_w.is_finite() || !max_h.is_finite() || max_w <= 0.0 || max_h <= 0.0 {
-        return Ok(None);
-    }
 
     let min_w = opt(source.get_current(ffi::ICAP_MINIMUMWIDTH))?
         .and_then(|c| current_f64(&c))
@@ -725,12 +791,14 @@ pub(super) fn read_physical_bounds(
         .unwrap_or(0.0);
 
     Ok(Some(PhysicalBounds {
+        left,
+        top,
         min_width: min_w,
         min_height: min_h,
         max_width: max_w,
         max_height: max_h,
-        max_width_fix: max_w_fix,
-        max_height_fix: max_h_fix,
+        max_right_fix: max_r_fix,
+        max_bottom_fix: max_b_fix,
     }))
 }
 
@@ -798,7 +866,7 @@ fn bool_cap_allows_true(source: &mut dyn CapSource, cap: u16) -> Result<bool, Sc
     };
     match &container {
         Container::One(item) => {
-            if item.as_i64() == Some(1) {
+            if item_as_int(item) == Some(1) {
                 return Ok(true);
             }
             if let Some(qc) = opt(source.query_support(cap))? {
@@ -830,9 +898,18 @@ pub(super) fn current_item(container: &Container) -> Option<&Item> {
     }
 }
 
+/// Extracts an exact integer/boolean value from `item`, including integral `Fix32` values
+/// (`frac == 0`) on drivers that store integer capabilities in `TWTY_FIX32`.
+pub(super) fn item_as_int(item: &Item) -> Option<i64> {
+    match item {
+        Item::Fix32(f) if f.frac == 0 => Some(i64::from(f.whole)),
+        other => other.as_i64(),
+    }
+}
+
 /// Extracts the active integer/boolean value from `container`.
 pub(super) fn current_int(container: &Container) -> Option<i64> {
-    current_item(container).and_then(Item::as_i64)
+    current_item(container).and_then(item_as_int)
 }
 
 /// Extracts the active numeric value as `f64` from `container`.
@@ -860,21 +937,24 @@ pub(super) fn item_as_f64(item: &Item) -> Option<f64> {
 /// allows the integer `target`.
 pub(super) fn container_allows_int(container: &Container, target: i64) -> bool {
     match container {
-        Container::One(item) => item.as_i64() == Some(target),
+        Container::One(item) => item_as_int(item) == Some(target),
         Container::Enumeration(e) => e
             .items
             .as_slice()
             .iter()
-            .any(|i| i.as_i64() == Some(target)),
-        Container::Array(items) => items.as_slice().iter().any(|i| i.as_i64() == Some(target)),
+            .any(|i| item_as_int(i) == Some(target)),
+        Container::Array(items) => items
+            .as_slice()
+            .iter()
+            .any(|i| item_as_int(i) == Some(target)),
         Container::Range(r) => {
-            let (Some(min), Some(max)) = (r.min().as_i64(), r.max().as_i64()) else {
+            let (Some(min), Some(max)) = (item_as_int(r.min()), item_as_int(r.max())) else {
                 return false;
             };
             if target < min || target > max {
                 return false;
             }
-            match r.step().as_i64() {
+            match item_as_int(r.step()) {
                 Some(step) if step > 1 => (target - min) % step == 0,
                 _ => true,
             }
@@ -930,6 +1010,9 @@ pub(super) mod test_mock {
         pub layout: Option<Frame>,
         pub default_layout: Option<Frame>,
         pub fatal_on: Option<(u16, ScanError)>,
+        /// Simulates `TWRC_CHECKSTATUS` (`Ok(())` from `LiveSource::set`) leaving the capability's
+        /// value untouched when setting `(cap, item)`.
+        pub ignore_set_on: Option<(u16, Item)>,
         pub set_log: Vec<(u16, Item)>,
     }
 
@@ -1077,6 +1160,7 @@ pub(super) mod test_mock {
                 layout: Some(default_frame),
                 default_layout: Some(default_frame),
                 fatal_on: None,
+                ignore_set_on: None,
                 set_log: Vec::new(),
             }
         }
@@ -1122,6 +1206,13 @@ pub(super) mod test_mock {
                 return Err(CapError::Fatal(err.clone()));
             }
             let item = current_item(&value).cloned().ok_or(CapError::Refused)?;
+            if let Some((ignore_cap, ref ignore_item)) = self.ignore_set_on
+                && ignore_cap == cap
+                && ignore_item == &item
+            {
+                self.set_log.push((cap, item));
+                return Ok(());
+            }
             let entry = self.caps.get_mut(&cap).ok_or(CapError::Refused)?;
             if entry.read_only {
                 return Err(CapError::Refused);
@@ -1160,7 +1251,7 @@ pub(super) mod test_mock {
             }
             self.set_log.push((cap, item.clone()));
             if cap == ffi::ICAP_PIXELTYPE
-                && let Some(pt) = item.as_i64().and_then(|v| u16::try_from(v).ok())
+                && let Some(pt) = item_as_int(&item).and_then(|v| u16::try_from(v).ok())
             {
                 self.sync_bit_depth(pt);
             }
@@ -1362,5 +1453,101 @@ mod tests {
             MockCap::one_ro(Item::Fix32(Fix32::from_int(0))),
         );
         assert_eq!(read(&mut bad_res, false), Err(ScanError::Unsupported));
+    }
+
+    #[test]
+    fn pixel_units_distinguish_dimensionless_one_from_dpi_ranges_and_lists() {
+        // Compliant `TWUN_PIXELS` dimensionless `One(1.0)` maps to `[72]`.
+        let dimless = Container::One(Item::Fix32(Fix32::from_int(1)));
+        assert!(container_is_dimensionless_pixels(&dimless, Units::Pixels));
+        assert_eq!(
+            resolutions_from_container(&dimless, Units::Pixels),
+            Some(Resolutions::List(vec![NO_RESOLUTION_DPI]))
+        );
+
+        // Non-compliant `TWUN_PIXELS` `Range(50..=600, step=1)` keeps `step = 1` (never `72`!).
+        let dpi_range = MockCap::range(
+            Item::Fix32(Fix32::from_int(50)),
+            Item::Fix32(Fix32::from_int(600)),
+            Item::Fix32(Fix32::from_int(1)),
+            Item::Fix32(Fix32::from_int(300)),
+        )
+        .container;
+        assert!(!container_is_dimensionless_pixels(
+            &dpi_range,
+            Units::Pixels
+        ));
+        assert_eq!(
+            resolutions_from_container(&dpi_range, Units::Pixels),
+            Some(Resolutions::Range {
+                min: 50,
+                max: 600,
+                step: NonZeroU32::MIN,
+            })
+        );
+
+        // `Range(1.0..=4.0, step=1.0)` crossing `1.0` stays monotonic (`1..=4, step=1`) instead of
+        // inverting `min = 72 > max = 4`!
+        let low_range = MockCap::range(
+            Item::Fix32(Fix32::from_int(1)),
+            Item::Fix32(Fix32::from_int(4)),
+            Item::Fix32(Fix32::from_int(1)),
+            Item::Fix32(Fix32::from_int(2)),
+        )
+        .container;
+        assert_eq!(
+            resolutions_from_container(&low_range, Units::Pixels),
+            Some(Resolutions::Range {
+                min: 1,
+                max: 4,
+                step: NonZeroU32::MIN,
+            })
+        );
+    }
+
+    #[test]
+    fn fix32_integer_caps_and_negative_physical_dims_fallback_to_nonzero_origin_layout() {
+        let mut src = MockSource::sample();
+        // Integer capabilities stored in `TWTY_FIX32` (`frac == 0`) are decoded cleanly.
+        src.caps.insert(
+            ffi::ICAP_PIXELTYPE,
+            MockCap::enumeration(
+                ItemType::Fix32,
+                vec![
+                    Item::Fix32(Fix32::from_int(i16::try_from(ffi::TWPT_GRAY).unwrap())),
+                    Item::Fix32(Fix32::from_int(i16::try_from(ffi::TWPT_RGB).unwrap())),
+                ],
+                1,
+            ),
+        );
+        // Non-positive `ICAP_PHYSICALWIDTH` (`-1`) falls back to `default_image_layout` with a
+        // non-zero `(left, top)` origin!
+        src.caps.insert(
+            ffi::ICAP_PHYSICALWIDTH,
+            MockCap::one_ro(Item::Fix32(Fix32::from_int(-1))),
+        );
+        let shifted = Frame {
+            left: Fix32::from_f64(0.5).unwrap(),
+            top: Fix32::from_f64(0.25).unwrap(),
+            right: Fix32::from_f64(9.0).unwrap(),
+            bottom: Fix32::from_f64(11.25).unwrap(),
+        };
+        src.default_layout = Some(shifted);
+        src.layout = Some(shifted);
+
+        let bounds = read_physical_bounds(&mut src).unwrap().unwrap();
+        assert_eq!(bounds.left, shifted.left);
+        assert_eq!(bounds.top, shifted.top);
+        assert!((bounds.max_width - 8.5).abs() < 1e-6);
+        assert!((bounds.max_height - 11.0).abs() < 1e-6);
+        assert_eq!(bounds.max_right_fix, Some(shifted.right));
+        assert_eq!(bounds.max_bottom_fix, Some(shifted.bottom));
+
+        let caps = read(&mut src, false).expect("fix32 caps + fallback bounds");
+        assert_eq!(caps.sources[0].max_area, Some(SizeMm::LETTER));
+        assert_eq!(
+            caps.sources[0].formats,
+            vec![Format::Gray8, Format::Gray16, Format::Rgb8, Format::Rgb16]
+        );
     }
 }

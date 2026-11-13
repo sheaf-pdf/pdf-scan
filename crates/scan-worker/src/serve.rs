@@ -69,7 +69,10 @@ pub fn serve(backends: Vec<Box<dyn Backend>>) -> ExitCode {
     #[cfg(any(unix, windows))]
     let output = match crate::sys::isolate_stdout() {
         Ok(file) => file,
-        Err(_) => return ExitCode::from(1),
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "scan-worker: couldn't isolate stdout: {err}");
+            return ExitCode::from(1);
+        }
     };
     #[cfg(not(any(unix, windows)))]
     let output = io::stdout();

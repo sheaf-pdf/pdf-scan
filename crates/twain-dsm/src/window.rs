@@ -35,7 +35,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetWindowThreadProcessId, IsWindow, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
     PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
-    TranslateMessage, WM_APP, WM_CLOSE, WM_NULL, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW, TranslateMessage, WM_APP, WM_CLOSE, WM_NULL,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::error::{Error, RunError};
@@ -176,7 +177,7 @@ pub(crate) fn take_source_messages(mut each: impl FnMut(u32, u16)) {
     let mut read = RING_READ.load(Ordering::Relaxed);
     if written.wrapping_sub(read) > RING {
         // Wrapped: the oldest are gone.
-        read = written - RING;
+        read = written.wrapping_sub(RING);
     }
     while read != written {
         let entry = RING_SLOTS[read % RING].swap(0, Ordering::AcqRel);
@@ -432,12 +433,34 @@ pub(crate) struct OwnerGuard {
 impl OwnerGuard {
     /// Re-enables `hwnd` if it was enabled before the source opened its window
     /// and a modal driver left it disabled.
+    ///
+    /// When `hwnd` belongs to another thread, probes message-queue responsiveness
+    /// with a bounded `SendMessageTimeoutW` first so teardown cannot deadlock if
+    /// the UI thread stopped pumping messages while joining the scan thread.
     pub(crate) fn restore(self) {
-        // SAFETY: IsWindow, IsWindowEnabled and EnableWindow check `hwnd` in
-        // User32's handle table without dereferencing it; if the window was
-        // destroyed meanwhile, IsWindow is 0 and nothing is sent.
+        // SAFETY: IsWindow, IsWindowEnabled, GetWindowThreadProcessId,
+        // SendMessageTimeoutW, and EnableWindow check `hwnd` in User32's handle
+        // table without dereferencing it; if the window was destroyed meanwhile,
+        // IsWindow is 0 and nothing is sent.
         unsafe {
             if self.was_enabled && IsWindow(self.hwnd) != 0 && IsWindowEnabled(self.hwnd) == 0 {
+                let cross_thread =
+                    GetWindowThreadProcessId(self.hwnd, null_mut()) != GetCurrentThreadId();
+                if cross_thread {
+                    let mut result: usize = 0;
+                    if SendMessageTimeoutW(
+                        self.hwnd,
+                        WM_NULL,
+                        0,
+                        0,
+                        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                        250,
+                        &mut result,
+                    ) == 0
+                    {
+                        return;
+                    }
+                }
                 EnableWindow(self.hwnd, 1);
             }
         }
@@ -581,5 +604,42 @@ mod tests {
 
         mine.destroy();
         assert!(!window_belongs_to_current_thread(raw_mine));
+    }
+
+    #[test]
+    fn owner_guard_does_not_deadlock_when_cross_thread_owner_stops_pumping() {
+        let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+        let (disable_tx, disable_rx) = std::sync::mpsc::channel();
+        let (disabled_tx, disabled_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let ui = std::thread::spawn(move || {
+            let win = Window::create().expect("hidden window");
+            let hwnd = win.hwnd();
+            let raw = win.handle() as u64;
+            raw_tx.send(raw).expect("send raw hwnd");
+            let _ = disable_rx.recv();
+            // Disable on the owning thread, then block without pumping messages
+            // (simulating a UI thread blocked joining teardown).
+            // SAFETY: `hwnd` is our live window on this thread.
+            unsafe { EnableWindow(hwnd, 0) };
+            disabled_tx.send(()).expect("signal disabled");
+            let _ = done_rx.recv();
+            win.destroy();
+        });
+
+        let raw = raw_rx.recv().expect("raw hwnd from UI thread");
+        let guard = check_owner(raw).expect("live cross-thread window");
+        disable_tx.send(()).expect("tell UI thread to disable");
+        disabled_rx.recv().expect("UI thread disabled window");
+
+        let start = std::time::Instant::now();
+        guard.restore();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "restore bounded on non-pumping owner thread"
+        );
+        let _ = done_tx.send(());
+        ui.join().expect("UI thread");
     }
 }

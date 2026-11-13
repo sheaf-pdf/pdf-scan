@@ -42,9 +42,9 @@ pub(super) struct Taken {
     /// Active `ICAP_UNITS` after negotiation (used to convert `DAT_IMAGEINFO` resolutions too).
     pub units: Units,
     /// Active `ICAP_PIXELFLAVOR` polarity for 1/8/16-bit monochrome memory transfers.
-    pub polarity: Polarity,
+    pub(super) polarity: Polarity,
     /// Readback `(across, down)` resolution in dots per inch, preserving fractional DPI.
-    pub dpi: (f32, f32),
+    pub(super) dpi: (f32, f32),
 }
 
 /// Negotiates `asked` on `source` in dependency order, clamps unsupported values to what the
@@ -66,7 +66,7 @@ pub(super) fn apply(
     let duplex_now = negotiate_duplex(source, source_now, asked.duplex)?;
     let (format_now, polarity) = negotiate_format(source, asked.format, allow_16bit)?;
     let (across_dpi, down_dpi, whole_across_dpi) = negotiate_resolution(source, asked.dpi, units)?;
-    let paper_now = negotiate_paper(source, asked.paper, units, across_dpi, down_dpi)?;
+    let paper_now = negotiate_paper(source, asked.paper, transfer, units, across_dpi, down_dpi)?;
 
     let mut taken = asked.clone();
     let mut clamped = Vec::new();
@@ -139,26 +139,33 @@ fn negotiate_transfer(
     source: &mut dyn CapSource,
     force_native: bool,
 ) -> Result<TransferMech, ScanError> {
-    let set_memory = !force_native
-        && set_optional_int(
+    let read_xfer = |source: &mut dyn CapSource| -> Result<Option<u16>, ScanError> {
+        Ok(opt(source.get_current(ffi::ICAP_XFERMECH))?
+            .or(opt(source.get(ffi::ICAP_XFERMECH))?)
+            .and_then(|c| current_int(&c))
+            .and_then(|v| u16::try_from(v).ok()))
+    };
+
+    if !force_native && caps::supports_memory_xfer(source)? {
+        let _ = set_optional_int(
             source,
             ffi::ICAP_XFERMECH,
             i64::from(ffi::TWSX_MEMORY),
             ItemType::UInt16,
         )?;
-    if !set_memory {
+    }
+
+    let mut raw = read_xfer(source)?;
+    let need_native = force_native || raw != Some(ffi::TWSX_MEMORY);
+    if need_native && raw.is_some_and(|v| v != ffi::TWSX_NATIVE) {
         let _ = set_optional_int(
             source,
             ffi::ICAP_XFERMECH,
             i64::from(ffi::TWSX_NATIVE),
             ItemType::UInt16,
         )?;
+        raw = read_xfer(source)?;
     }
-
-    let raw = opt(source.get_current(ffi::ICAP_XFERMECH))?
-        .or(opt(source.get(ffi::ICAP_XFERMECH))?)
-        .and_then(|c| current_int(&c))
-        .and_then(|v| u16::try_from(v).ok());
 
     match raw {
         None | Some(ffi::TWSX_NATIVE) => Ok(TransferMech::Native),
@@ -438,7 +445,9 @@ fn negotiate_resolution(
 ///
 /// For `Enumeration` / `Array`, picks the exact [`Item`] from the source's list whose converted
 /// whole DPI is nearest `target_dpi` (breaking ties toward higher), avoiding `Fix32` ULP mismatches
-/// on non-inch units. For `Range` / `One`, converts `target_dpi` via `units.dpi_to_res`.
+/// on non-inch units. For `Range` / `One`, converts `target_dpi` via `units.dpi_to_res` (snapping
+/// `Range` values onto `(min + k * step)`), and leaves compliant dimensionless `TWUN_PIXELS`
+/// `1.0` capabilities untouched.
 fn set_resolution_cap(
     source: &mut dyn CapSource,
     cap: u16,
@@ -446,6 +455,9 @@ fn set_resolution_cap(
     target_dpi: u32,
     units: Units,
 ) -> Result<(), ScanError> {
+    if caps::container_is_dimensionless_pixels(container, units) {
+        return Ok(());
+    }
     let chosen: Option<Item> = match container {
         Container::Enumeration(e) => pick_enum_resolution(e.items.as_slice(), target_dpi, units),
         Container::Array(items) => pick_enum_resolution(items.as_slice(), target_dpi, units),
@@ -456,6 +468,16 @@ fn set_resolution_cap(
                 && max.is_finite()
                 && min <= max
             {
+                if let Some(step) = item_as_f64(r.step())
+                    && step.is_finite()
+                    && step > 0.0
+                {
+                    let max_steps = ((max - min) / step).floor();
+                    if max_steps.is_finite() && max_steps >= 0.0 {
+                        let k = ((want - min) / step).round().clamp(0.0, max_steps);
+                        want = min + k * step;
+                    }
+                }
                 want = want.clamp(min, max);
             }
             make_num_item(r.item_type(), want)
@@ -475,6 +497,7 @@ fn set_resolution_cap(
 
 /// Picks the item in `items` whose rounded DPI in `units` is nearest `target_dpi` (higher on tie).
 fn pick_enum_resolution(items: &[Item], target_dpi: u32, units: Units) -> Option<Item> {
+    let scale = units.per_inch().unwrap_or(1.0);
     items
         .iter()
         .filter_map(|item| {
@@ -482,7 +505,7 @@ fn pick_enum_resolution(items: &[Item], target_dpi: u32, units: Units) -> Option
             if !raw.is_finite() || raw <= 0.0 {
                 return None;
             }
-            let dpi = units.res_to_dpi(raw).round();
+            let dpi = (raw * scale).round();
             if !dpi.is_finite() || !(1.0..=f64::from(u32::MAX)).contains(&dpi) {
                 return None;
             }
@@ -539,6 +562,7 @@ fn whole_dpi(dpi: f64) -> Result<u32, ScanError> {
 fn negotiate_paper(
     source: &mut dyn CapSource,
     asked: Paper,
+    transfer: TransferMech,
     units: Units,
     across_dpi: f64,
     down_dpi: f64,
@@ -571,8 +595,12 @@ fn negotiate_paper(
                 ItemType::UInt16,
             )?;
         }
-        if auto_caps.undefined_size {
+        // Per TWAIN 2.5, `ICAP_UNDEFINEDIMAGESIZE` requires `TWSX_MEMORY` (on `TWSX_NATIVE`,
+        // State-6 `DAT_IMAGEINFO` can fail or return `-1`, so explicitly clear any sticky `1`).
+        if auto_caps.undefined_size && transfer == TransferMech::Memory {
             let _ = set_optional_int(source, ffi::ICAP_UNDEFINEDIMAGESIZE, 1, ItemType::Bool)?;
+        } else {
+            let _ = set_optional_int(source, ffi::ICAP_UNDEFINEDIMAGESIZE, 0, ItemType::Bool)?;
         }
 
         let border_on = read_bool_cap(source, ffi::ICAP_AUTOMATICBORDERDETECTION)?.unwrap_or(false);
@@ -644,52 +672,74 @@ fn negotiate_paper(
     Ok(Paper::Auto)
 }
 
-/// Builds a top-left `(0, 0)` [`Frame`] from `(width, height)` in active `ICAP_UNITS`, clamping
-/// `Fix32` coordinates directly against `bounds.max_width_fix` / `bounds.max_height_fix` so float
-/// round-trips never overshoot `ICAP_PHYSICALWIDTH` / `ICAP_PHYSICALHEIGHT` by `1/65536` unit.
+/// Builds a [`Frame`] offset from `(bounds.left, bounds.top)` by `(width, height)` in active
+/// `ICAP_UNITS`, clamping `Fix32` coordinates directly against `bounds.max_right_fix` /
+/// `bounds.max_bottom_fix` so float round-trips never overshoot `ICAP_PHYSICALWIDTH` /
+/// `ICAP_PHYSICALHEIGHT` (or a `DAT_IMAGELAYOUT` fallback frame) by `1/65536` unit.
 fn frame_from_lengths(width: f64, height: f64, bounds: &PhysicalBounds) -> Option<Frame> {
-    let mut right = length_to_positive_fix32(width, bounds.max_width_fix)?;
-    let mut bottom = length_to_positive_fix32(height, bounds.max_height_fix)?;
-    if let Some(max_w) = bounds.max_width_fix
-        && fix32_gt(right, max_w)
+    let mut right = offset_to_fix32(bounds.left, width, bounds.max_right_fix)?;
+    let mut bottom = offset_to_fix32(bounds.top, height, bounds.max_bottom_fix)?;
+    if let Some(max_r) = bounds.max_right_fix
+        && fix32_gt(right, max_r)
     {
-        right = max_w;
+        right = max_r;
     }
-    if let Some(max_h) = bounds.max_height_fix
-        && fix32_gt(bottom, max_h)
+    if let Some(max_b) = bounds.max_bottom_fix
+        && fix32_gt(bottom, max_b)
     {
-        bottom = max_h;
+        bottom = max_b;
     }
-    if !fix32_gt(right, Fix32::from_int(0)) || !fix32_gt(bottom, Fix32::from_int(0)) {
+    if !fix32_gt(right, bounds.left) || !fix32_gt(bottom, bounds.top) {
         return None;
     }
     Some(Frame {
-        left: Fix32::from_int(0),
-        top: Fix32::from_int(0),
+        left: bounds.left,
+        top: bounds.top,
         right,
         bottom,
     })
 }
 
-/// Converts a positive `f64` length to [`Fix32`], falling back to `ceiling` (or maximum positive
-/// `Fix32`) when `len` exceeds `32767.99998` (e.g. twips on a tall Legal page).
-fn length_to_positive_fix32(len: f64, ceiling: Option<Fix32>) -> Option<Fix32> {
+/// Converts `origin + len` (`len > 0`) to a [`Fix32`] strictly above `origin`, falling back to
+/// `ceiling` (or maximum `Fix32`) when `origin + len` exceeds `32767.99998` (e.g. twips on Legal).
+fn offset_to_fix32(origin: Fix32, len: f64, ceiling: Option<Fix32>) -> Option<Fix32> {
     if !len.is_finite() || len <= 0.0 {
         return None;
     }
-    if let Some(fix) = Fix32::from_f64(len)
-        && fix32_gt(fix, Fix32::from_int(0))
-    {
-        return Some(fix);
+    let end = origin.to_f64() + len;
+    if !end.is_finite() {
+        return None;
     }
-    if len >= f64::from(i16::MAX) {
+    if let Some(fix) = Fix32::from_f64(end) {
+        if fix32_gt(fix, origin) {
+            return Some(fix);
+        }
+        return fix32_next_up(origin);
+    }
+    if end >= f64::from(i16::MAX) {
         return Some(ceiling.unwrap_or(Fix32 {
             whole: i16::MAX,
             frac: u16::MAX,
         }));
     }
-    // Positive sub-1/65536 length: clamp up to 1/65536 so `Frame` stays strictly non-empty.
-    Some(Fix32 { whole: 0, frac: 1 })
+    None
+}
+
+/// Steps `a` up by `1/65536` (`1` ULP), returning `None` at `Fix32::MAX`.
+fn fix32_next_up(a: Fix32) -> Option<Fix32> {
+    if a.frac < u16::MAX {
+        Some(Fix32 {
+            whole: a.whole,
+            frac: a.frac + 1,
+        })
+    } else if a.whole < i16::MAX {
+        Some(Fix32 {
+            whole: a.whole + 1,
+            frac: 0,
+        })
+    } else {
+        None
+    }
 }
 
 /// Exact signed fixed-point comparison `a > b`.
@@ -700,7 +750,10 @@ fn fix32_gt(a: Fix32, b: Fix32) -> bool {
 /// Validates readback dimensions `(w_mm, h_mm)` and compares them to `asked` within
 /// [`SAME_SIZE_MM`].
 fn paper_from_read_mm(asked: Paper, w_mm: f64, h_mm: f64) -> Result<Paper, ScanError> {
-    let fits = |side: f64| side.is_finite() && side > 0.0 && side <= f64::from(f32::MAX);
+    let fits = |side: f64| {
+        let f = side as f32;
+        side.is_finite() && side > 0.0 && f.is_finite() && f > 0.0
+    };
     if !fits(w_mm) || !fits(h_mm) {
         return Err(driver_msg(format!(
             "the scanner's scan area reads back as {w_mm} by {h_mm} mm, which no page can be"
@@ -1040,5 +1093,164 @@ mod tests {
         src.fatal_on = Some((ffi::ICAP_AUTOMATICROTATE, ScanError::CoverOpen));
         let asked = Settings::new(Source::Feeder, 300, Format::Rgb8);
         assert_eq!(apply(&mut src, &asked, false), Err(ScanError::CoverOpen));
+    }
+
+    #[test]
+    fn transfer_fallback_handles_checkstatus_file_and_onevalue_native() {
+        // 1) `ICAP_XFERMECH = [TWSX_FILE, TWSX_MEMORY, TWSX_NATIVE]` currently at `TWSX_FILE`:
+        //    if `MSG_SET(TWSX_MEMORY)` returns `TWRC_CHECKSTATUS` (`Ok(())`) without changing the
+        //    cap, `negotiate_transfer` reads back `TWSX_FILE` and falls back to `TWSX_NATIVE`.
+        let mut src = MockSource::sample();
+        src.caps.insert(
+            ffi::ICAP_XFERMECH,
+            MockCap::enumeration(
+                ItemType::UInt16,
+                vec![
+                    Item::UInt16(ffi::TWSX_FILE),
+                    Item::UInt16(ffi::TWSX_MEMORY),
+                    Item::UInt16(ffi::TWSX_NATIVE),
+                ],
+                0,
+            ),
+        );
+        src.ignore_set_on = Some((ffi::ICAP_XFERMECH, Item::UInt16(ffi::TWSX_MEMORY)));
+        let asked = Settings::new(Source::Flatbed, 300, Format::Bw1);
+        let taken = apply(&mut src, &asked, false).expect("falls back to TWSX_NATIVE");
+        assert_eq!(taken.transfer, TransferMech::Native);
+
+        // 2) `Container::One(TWSX_NATIVE)` agrees with `caps::supports_memory_xfer` (`false`) and
+        //    never attempts `MSG_SET(ICAP_XFERMECH, TWSX_MEMORY)`.
+        let mut nat1 = MockSource::sample();
+        nat1.caps.insert(
+            ffi::ICAP_XFERMECH,
+            MockCap::one(Item::UInt16(ffi::TWSX_NATIVE)),
+        );
+        let taken_nat1 = apply(&mut nat1, &asked, false).unwrap();
+        assert_eq!(taken_nat1.transfer, TransferMech::Native);
+        assert!(
+            nat1.set_log
+                .iter()
+                .all(|(cap, _)| *cap != ffi::ICAP_XFERMECH),
+            "One(TWSX_NATIVE) must not be poked with TWSX_MEMORY"
+        );
+    }
+
+    #[test]
+    fn dimensionless_pixels_range_step_snapping_native_undefined_size_and_offset_frames() {
+        // 1) Compliant dimensionless `TWUN_PIXELS` `One(1.0)` never sends `MSG_SET(72.0)`.
+        let mut px_src = MockSource::sample();
+        px_src.caps.insert(
+            ffi::ICAP_UNITS,
+            MockCap::one_ro(Item::UInt16(ffi::TWUN_PIXELS)),
+        );
+        px_src.caps.insert(
+            ffi::ICAP_XRESOLUTION,
+            MockCap::one(Item::Fix32(Fix32::from_int(1))),
+        );
+        px_src.caps.insert(
+            ffi::ICAP_YRESOLUTION,
+            MockCap::one(Item::Fix32(Fix32::from_int(1))),
+        );
+        px_src.caps.insert(
+            ffi::ICAP_PHYSICALWIDTH,
+            MockCap::one_ro(Item::Fix32(Fix32::from_int(612))),
+        );
+        px_src.caps.insert(
+            ffi::ICAP_PHYSICALHEIGHT,
+            MockCap::one_ro(Item::Fix32(Fix32::from_int(792))),
+        );
+        px_src.default_layout = None;
+        px_src.layout = None;
+        let asked = Settings::new(Source::Flatbed, 300, Format::Gray8);
+        let px_taken = apply(&mut px_src, &asked, false).unwrap();
+        assert_eq!(px_taken.applied.settings.dpi, NO_RESOLUTION_DPI);
+        assert!(
+            px_src
+                .set_log
+                .iter()
+                .all(|(cap, _)| *cap != ffi::ICAP_XRESOLUTION && *cap != ffi::ICAP_YRESOLUTION),
+            "dimensionless TWUN_PIXELS 1.0 must never be set to 72.0"
+        );
+
+        // 2) Centimetre `TW_RANGE` snaps `MSG_SET` onto `(min + k * step)` (`100 + 18 * 1 = 118`
+        //    instead of off-grid `118.1102`).
+        let mut cm_src = MockSource::sample();
+        cm_src.caps.insert(
+            ffi::ICAP_UNITS,
+            MockCap::one_ro(Item::UInt16(ffi::TWUN_CENTIMETERS)),
+        );
+        cm_src.caps.insert(
+            ffi::ICAP_XRESOLUTION,
+            MockCap::range(
+                Item::Fix32(Fix32::from_int(100)),
+                Item::Fix32(Fix32::from_int(200)),
+                Item::Fix32(Fix32::from_int(1)),
+                Item::Fix32(Fix32::from_int(100)),
+            ),
+        );
+        cm_src.caps.remove(&ffi::ICAP_YRESOLUTION);
+        cm_src.caps.insert(
+            ffi::ICAP_PHYSICALWIDTH,
+            MockCap::one_ro(Item::Fix32(Fix32::from_f64(21.0).unwrap())),
+        );
+        cm_src.caps.insert(
+            ffi::ICAP_PHYSICALHEIGHT,
+            MockCap::one_ro(Item::Fix32(Fix32::from_f64(29.7).unwrap())),
+        );
+        cm_src.default_layout = None;
+        cm_src.layout = None;
+        let _ = apply(&mut cm_src, &asked, false).unwrap();
+        let set_x = cm_src
+            .set_log
+            .iter()
+            .find(|(cap, _)| *cap == ffi::ICAP_XRESOLUTION)
+            .map(|(_, item)| item.clone())
+            .unwrap();
+        assert_eq!(set_x, Item::Fix32(Fix32::from_int(118)));
+
+        // 3) `Paper::Auto` on `TransferMech::Native` keeps `ICAP_UNDEFINEDIMAGESIZE = 0` (even if
+        //    previously sticky `1`), and non-zero-origin `default_image_layout` offsets `Frame`.
+        let mut nat_auto = MockSource::sample();
+        nat_auto.caps.insert(
+            ffi::ICAP_AUTOMATICBORDERDETECTION,
+            MockCap::enumeration(ItemType::Bool, vec![Item::Bool(false), Item::Bool(true)], 0),
+        );
+        nat_auto.caps.insert(
+            ffi::ICAP_UNDEFINEDIMAGESIZE,
+            MockCap::enumeration(ItemType::Bool, vec![Item::Bool(false), Item::Bool(true)], 1),
+        );
+        let mut ask_auto = Settings::new(Source::Feeder, 300, Format::Rgb8);
+        ask_auto.paper = Paper::Auto;
+        let tn = apply(&mut nat_auto, &ask_auto, true).unwrap();
+        assert_eq!(tn.transfer, TransferMech::Native);
+        assert_eq!(tn.applied.settings.paper, Paper::Auto);
+        assert_eq!(
+            current_int(&nat_auto.get_current(ffi::ICAP_UNDEFINEDIMAGESIZE).unwrap()),
+            Some(0)
+        );
+
+        // Non-zero-origin fallback bounds preserve `(left, top)` when setting `Paper::Size`.
+        nat_auto.caps.remove(&ffi::ICAP_PHYSICALWIDTH);
+        nat_auto.caps.remove(&ffi::ICAP_PHYSICALHEIGHT);
+        let shifted = Frame {
+            left: Fix32::from_f64(0.5).unwrap(),
+            top: Fix32::from_f64(1.0).unwrap(),
+            right: Fix32::from_f64(9.0).unwrap(),
+            bottom: Fix32::from_f64(12.0).unwrap(),
+        };
+        nat_auto.default_layout = Some(shifted);
+        nat_auto.layout = Some(shifted);
+        let mut ask_crop = Settings::new(Source::Flatbed, 300, Format::Rgb8);
+        ask_crop.paper = Paper::Size(SizeMm {
+            width: 127.0,
+            height: 177.8,
+        });
+        let tc = apply(&mut nat_auto, &ask_crop, true).unwrap();
+        assert!(tc.applied.clamped.is_empty());
+        let set_frame = nat_auto.layout.unwrap();
+        assert_eq!(set_frame.left, shifted.left);
+        assert_eq!(set_frame.top, shifted.top);
+        assert!((set_frame.right.to_f64() - 5.5).abs() < 1e-4);
+        assert!((set_frame.bottom.to_f64() - 8.0).abs() < 1e-4);
     }
 }

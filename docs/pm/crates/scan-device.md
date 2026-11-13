@@ -187,10 +187,12 @@ required zero breaking changes to the model.
       border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005` mm readback tolerance).
     - **Transfers, sides, cancel, and windows:** defaults to `TWSX_MEMORY` (falling back to `TWSX_NATIVE` or
       forced via `with_native_transfer`), assembling strips, sub-row tiles (lazy `Vec<u64>` bitmap), undefined
-      `width`/`length == -1` transfers, and 1/8/24-bit DIBs into `RawImage`; reads `TWEI_PAGESIDE`
-      (`SideKnown::Reported` vs `Inferred`); inspects `DAT_STATUS` and `CAP_FEEDERLOADED` on unexpected
-      `Event::CloseRequest`; pumps 100 ms intervals for sheet-granular cancel; opens `settings_window` with
-      same-thread owner deadlock refusal.
+      `width`/`length == -1` transfers (cropping trailing overscan rows/columns to state 7), and 1/8/24/32-bit
+      DIBs (including luminance 1-bit palettes and 8-bit color palettes) into `RawImage` under a 512 MiB cap;
+      reads `TWEI_PAGESIDE` (`SideKnown::Reported` vs `Inferred`, advancing sheets cleanly across blank-back skips
+      and stuck `TWCS_TOP`); inspects `DAT_STATUS` and `CAP_FEEDERLOADED` on unexpected `Event::CloseRequest`;
+      pumps 100 ms intervals for sheet-granular cancel; opens `settings_window` with same-thread owner deadlock
+      refusal.
   - `wia` (Windows), on the `windows` crate's `Win32_Devices_ImageAcquisition` (0.62.2, entry 7): its own STA
     thread; the root's `Feeder` child; `WIA_IPS_PAGES = 0`.
     - **Duplex:** `WIA_IPS_DOCUMENT_HANDLING_SELECT` = `DUPLEX` or `FRONT_ONLY` (one, never both) written to
@@ -237,10 +239,10 @@ required zero breaking changes to the model.
   of its own and sees a cancel from a third) and `fake_devices.rs`, `fake_batches.rs` and `fake_faults.rs`
   (every rule above and every script of proposal 22, the crash and the exit in child processes through
   `rusty-fork`); doctests, among them the crate's example through the fake. **S0 slice 5** added `sane` unit and
-  integration tests (`sane_fake.rs`, `sane_real.rs`), and **S0 slice 9** added `twain` unit tests (106 total
-  `scan-device --lib` unit tests running on both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` in CI,
-  closing `TEST-12`) plus 9 live sample-source integration tests in `/crates/scan-device/tests/twain.rs` in both
-  bitnesses.
+  integration tests (`sane_fake.rs`, `sane_real.rs`), and **S0 slice 9** added `twain` unit tests (114 total
+  `scan-device --features twain --lib` unit tests running on both `x86_64-pc-windows-msvc` and
+  `i686-pc-windows-msvc` in CI, closing `TEST-12`) plus 8 live sample-source integration tests in
+  `/crates/scan-device/tests/twain.rs` in both bitnesses.
 - **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
   frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
   sheaf takes it no sooner (`sheaf/swaps.md`).

@@ -53,7 +53,8 @@ pub(super) fn condition_to_error(code: ConditionCode, message: String) -> ScanEr
 
 /// Maps a failure of `MSG_ENABLEDS` at the start of a batch:
 /// - `TWCC_NOMEDIA` on `Source::Feeder` (before any page) is [`ScanError::FeederEmpty`];
-/// - `TWCC_BADVALUE` is [`ScanError::SettingsRefused`];
+/// - `TWCC_BADVALUE`, `TWCC_CAPBADOPERATION`, or `TWCC_BADPROTOCOL` is
+///   [`ScanError::SettingsRefused`];
 /// - everything else follows [`triplet_failed`].
 pub(super) fn enable_failed(
     source: Source,
@@ -64,7 +65,10 @@ pub(super) fn enable_failed(
     if source == Source::Feeder && condition == Some(ConditionCode::NOMEDIA) {
         return ScanError::FeederEmpty;
     }
-    if condition == Some(ConditionCode::BADVALUE) {
+    if matches!(
+        condition,
+        Some(ConditionCode::BADVALUE | ConditionCode::CAPBADOPERATION | ConditionCode::BADPROTOCOL)
+    ) {
         return ScanError::SettingsRefused;
     }
     triplet_failed(rc, condition, message)
@@ -333,15 +337,21 @@ mod tests {
             ),
             ScanError::Driver { shown: false, .. }
         ));
-        assert_eq!(
-            enable_failed(
-                Source::Feeder,
-                ReturnCode::FAILURE,
-                Some(ConditionCode::BADVALUE),
-                "bad".to_owned()
-            ),
-            ScanError::SettingsRefused
-        );
+        for code in [
+            ConditionCode::BADVALUE,
+            ConditionCode::CAPBADOPERATION,
+            ConditionCode::BADPROTOCOL,
+        ] {
+            assert_eq!(
+                enable_failed(
+                    Source::Feeder,
+                    ReturnCode::FAILURE,
+                    Some(code),
+                    "bad".to_owned()
+                ),
+                ScanError::SettingsRefused
+            );
+        }
     }
 
     #[test]

@@ -11,14 +11,16 @@ from the root, local and never tracked.
 
 1. **`twain-dsm` (`0.1.0-alpha.1`) finished for its first user and ready to package:**
    - Parent-window ownership for a driver's window (`Ui::ShownOwned(u64)` and `Source::settings_ui(self,
-     owner: Option<u64>)`), validated inside `window.rs` against canonical 32-bit Win32 handle range,
-     `IsWindow(hwnd) != 0`, and `GetWindowThreadProcessId(hwnd, null) != caller_tid` (preventing same-thread
-     modal deadlocks), plus an `EnableWindow` guard on step-down/drop if a modal driver leaves `hParent`
-     disabled, with no raw pointer in the public API.
+     owner: Option<u64>)`), validated inside `window.rs` against canonical 32-bit Win32 handle range and
+     `IsWindow(hwnd) != 0` (`Error::InvalidWindow`), with `window_belongs_to_current_thread(u64) -> bool` so
+     blocking cross-thread callers (`scan-device` and `scan-worker`) refuse same-thread `HWND` deadlocks up front,
+     plus an `EnableWindow` restore guard on enable failure and step-down/drop if a modal driver leaves `hParent`
+     disabled (bounded by `SendMessageTimeoutW` on cross-thread owners), with no raw pointer in the public API.
    - `DG_IMAGE / DAT_IMAGELAYOUT` (`TW_IMAGELAYOUT` in `ffi.rs` + `header_contract.rs`, `ImageLayout`,
      `Source::image_layout`, `default_image_layout`, `set_image_layout`, `reset_image_layout`, and
-     `Ready::image_layout`), plus `Source::status` and `Enabled::status` (`DG_CONTROL / DAT_STATUS / MSG_GET`)
-     so unexpected `Event::CloseRequest` in state 5 can read the source's condition code.
+     `Ready::image_layout`), plus `status` (`DG_CONTROL / DAT_STATUS / MSG_GET`) across states 4 to 7 (`Source`,
+     `Enabled`, `Ready`, `Transferred`, `MemoryTransfer`), `Ready::{opened, take_request}`, and `Transferred` /
+     `MemoryTransfer` `reset`.
    - Release-readiness polish from `review-2026-11-11.md`: `#![warn(missing_docs)]` (with `#[allow(missing_docs)]`
      on `pub mod ffi`), `#![cfg_attr(docsrs, feature(doc_cfg))]`, `[package.metadata.docs.rs] default-target =
      "x86_64-pc-windows-msvc"`, `include = ["/src", "/README.md", "/CHANGELOG.md"]`,
@@ -47,8 +49,9 @@ from the root, local and never tracked.
 3. **`scan-worker` Windows hardening, dual-bitness TWAIN list merge, and carried S0 items:**
    - **No unconditional `sane-dl` runtime dependency** (`review-2026-11-11.md`): inline the ~40-line
      `SANE_CONFIG_DIR` file layout in `/crates/scan-worker/src/client/spawn.rs` (setting `LC_ALL=C` on SANE
-     workers unless `WorkerCommand::env` sets it), keep `sane-dl` only in `[target.'cfg(unix)'.dev-dependencies]`
-     for `tests/sane_worker.rs`, and add optional `twain = ["scan-device/twain"]`.
+     workers unless `WorkerCommand::env` sets it), keep `sane-dl` only in `[dev-dependencies]` for
+     `tests/sane_worker.rs` (skipping at runtime off Unix when SANE isn't installed), and add optional
+     `twain = ["scan-device/twain"]`.
    - **Protocol output isolated from driver `stdout` writes** (`milestones/s0-devices.md`, PaperStream IP notes):
      `scan_worker::serve` duplicates the protocol output stream to a private, non-inheritable descriptor/handle
      at startup (before any driver DLL is loaded) and redirects standard output (`STD_OUTPUT_HANDLE` + UCRT fd 1
@@ -90,14 +93,14 @@ Not built here: `scan-device`'s `wia` backend (slice 10); encoded TWAIN transfer
 - `Ui::ShownOwned(u64)` and `Source::settings_ui(self, owner: Option<u64>)`, with `Error::InvalidWindow { hwnd:
   u64 }`.
 - Canonical Win32 handle check: accept `1..=u32::MAX as u64` and sign-extended `0xFFFF_FFFF_8000_0000..=u64::MAX`,
-  cast `hwnd as u32 as usize as HWND`, check `IsWindow(hwnd) != 0`, and check `GetWindowThreadProcessId(hwnd,
-  null) != caller_tid` (where `caller_tid` is the blocking caller thread: the TWAIN thread in direct
-  `twain-dsm`, or the caller thread of `TwainDevice::settings_window` / `RemoteDevice::settings_window`),
-  failing fast with `Error::InvalidWindow` / `ScanError::Driver` rather than deadlocking on synchronous Win32
-  cross-thread messages (`SetParent` / `EnableWindow`).
-- Both `twain-dsm` (when disabling/dropping an `Enabled` started with an external owner) and `scan-worker`
-  (`WindowGuard` when `settings_window` returns `Err(_)`) record `IsWindowEnabled(hwnd)` beforehand and restore
-  `EnableWindow(hwnd, 1)` if a modal driver disabled the window and failed to re-enable it.
+  cast `hwnd as u32 as usize as HWND`, and check `IsWindow(hwnd) != 0` inside `twain-dsm`; expose
+  `window_belongs_to_current_thread(u64) -> bool` so cross-thread blocking callers (`TwainDevice::settings_window`
+  and `RemoteDevice::settings_window`) reject same-thread `HWND`s up front rather than deadlocking on synchronous
+  Win32 cross-thread messages (`SetParent` / `EnableWindow`).
+- Both `twain-dsm` (on enable failure and when disabling/dropping an `Enabled` started with an external owner) and
+  `scan-worker` (`WindowGuard` when `settings_window` returns `Err(_)`) record `IsWindowEnabled(hwnd)` beforehand
+  and restore `EnableWindow(hwnd, 1)` (probing cross-thread `HWND`s with a 250 ms `SendMessageTimeoutW` first) if a
+  modal driver disabled the window and failed to re-enable it.
 
 **2. `DAT_IMAGELAYOUT` and `DAT_STATUS` on `twain-dsm`.**
 - Per TWAIN 2.5 (`DG_IMAGE / DAT_IMAGELAYOUT`), only `MSG_GET`, `MSG_GETDEFAULT`, `MSG_RESET`, and `MSG_SET` are
@@ -337,9 +340,11 @@ changes):
 ## Risks
 
 - **`Twain_DS_sample01` Qt UI (`QT_UI.cpp:170`) with cross-process `hParent`:** Qt calls `SetWindowLong(...,
-  WS_CHILD)` + `SetParent` on `hParent` when non-null. Our integration tests verify both `None` (hidden window)
-  and `Some(owner)` (with a real Win32 top-level window pumped on its own thread) so cross-thread and
-  cross-process parenting + `EnableWindow` recovery are proven empirically.
+  WS_CHILD)` + `SetParent` on `hParent` when non-null, and its modal dialog blocks until interactively dismissed.
+  `/crates/scan-device/tests/twain.rs` tests headless scanning (`Ui::Hidden`), capabilities, cancel, and
+  same-thread `Some(owner)` deadlock refusal against `Twain_DS_sample01`, while
+  `/crates/scan-worker/tests/stop_handle.rs` proves cross-process `Some(owner)` parenting and disabled-owner
+  `EnableWindow` recovery with a real Win32 top-level window pumped on its own UI thread.
 
 ## So far
 
@@ -354,11 +359,10 @@ changes):
   `twain = ["dep:twain-dsm"]` (`#![forbid(unsafe_code)]` preserved): `id.rs`, `error.rs`, `pixels.rs` (1/8/24-bit
   DIB decoder + 1/8/16/24/48-bit strip, sub-row tile, and undefined `width`/`length == -1` memory assembler with
   $O(1)$ top-down fast path and lazy `Vec<u64>` bitmap promotion), `caps.rs`, `settings.rs`, and non-Windows stub;
-  all 103 `scan-device --lib` unit tests pass on both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
-  (`TEST-12`).
+  all `scan-device --lib` unit tests pass on both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` (`TEST-12`).
 - **Step 3 (`45348a8`, pushed):** Built `session.rs` (process-wide lazy STA `Session` matching `twain-dsm`'s
   `RunLock` and `Loaded::path()`, concurrent `list` via `Remote` without poisoning an active device), `batch.rs`,
-  and `TwainBackend` / `TwainDevice`, plus 9 end-to-end sample-source integration tests in
+  and `TwainBackend` / `TwainDevice`, plus 8 end-to-end sample-source integration tests in
   `/crates/scan-device/tests/twain.rs` (10-page batches, memory vs native pixel parity, custom `Paper::Size` via
   `DAT_IMAGELAYOUT`, clamping, cancel, same-thread owner refusal, and error mapping) passing in both
   `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`. Note: `Twain_DS_sample01`'s `ProductName` (`DeviceInfo.name`)
@@ -374,12 +378,57 @@ changes):
     `STD_OUTPUT_HANDLE` to `/dev/null` / `NUL` before any driver loads), Windows `Job`
     (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` + `TerminateJobObject`, `FEAT-14`), and Windows `WindowGuard`.
   - Added `RemoteDevice::stop_handle -> StopHandle` (`FEAT-17`) + `Error::Aborted` (unblocking full
-    `SyncSender<Event>` channels too) and concurrent `Client::list_twain -> TwainList`, verified with 51 unit
-    tests (64- and 32-bit), `tests/stop_handle.rs` (8 tests), and `tests/twain_worker.rs` (5 tests, including a
-    64-bit client driving both 64-bit and `i686` sample workers with `TWAIN_SHOWCONSOLEMESSAGES=1` and
-    `--noisy-stdout`).
-- **Step 5:** Wired `scan-device-twain-test`, `scan-device-clippy`, `scan-worker-twain-test`, and
-  `scan-worker-clippy` into `/justfile` and `/.github/workflows/ci.yml` (`twain-dsm` 64/32-bit job,
-  `twain-dsm-package`, Windows `public-api` `TEST-14` reading 3,665 `twain-dsm` items with 0 unsafe failures, and
-  Ubuntu+Windows MSRV 1.89 matrices for `scan-device` and `scan-worker`), archived `s0-4-scan-worker.md`, moved
-  `FEAT-14`, `FEAT-17`, `TEST-12`, and `TEST-14` to `archive/backlog-done.md`, and synced crate and PM docs.
+    `SyncSender<Event>` channels too) and concurrent `Client::list_twain -> TwainList`, verified with unit tests
+    (64- and 32-bit), `tests/stop_handle.rs`, and `tests/twain_worker.rs` (including a 64-bit client driving both
+    64-bit and `i686` sample workers with `TWAIN_SHOWCONSOLEMESSAGES=1` and `--noisy-stdout`).
+- **Step 5 (`4343c2b`, pushed):** Wired `scan-device-twain-test`, `scan-device-clippy`, `scan-worker-twain-test`,
+  and `scan-worker-clippy` into `/justfile` and `/.github/workflows/ci.yml` (`twain-dsm` 64/32-bit job,
+  `twain-dsm-package`, Windows `public-api` `TEST-14` with 0 unsafe failures, and Ubuntu+Windows MSRV 1.89 matrices
+  for `scan-device` and `scan-worker`), archived `s0-4-scan-worker.md`, moved `FEAT-14`, `FEAT-17`, `TEST-12`, and
+  `TEST-14` to `archive/backlog-done.md`, and synced crate and PM docs.
+
+## Code review
+
+Reviewed 2026-11-12 to 13 across `83bd319..4343c2b` by four parallel adversarial code-review agents (`twain-dsm` +
+FFI soundness, `scan-device::twain` capabilities & pixels, `scan-device::twain` STA session & batch state machine,
+and `scan-worker` OS/IPC hardening + CI/tests), with every valid finding fixed and covered by unit/integration
+regression tests:
+
+- **`twain-dsm` (`dsm.rs`, `window.rs`, `enabled.rs`, `CHANGELOG.md`):**
+  - Guarded `len == 0 || len > isize::MAX as usize` before `GlobalLock` / `slice::from_raw_parts` in `Dib::take`
+    while keeping `handle` so `Drop` frees the global block.
+  - Fixed ring wraparound cursor advancement (`written.wrapping_sub(RING)`) in `window.rs`, bounded cross-thread
+    `EnableWindow` restoration in `OwnerGuard::restore` with a 250 ms `SendMessageTimeoutW(WM_NULL,
+    SMTO_ABORTIFHUNG | SMTO_BLOCK)` liveness check, and restored `guard.restore()` on `MSG_ENABLEDS` /
+    `MSG_ENABLEDSUIONLY` failure.
+  - Added `Ready::{status, opened, take_request}` and `Transferred` / `MemoryTransfer` `{status, reset}` so state-6
+    and state-7 `CloseRequested` paths read `DAT_STATUS` before resetting and service concurrent `list` requests
+    during slow batch sends.
+- **`scan-device::twain` (`id.rs`, `error.rs`, `pixels.rs`, `caps.rs`, `settings.rs`, `batch.rs`, `session.rs`):**
+  - Accounted for `String::from_utf8_lossy` `U+FFFD` expansion when checking `TW_STR32` (`<= 32` raw bytes) in
+    `id.rs`; mapped `CAPBADOPERATION | BADPROTOCOL` on `MSG_ENABLEDS` to `ScanError::SettingsRefused` in
+    `error.rs`.
+  - Enforced `MAX_IMAGE_BYTES = 512 MiB` and fallible allocations (`try_reserve_exact`) in `pixels.rs` and
+    `batch.rs`; accepted total bpp (`24 | 48`) in `DAT_IMAGEINFO.BitsPerSample`, 32-bit `BGRX` DIBs, luminance
+    1-bit DIB palettes, and 8-bit color/unreferenced DIB palettes; cropped undefined-size overscan rows/columns to
+    state-7 `(w7, h7)` while preserving `scan-device-seam.md` §3's MSB-first `Bw1` layout regardless of
+    `Twain_DS_sample01`'s `ICAP_BITORDER = TWBO_LSBFIRST` quirk.
+  - Handled integral `Item::Fix32` values on integer capabilities, dimensionless `TWUN_PIXELS` `1.0` resolution
+    containers, non-zero physical origin `(bounds.left, bounds.top)` layout frames, `TW_RANGE` step snapping,
+    `TWSX_FILE` `CHECKSTATUS` fallback, and `ICAP_UNDEFINEDIMAGESIZE = 0` on `TWSX_NATIVE`.
+  - Extracted `SheetTracker` in `batch.rs` (handling blank-back skips, stuck `TWCS_TOP`, back-first duplex, sheet
+    cancellation boundaries, and `u32::MAX` overflow), serviced `Remote` `list` requests in state 6, captured
+    `status()` before `reset()` on `CloseRequested` across states 5–7, gated `stop_feeder()` on `Source::Feeder`,
+    and preserved completed batch results if post-batch step-down fails.
+  - Replaced irreversible process-wide session poisoning with live `StaActivity` tracking (`in_flight` + `exited`)
+    and a 4-state `Open` gate (`QUEUED`, `RUNNING`, `COMPLETED`, `ABANDONED`) so `list` timeouts never poison an
+    active device and timed-out `open` calls close any orphaned `Source` on the STA thread.
+- **`scan-worker` (`sys.rs`, `client/worker.rs`, `serve.rs`, `twain_worker.rs`, `stop_handle.rs`, `justfile`):**
+  - Hardened Unix `isolate_stdout` (`fcntl(1, F_DUPFD_CLOEXEC, 0)` without borrowing a potentially closed fd 1, plus
+    `EINTR` retry on `dup2`) and Windows `isolate_stdout` (rejecting `orig == STD_ERROR_HANDLE`, inheritable `NUL`
+    handle for driver child processes, and closing orphaned `orig` handles); logged `isolate_stdout` failures to
+    stderr in `serve`.
+  - Bounded cross-thread `WindowGuard::drop` with 250 ms `SendMessageTimeoutW`, wrapped test Win32 UI threads in
+    `UiPump` drop guards, checked `child.try_wait()` in `StopHandle::stop()` so an already-exited worker preserves
+    `Error::Crashed` rather than masking as `Error::Aborted`, tightened `tests/twain_worker.rs` assertions, and
+    added `i686` `stop_handle` execution to `just scan-worker-twain-test`.

@@ -1,26 +1,27 @@
 # Status
 
-As of 2026-11-12.
+As of 2026-11-13.
 
 **S0 slice 9 (`twain-dsm` 0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker` Windows
-hardening) is built on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`). **S0 slices 1, 1a, 2, 3, 4, 5, 7
-and 8 are merged** (pull requests #2, #7, #3, #6, #8, #9, #1 and #4, squashed; #5 recorded slice 8's close);
-slices 7, 8 and 9 from the Windows machine. It's a git repository at github.com/sheaf-pdf/pdf-scan (public;
-`master`).
+hardening) is built and code-reviewed on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`). **S0 slices 1,
+1a, 2, 3, 4, 5, 7 and 8 are merged** (pull requests #2, #7, #3, #6, #8, #9, #1 and #4, squashed; #5 recorded
+slice 8's close); slices 7, 8 and 9 from the Windows machine. It's a git repository at
+github.com/sheaf-pdf/pdf-scan (public; `master`).
 
-- **Running: S0 slice 9, on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`):
-  - `twain-dsm` 0.1.0-alpha.1, ready to publish (`just twain-dsm-package`, Windows `just public-api` reading
-    3,665 items with 0 unsafe failures, `TEST-14`): `DG_IMAGE / DAT_IMAGELAYOUT`, `DG_CONTROL / DAT_STATUS`,
-    caller parent windows (`Ui::ShownOwned`, `Source::settings_ui(Option<u64>)`) with canonical 32-bit `HWND`
-    and same-thread deadlock checks plus `EnableWindow` restore, `#![warn(missing_docs)]`, `docs.rs` Windows
-    target metadata, `README.md`, and `CHANGELOG.md`.
+- **Running: S0 slice 9, on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`; 5 steps + 4-agent adversarial
+  code review fixed):
+  - `twain-dsm` 0.1.0-alpha.1, ready to publish (`just twain-dsm-package`, Windows `just public-api` with 0 unsafe
+    failures, `TEST-14`): `DG_IMAGE / DAT_IMAGELAYOUT`, `DG_CONTROL / DAT_STATUS` across states 4 to 7, caller
+    parent windows (`Ui::ShownOwned`, `Source::settings_ui(Option<u64>)`) with canonical 32-bit `HWND` + `IsWindow`
+    checks, `window_belongs_to_current_thread`, and bounded `EnableWindow` restore, `#![warn(missing_docs)]`,
+    `docs.rs` Windows target metadata, `README.md`, and `CHANGELOG.md`.
   - `scan-device`'s `twain` backend (`scan_device::twain::TwainBackend` behind `feature = "twain"`,
     `#![forbid(unsafe_code)]` preserved): lazy process-wide STA `Session`, `twain32:`/`twain64:` ids and `BadId`
     pre-checks, auto-selected TWAIN 2 callback vs 1.x event delivery, capabilities and sticky processing resets,
     mutual exclusion of `Paper::Auto` border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005` mm
     tolerance), memory strip/tile/undefined-size and native DIB pixel assembly, `TWEI_PAGESIDE`, sheet-granular
-    cancel, `settings_window`, 106 unit tests on both `x86_64` and `i686` (`TEST-12`), and 9 sample-source
-    integration tests scanning in both bitnesses.
+    cancel, `settings_window` (rejecting same-thread `HWND`s up front), 114 unit tests on both `x86_64` and `i686`
+    (`TEST-12`), and 8 sample-source integration tests scanning in both bitnesses.
   - `scan-worker` Windows hardening and dual-bitness TWAIN: runtime `sane-dl`/`libloading` dependency dropped
     (inlining `SANE_CONFIG_DIR` + `LC_ALL=C`), `serve` protocol output isolated from noisy driver `stdout` writes
     (Win32 handle + UCRT fd 1 to `NUL`; Unix fd 1 to `/dev/null`), Windows `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`

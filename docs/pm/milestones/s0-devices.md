@@ -279,33 +279,38 @@ merged first.
        (`MSG_OPENDSM` loads every installed driver: the seam note's section 1).
      - **Not tried:** a memory transfer, a cancel, a jam the driver reports (the jammed sheet scanned all the
        same), an empty feeder: slice 9's checks and slice 12's.
-   - **Built 2026-11-11 to 12** (`slices/s0-9-twain-backend.md`, on branch `s0-9-twain-backend`):
+   - **Built and code-reviewed 2026-11-11 to 13** (`slices/s0-9-twain-backend.md`, on branch `s0-9-twain-backend`):
      - **`twain-dsm` 0.1.0-alpha.1, ready to publish:** caller parent windows (`Ui::ShownOwned(u64)`,
-       `Source::settings_ui(Option<u64>)`, `Error::InvalidWindow`) validated for canonical 32-bit `HWND` range,
-       `IsWindow`, and non-owning caller thread, with an `EnableWindow` restore guard on step-down;
+       `Source::settings_ui(Option<u64>)`, `Error::InvalidWindow`) validated for canonical 32-bit `HWND` range and
+       `IsWindow`, with `window_belongs_to_current_thread` for blocking cross-thread callers and an `EnableWindow`
+       restore guard on enable failure and step-down (bounded by `SendMessageTimeoutW` on cross-thread owners);
        `DG_IMAGE / DAT_IMAGELAYOUT` (`TW_IMAGELAYOUT` checked against `twain.h` in both bitnesses, `ImageLayout`,
        `Source` and `Ready` methods using `MSG_GET`/`MSG_GETDEFAULT`/`MSG_RESET`/`MSG_SET`) and
-       `DG_CONTROL / DAT_STATUS` (`Source::status`, `Enabled::status`); `#![warn(missing_docs)]`, `docs.rs`
-       `x86_64-pc-windows-msvc` target, `README.md`, `CHANGELOG.md`, `just twain-dsm-package`, and Windows
-       `just public-api` (`TEST-14`, 3,665 items read, 0 unsafe failures).
+       `DG_CONTROL / DAT_STATUS` (`status` across states 4 to 7, plus `Ready::{opened, take_request}` and
+       `Transferred` / `MemoryTransfer` `reset`); `#![warn(missing_docs)]`, `docs.rs` `x86_64-pc-windows-msvc`
+       target, `README.md`, `CHANGELOG.md`, `just twain-dsm-package`, and Windows `just public-api` (`TEST-14`,
+       0 unsafe failures).
      - **`scan-device`'s `twain` backend** (`scan_device::twain::TwainBackend` behind `feature = "twain"`,
        `#![forbid(unsafe_code)]` preserved, zero breaking changes to the model): process-wide lazy STA `Session`
        matching `twain-dsm`'s `RunLock` and `Loaded::path()` (concurrent `list` routed via `Remote` without
-       poisoning an open device); `twain32:`/`twain64:` ids and `BadId` pre-checks before loading `TWAINDSM.dll`;
-       auto-selected `Delivery::Callback` (`DF_DS2`) vs `Delivery::Events`; capabilities across all `TWUN_*`
-       units, sticky processing resets (`ICAP_AUTODISCARDBLANKPAGES`, `ICAP_AUTOMATICROTATE`, `CAP_INDICATORS`),
-       and mutual exclusion of `Paper::Auto` border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005`
-       mm tolerance); `TWSX_MEMORY` (strip, tile, and undefined `width`/`length == -1`) and `TWSX_NATIVE` DIB
-       transfers assembled into `RawImage`; `TWEI_PAGESIDE`, unexpected `CloseRequest` status/feeder inspection,
-       sheet-granular cancel, and `settings_window`; 106 unit tests passing on both `x86_64-pc-windows-msvc` and
-       `i686-pc-windows-msvc` (`TEST-12`), plus 9 sample-source integration tests in both bitnesses.
+       poisoning an open device, and abandoned timed-out opens closed cleanly on the STA thread);
+       `twain32:`/`twain64:` ids (`<=32` `TW_STR32` bytes after UTF-8 lossy decoding) and `BadId` pre-checks before
+       loading `TWAINDSM.dll`; auto-selected `Delivery::Callback` (`DF_DS2`) vs `Delivery::Events`; capabilities
+       across all `TWUN_*` units, sticky processing resets (`ICAP_AUTODISCARDBLANKPAGES`, `ICAP_AUTOMATICROTATE`,
+       `CAP_INDICATORS`), and mutual exclusion of `Paper::Auto` border detection vs `Paper::Size` `DAT_IMAGELAYOUT`
+       frames (`0.005` mm tolerance); `TWSX_MEMORY` (strip, tile, and undefined `width`/`length == -1`) and
+       `TWSX_NATIVE` DIB transfers assembled into `RawImage`; `TWEI_PAGESIDE`, unexpected `CloseRequest`
+       status/feeder inspection across states 5 to 7, sheet-granular cancel, and `settings_window`; 114 unit tests
+       passing on both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc` (`TEST-12`), plus 8 sample-source
+       integration tests in both bitnesses.
      - **`scan-worker` Windows hardening and 32/64-bit TWAIN:** runtime `sane-dl`/`libloading` dependency dropped
        (`SANE_CONFIG_DIR` + `LC_ALL=C` inlined in `client/spawn.rs`); `serve`'s protocol stream isolated onto a
        private non-inheritable handle/descriptor with `STD_OUTPUT_HANDLE` + UCRT fd 1 (and Unix fd 1) redirected
        to `NUL` / `/dev/null` before any driver loads; Windows `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` containment
        (`FEAT-14`); cross-thread `StopHandle` + `Error::Aborted` (`FEAT-17`) and client `WindowGuard`; concurrent
        `Client::list_twain` -> `TwainList` merging 64- and 32-bit listings (64-bit preferred, 32-bit-only kept,
-       single-side failures surfaced in `other_failed`), tested end-to-end driving both 64-bit and `i686` workers.
+       single-side failures surfaced in `other_failed`), tested end-to-end driving both 64-bit and `i686` workers;
+       4 parallel adversarial code reviews run and every finding fixed.
 10. **scan-device's `wia` backend:** its STA thread, the feeder and duplex, errors by code. Checked against a
     fake of the WIA calls behind a trait (no virtual WIA device installs without a person).
 11. **The model frozen:** the seam note's unknowns all answered, `scan-device` and `scan-worker` out of 0.0.x
