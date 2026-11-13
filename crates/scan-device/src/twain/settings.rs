@@ -60,6 +60,9 @@ pub(super) fn apply(
     let allow_16bit = transfer == TransferMech::Memory;
 
     let source_now = negotiate_source(source, asked.source, allow_16bit, units)?;
+    if source_now == Source::Feeder {
+        let _ = set_optional_int(source, ffi::CAP_AUTOFEED, 1, ItemType::Bool)?;
+    }
     let duplex_now = negotiate_duplex(source, source_now, asked.duplex)?;
     let (format_now, polarity) = negotiate_format(source, asked.format, allow_16bit)?;
     let (across_dpi, down_dpi, whole_across_dpi) = negotiate_resolution(source, asked.dpi, units)?;
@@ -750,7 +753,10 @@ fn set_optional_int(
 
 /// Reads the current boolean state of `cap` (`Some(true)` for non-zero, `Some(false)` for `0`,
 /// `None` if unsupported).
-fn read_bool_cap(source: &mut dyn CapSource, cap: u16) -> Result<Option<bool>, ScanError> {
+pub(super) fn read_bool_cap(
+    source: &mut dyn CapSource,
+    cap: u16,
+) -> Result<Option<bool>, ScanError> {
     Ok(opt(source.get_current(cap))?
         .or(opt(source.get(cap))?)
         .and_then(|c| current_int(&c))
@@ -797,10 +803,16 @@ mod tests {
         );
         src.caps
             .insert(ffi::ICAP_BITORDER, MockCap::one(Item::UInt16(0)));
+        src.caps
+            .insert(ffi::CAP_AUTOFEED, MockCap::one(Item::Bool(false)));
 
         let asked = Settings::new(Source::Feeder, 300, Format::Rgb8);
         let taken = apply(&mut src, &asked, false).expect("apply succeeds");
         assert_eq!(taken.transfer, TransferMech::Memory);
+        assert_eq!(
+            current_int(&src.get_current(ffi::CAP_AUTOFEED).unwrap()),
+            Some(1)
+        );
         assert_eq!(
             current_int(&src.get_current(ffi::ICAP_AUTODISCARDBLANKPAGES).unwrap()),
             Some(i64::from(ffi::TWBP_DISABLE))

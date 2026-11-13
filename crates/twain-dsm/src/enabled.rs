@@ -13,7 +13,7 @@ use crate::dsm::{Dib, Dsm};
 use crate::error::{Error, Refused};
 use crate::ext_info::{self, ExtInfo};
 use crate::ffi;
-use crate::states::{Delivery, ImageLayout, Source, image_layout_read};
+use crate::states::{Delivery, ImageLayout, Opened, Source, image_layout_read};
 use crate::thread::{Level, Pumped, Twain, deadline};
 use crate::window;
 
@@ -315,6 +315,12 @@ impl<'t, T> Enabled<'t, T> {
 
     fn dsm(&self) -> &'static Dsm {
         self.source().dsm()
+    }
+
+    /// The connection beneath: to list the sources (`Opened::sources`) while
+    /// this source is enabled.
+    pub fn opened(&self) -> &Opened<'t, T> {
+        self.source().opened()
     }
 
     /// Whether this is [`Source::settings_ui`]'s, which no transfer follows.

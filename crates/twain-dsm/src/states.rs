@@ -186,6 +186,17 @@ impl<'t, T> Opened<'t, T> {
         self.twain().app.get()
     }
 
+    /// Checks that `which` names the same DSM file this connection loaded
+    /// (by volume and file id, across WoW64 redirection and links), returning
+    /// [`LoadError::Elsewhere`] if it names another.
+    pub fn check_load(&self, which: Load) -> Result<(), LoadError> {
+        let path = match which {
+            Load::System => dsm::system_dsm(),
+            Load::Path(path) => path,
+        };
+        dsm::load(&path).map(|_| ())
+    }
+
     /// The sources the DSM finds (`MSG_GETFIRST`, then `MSG_GETNEXT` to the
     /// end of the list).
     pub fn sources(&self) -> Result<Vec<SourceId>, Error> {

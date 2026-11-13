@@ -17,9 +17,9 @@
 //! `TWAINDSM.dll` is loaded lazily on the first [`list`](crate::Backend::list) or
 //! [`open`](crate::Backend::open), never when [`TwainBackend::new`] is called. By default it loads
 //! from `%SystemRoot%\System32\TWAINDSM.dll` (which Windows' WoW64 redirects to `SysWOW64` inside a
-//! 32-bit worker), verifying the Authenticode signature; [`TwainBackend::with_dsm_path`] loads an
-//! explicit absolute path (such as a bundled `TWAINDSM.dll` shipped beside the executable) without
-//! the Authenticode check while still verifying the PE machine header.
+//! 32-bit worker); [`TwainBackend::with_dsm_path`] loads an explicit path (such as a bundled
+//! `TWAINDSM.dll` shipped beside the executable), still checking its PE machine header,
+//! Authenticode signature, and `TWAIN Working Group` signer before running its code.
 //!
 //! Every `TwainBackend` and open device in a process shares one lazy single-threaded apartment
 //! (STA) thread and message-only window (`twain_dsm::run`). When the last backend and device in
@@ -70,15 +70,19 @@ use std::time::Duration;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
+mod batch;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod caps;
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod error;
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod id;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod pixels;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(windows)]
+mod session;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod settings;
 
 /// How TWAIN state-5 notifications (`MSG_XFERREADY`, `MSG_CLOSEDSREQ`, `MSG_CLOSEDSOK`,
@@ -105,6 +109,8 @@ pub struct TwainBackend {
     dsm_path: Option<PathBuf>,
     delivery: Option<Delivery>,
     native_transfer: bool,
+    #[cfg(windows)]
+    session: Option<std::sync::Arc<session::Session>>,
 }
 
 impl TwainBackend {
@@ -115,8 +121,8 @@ impl TwainBackend {
         TwainBackend::default()
     }
 
-    /// Loads `TWAINDSM.dll` from the explicit absolute `path` (checking its PE machine header
-    /// without requiring an Authenticode signature) instead of `%SystemRoot%\System32\TWAINDSM.dll`.
+    /// Loads `TWAINDSM.dll` from `path` (checking its PE machine header, Authenticode signature,
+    /// and `TWAIN Working Group` signer) instead of `%SystemRoot%\System32\TWAINDSM.dll`.
     #[must_use]
     pub fn with_dsm_path(mut self, path: impl Into<PathBuf>) -> TwainBackend {
         self.dsm_path = Some(path.into());
@@ -138,8 +144,40 @@ impl TwainBackend {
         self.native_transfer = true;
         self
     }
+
+    #[cfg(windows)]
+    fn session(&mut self) -> Result<std::sync::Arc<session::Session>, ScanError> {
+        if let Some(session) = &self.session {
+            return Ok(std::sync::Arc::clone(session));
+        }
+        let session = session::shared()?;
+        self.session = Some(std::sync::Arc::clone(&session));
+        Ok(session)
+    }
 }
 
+#[cfg(windows)]
+impl Backend for TwainBackend {
+    fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
+        let session = self.session()?;
+        session.list(self.dsm_path.clone(), deadline)
+    }
+
+    fn open(&mut self, stored: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
+        let expected_name = id::product_name(stored)?.to_owned();
+        let session = self.session()?;
+        session.open(
+            self.dsm_path.clone(),
+            self.delivery,
+            self.native_transfer,
+            stored,
+            expected_name,
+            deadline,
+        )
+    }
+}
+
+#[cfg(not(windows))]
 impl Backend for TwainBackend {
     fn list(&mut self, _deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
         let _ = (&self.dsm_path, &self.delivery, self.native_transfer);

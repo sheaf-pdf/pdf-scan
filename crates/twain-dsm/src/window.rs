@@ -27,14 +27,15 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
-    CreateSemaphoreW, GetCurrentProcessId, INFINITE, ReleaseSemaphore, WaitForSingleObject,
+    CreateSemaphoreW, GetCurrentProcessId, GetCurrentThreadId, INFINITE, ReleaseSemaphore,
+    WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, IsWindow, MSG,
-    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
-    QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_NULL, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetWindowThreadProcessId, IsWindow, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+    PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
+    TranslateMessage, WM_APP, WM_CLOSE, WM_NULL, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::error::{Error, RunError};
@@ -443,14 +444,12 @@ impl OwnerGuard {
     }
 }
 
-/// Validates a caller's Win32 `HWND` integer: must be a canonical 32-bit
-/// handle (zero-extended `1..u32::MAX` or sign-extended `0xFFFF_FFFF_8000_0000..u64::MAX`)
-/// that `IsWindow` recognises as a live window.
-pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
+/// Resolves `raw` as a canonical 32-bit Win32 `HWND` recognized by `IsWindow`.
+fn resolve_hwnd(raw: u64) -> Option<HWND> {
     let canonical =
         (1..u64::from(u32::MAX)).contains(&raw) || (0xFFFF_FFFF_8000_0000..u64::MAX).contains(&raw);
     if !canonical {
-        return Err(Error::InvalidWindow { hwnd: raw });
+        return None;
     }
     let zero_ext = (raw as u32 as usize) as HWND;
     let sign_ext = (raw as u32 as i32 as isize) as HWND;
@@ -458,17 +457,43 @@ pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
     // no memory; 0, HWND_BROADCAST (0xFFFF) and INVALID_HANDLE_VALUE (-1) all
     // return 0. Both zero-extended and LongToHandle sign-extended forms are
     // checked for 32/64-bit interop.
-    let hwnd = if unsafe { IsWindow(zero_ext) } != 0 {
-        zero_ext
-    } else if unsafe { IsWindow(sign_ext) } != 0 {
-        sign_ext
+    if unsafe { IsWindow(zero_ext) } != 0 {
+        return Some(zero_ext);
+    }
+    // SAFETY: Same User32 handle-table lookup for the sign-extended form.
+    if unsafe { IsWindow(sign_ext) } != 0 {
+        Some(sign_ext)
     } else {
-        return Err(Error::InvalidWindow { hwnd: raw });
-    };
+        None
+    }
+}
+
+/// Validates a caller's Win32 `HWND` integer: must be a canonical 32-bit
+/// handle (zero-extended `1..u32::MAX` or sign-extended `0xFFFF_FFFF_8000_0000..u64::MAX`)
+/// that `IsWindow` recognises as a live window.
+pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
+    let hwnd = resolve_hwnd(raw).ok_or(Error::InvalidWindow { hwnd: raw })?;
     // SAFETY: `hwnd` was just checked with IsWindow; IsWindowEnabled touches no
     // memory.
     let was_enabled = unsafe { IsWindowEnabled(hwnd) } != 0;
     Ok(OwnerGuard { hwnd, was_enabled })
+}
+
+/// Whether `raw` is a live canonical 32-bit Win32 `HWND` owned by the calling
+/// thread.
+///
+/// A caller thread that blocks waiting on another thread (rather than pumping
+/// its own Win32 message queue) must refuse to pass one of its own windows as a
+/// modal owner: Win32 sends synchronous cross-thread messages (`WM_ENABLE`,
+/// `WM_PARENTNOTIFY`) to the owner's thread, which deadlocks if that thread is
+/// blocked waiting on a channel or pipe.
+pub fn window_belongs_to_current_thread(raw: u64) -> bool {
+    let Some(hwnd) = resolve_hwnd(raw) else {
+        return false;
+    };
+    // SAFETY: `hwnd` was checked with IsWindow, a null process-id pointer asks
+    // only for the owning thread id, and GetCurrentThreadId takes no arguments.
+    unsafe { GetWindowThreadProcessId(hwnd, null_mut()) == GetCurrentThreadId() }
 }
 
 #[cfg(test)]
@@ -538,5 +563,23 @@ mod tests {
         assert_eq!(unsafe { IsWindowEnabled(hwnd) }, 0);
 
         win.destroy();
+    }
+
+    #[test]
+    fn window_belongs_to_current_thread_distinguishes_same_other_and_bogus_threads() {
+        for bad in [0, 0xFFFF, u64::from(u32::MAX), u64::MAX] {
+            assert!(!window_belongs_to_current_thread(bad));
+        }
+        let mine = Window::create().expect("hidden window");
+        let raw_mine = mine.handle() as u64;
+        assert!(window_belongs_to_current_thread(raw_mine));
+
+        let other_sees = std::thread::spawn(move || window_belongs_to_current_thread(raw_mine))
+            .join()
+            .expect("thread");
+        assert!(!other_sees);
+
+        mine.destroy();
+        assert!(!window_belongs_to_current_thread(raw_mine));
     }
 }
