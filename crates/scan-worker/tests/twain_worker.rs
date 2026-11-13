@@ -161,59 +161,67 @@ mod windows_live {
 
     /// Builds (or uses `SCAN_WORKER_I686_EXE`) the 32-bit `i686-pc-windows-msvc` test worker
     /// binary so a 64-bit `Client` can drive both 64-bit and 32-bit TWAIN workers in one test.
-    fn i686_worker_exe() -> &'static Path {
-        static I686_EXE: OnceLock<PathBuf> = OnceLock::new();
-        I686_EXE.get_or_init(|| {
-            if let Some(prebuilt) = std::env::var_os("SCAN_WORKER_I686_EXE") {
-                let path = PathBuf::from(prebuilt);
+    ///
+    /// Returns `Err` only when the `i686-pc-windows-msvc` target toolchain isn't installed; any
+    /// real compile failure panics immediately.
+    fn i686_worker_exe() -> Result<&'static Path, String> {
+        static I686_EXE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+        I686_EXE
+            .get_or_init(|| {
+                if let Some(prebuilt) = std::env::var_os("SCAN_WORKER_I686_EXE") {
+                    let path = PathBuf::from(prebuilt);
+                    assert!(
+                        path.is_file(),
+                        "SCAN_WORKER_I686_EXE is not a file: {}",
+                        path.display()
+                    );
+                    return Ok(path);
+                }
+                let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+                let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("i686-scan-worker");
+                let output = Command::new(env!("CARGO"))
+                    .args([
+                        "build",
+                        "--locked",
+                        "--quiet",
+                        "-p",
+                        "scan-worker",
+                        "--features",
+                        "fake",
+                        "--bin",
+                        "scan-worker-fake",
+                        "--target",
+                        "i686-pc-windows-msvc",
+                        "--target-dir",
+                    ])
+                    .arg(&target)
+                    .current_dir(&workspace)
+                    .env_remove("RUSTFLAGS")
+                    .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                    .env_remove("CARGO_BUILD_RUSTFLAGS")
+                    .env_remove("CARGO_BUILD_TARGET")
+                    .output()
+                    .expect("failed to invoke cargo for i686 scan-worker-fake");
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if stderr.contains("E0463") || stderr.contains("target may not be installed") {
+                        return Err("i686-pc-windows-msvc target is not installed".to_owned());
+                    }
+                    panic!("failed to build i686 scan-worker-fake:\n{stderr}");
+                }
+                let built = target
+                    .join("i686-pc-windows-msvc")
+                    .join("debug")
+                    .join("scan-worker-fake.exe");
                 assert!(
-                    path.is_file(),
-                    "SCAN_WORKER_I686_EXE is not a file: {}",
-                    path.display()
+                    built.is_file(),
+                    "built i686 worker missing at {}",
+                    built.display()
                 );
-                return path;
-            }
-            let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-            let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("i686-scan-worker");
-            let output = Command::new(env!("CARGO"))
-                .args([
-                    "build",
-                    "--locked",
-                    "--quiet",
-                    "-p",
-                    "scan-worker",
-                    "--features",
-                    "fake",
-                    "--bin",
-                    "scan-worker-fake",
-                    "--target",
-                    "i686-pc-windows-msvc",
-                    "--target-dir",
-                ])
-                .arg(&target)
-                .current_dir(&workspace)
-                .env_remove("RUSTFLAGS")
-                .env_remove("CARGO_ENCODED_RUSTFLAGS")
-                .env_remove("CARGO_BUILD_RUSTFLAGS")
-                .env_remove("CARGO_BUILD_TARGET")
-                .output()
-                .expect("failed to invoke cargo for i686 scan-worker-fake");
-            assert!(
-                output.status.success(),
-                "failed to build i686 scan-worker-fake:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let built = target
-                .join("i686-pc-windows-msvc")
-                .join("debug")
-                .join("scan-worker-fake.exe");
-            assert!(
-                built.is_file(),
-                "built i686 worker missing at {}",
-                built.display()
-            );
-            built
-        })
+                Ok(built)
+            })
+            .as_deref()
+            .map_err(Clone::clone)
     }
 
     fn twain_worker_64() -> WorkerCommand {
@@ -223,8 +231,8 @@ mod windows_live {
             .env("CAP_XFERCOUNT", "10")
     }
 
-    fn twain_worker_32() -> WorkerCommand {
-        WorkerCommand::new(i686_worker_exe())
+    fn twain_worker_32(exe: &Path) -> WorkerCommand {
+        WorkerCommand::new(exe)
             .arg("twain")
             .arg("--noisy-stdout")
             .env("TWAIN_SHOWCONSOLEMESSAGES", "1")
@@ -233,10 +241,9 @@ mod windows_live {
 
     #[test]
     fn client_drives_both_64_bit_and_32_bit_twain_sample_workers_with_noisy_stdout() {
-        // When the test itself is compiled for 64-bit Windows, `worker("twain")` is 64-bit and
-        // `i686_worker_exe()` is 32-bit; if compiled for 32-bit, run only the 32-bit worker.
+        // When compiled for 32-bit Windows directly, `worker("twain")` is already 32-bit.
         if cfg!(target_pointer_width = "32") {
-            let client = Client::new().worker(Driver::Twain { bits: 32 }, twain_worker_32());
+            let client = Client::new().worker(Driver::Twain { bits: 32 }, twain_worker_64());
             let listed = match client.list(Driver::Twain { bits: 32 }, DEADLINE) {
                 Ok(devs) => devs,
                 Err(Error::Scan(ScanError::NotInstalled { what })) => {
@@ -265,9 +272,24 @@ mod windows_live {
             return;
         }
 
+        // On runners without `TWAIN_DSM_REQUIRE_SAMPLE=1` (e.g. `check` or `msrv` on Windows,
+        // where neither TWAIN nor the `i686-pc-windows-msvc` target is installed), check 64-bit
+        // availability and `i686` target availability cleanly before requiring dual bitness.
+        let exe_32 = match i686_worker_exe() {
+            Ok(exe) => exe,
+            Err(missing) => {
+                assert!(
+                    !require_sample(),
+                    "{missing} with TWAIN_DSM_REQUIRE_SAMPLE=1"
+                );
+                let _ = writeln!(std::io::stderr(), "twain_worker: skipped ({missing})");
+                return;
+            }
+        };
+
         let client = Client::new()
             .worker(Driver::Twain { bits: 64 }, twain_worker_64())
-            .worker(Driver::Twain { bits: 32 }, twain_worker_32());
+            .worker(Driver::Twain { bits: 32 }, twain_worker_32(exe_32));
 
         // 1. Merged listing deduplicates dual-installed `TWAIN2 Software Scanner` in favour of 64-bit.
         let merged = match client.list_twain(DEADLINE) {

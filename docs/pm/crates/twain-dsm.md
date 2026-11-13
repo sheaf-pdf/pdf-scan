@@ -3,9 +3,9 @@
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`; the code's from the repository's root with a
 leading `/`.
 
-**As built by S0 slice 8** (`archive/slices/s0-8-twain-dsm.md`, its "So far" the record), from what the TWAIN spike (S0
-slice 7, `archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working Group's sample source, and
-revised by the slice's code review and fixes.
+**As built by S0 slice 8** (`archive/slices/s0-8-twain-dsm.md`) **and finished for its first publish (`0.1.0-alpha.1`)
+in S0 slice 9** (`slices/s0-9-twain-backend.md`), from what the TWAIN spike (S0 slice 7,
+`archive/slices/s0-7-twain-spike.md`) learned against the TWAIN Working Group's sample source.
 
 - **What:** TWAIN through the Data Source Manager, loaded at run time (M5 proposal 7, M5 ask 3, entry 6, D17):
   the system's `TWAINDSM.dll`, else one the caller names (the app's bundled copy). The specification puts
@@ -105,9 +105,20 @@ revised by the slice's code review and fixes.
     first: at most 16 MiB, a list at most 65,536 items, so no driver's block can exhaust a 32-bit worker. A one
     value sent is padded to the widest item, so a source that reads it as its capability's own type reads
     nothing past it. `set` answers `SetOutcome::Exact` or `Adjusted` (`TWRC_CHECKSTATUS`).
-  - **The driver's window:** `Source::enable(Ui::Shown)` (parented to the hidden window; the application's own
-    window as owner is slice 9's), and `Source::settings_ui()` (`MSG_ENABLEDSUIONLY`) for its settings alone,
-    `Event::CloseOk` when they're saved; both run by hand with the sample (`tests/ui.rs`).
+  - **The driver's window and image layout (completed in S0 slice 9):** `Source::enable(Ui::Shown)` (parented to
+    the hidden window) or `Ui::ShownOwned(u64)`, and `Source::settings_ui(owner: Option<u64>)`
+    (`MSG_ENABLEDSUIONLY`, `Event::CloseOk` when saved), where `owner` is validated for canonical 32-bit Win32
+    `HWND` range (`Error::InvalidWindow { hwnd }`), `IsWindow(hwnd) != 0`, and non-owning caller thread
+    (`window_belongs_to_current_thread`), with an `EnableWindow` restore guard on step-down/drop if a modal
+    driver left `hParent` disabled. `DG_IMAGE / DAT_IMAGELAYOUT` (`ImageLayout`, `Source::image_layout`,
+    `default_image_layout`, `reset_image_layout`, `set_image_layout` with `Error::InvalidFrame` pre-check, and
+    `Ready::image_layout`) uses `MSG_GET` / `MSG_GETDEFAULT` / `MSG_RESET` / `MSG_SET`, and `Source::status` /
+    `Enabled::status` read `DG_CONTROL / DAT_STATUS / MSG_GET`.
+  - **Release packaging (`0.1.0-alpha.1`, S0 slice 9):** `#![warn(missing_docs)]` (with `#[allow(missing_docs)]`
+    on `pub mod ffi`), `#![cfg_attr(docsrs, feature(doc_cfg))]`, `[package.metadata.docs.rs] default-target =
+    "x86_64-pc-windows-msvc"`, `include = ["/src", "/README.md", "/CHANGELOG.md"]`, `README.md`, `CHANGELOG.md`,
+    `just twain-dsm-package`, and Windows `just public-api` (`TEST-14`: 3,665 items read, 1,303 public by path,
+    0 unsafe functions, 0 failures; only `Dib`'s `Send` and `Sync` listed).
   - **Transfers:** `Ready::native` (`Native::Done(Dib, Transferred)` or `Cancelled`; an empty `Dib` if the
     source said done and gave no block, or it wouldn't lock) and `Ready::memory` (refused if no buffer can meet
     the source's sizes), whose `next_buffer` fills the caller's buffer, refused unless TWAIN's rules hold (at
@@ -166,8 +177,5 @@ revised by the slice's code review and fixes.
     transcription is for counsel. `TWAINH.cs` makes it moot.
   - Whether the fi-6130's FUJITSU TWAIN32 needs a visible parent window, a modal enable, or delivery by events
     (a TWAIN 1.x driver can't call back): the hardware, slice 12.
-  - The application's own window as the driver's window's owner: slice 9 (seam, section 9).
-  - Whether the crate offers the 64-bit app's view of 32-bit sources (it can't load them), or leaves the
-    merge to `scan-worker` (leaning: the worker, proposal 4).
-  - Fuzzing the decoders with `cargo-fuzz` (TEST-11); the API's first user, the `twain` backend (slice 9),
-    before it's made ready to publish.
+  - Fuzzing the decoders with `cargo-fuzz` (TEST-11). (Owner windows and the 32/64-bit list merge in
+    `scan-worker` were settled in S0 slice 9.)

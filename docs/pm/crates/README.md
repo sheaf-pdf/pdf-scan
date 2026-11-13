@@ -18,14 +18,15 @@ in the app's process unless the app asks: `scan-worker` is how sheaf uses them (
 
 - [`scan-device`](scan-device.md): the device model (DeviceInfo, Caps, Settings, RawPage, ScanError) and its
   backends: fake, sane, twain, wia, ica. Its design note, how each driver API meets the model:
-  [`scan-device-seam.md`](scan-device-seam.md). Built in S0 slice 3, the model and its `fake`: 0.0.0,
-  provisional, not published.
+  [`scan-device-seam.md`](scan-device-seam.md). Built in S0 slices 3 (`fake`), 5 (`sane`), and 9 (`twain`):
+  0.0.0, provisional, not published.
 - [`sane-dl`](sane-dl.md): SANE loaded at run time, with its own bindings, typed options and frame assembly.
   Built in S0 slice 1: 0.1.0-alpha.1, ready to publish, not published.
 - [`twain-dsm`](twain-dsm.md): TWAIN through the system's DSM, its seven states as types, in both bitnesses.
+  Built in S0 slice 8 and finished in S0 slice 9: 0.1.0-alpha.1, ready to publish, not published.
 - [`scan-worker`](scan-worker.md): drivers in a process of their own: the JSON-lines protocol, the worker, the
-  client and its watchdog. Built in S0 slice 4, on `scan-device`'s model and fake: 0.0.0, provisional, not
-  published.
+  client and its watchdog, stdout isolation, Windows Job Object containment, `StopHandle`, and 32/64-bit TWAIN
+  list merge. Built in S0 slices 4 and 9: 0.0.0, provisional, not published.
 
 ## Pages
 

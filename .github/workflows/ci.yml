@@ -82,14 +82,16 @@ jobs:
   # TWAIN through the TWAIN Working Group's sample data source, a virtual
   # scanner that reads its pages from a file: the DSM and the source installed
   # by the script (the runner is elevated, so msiexec asks nothing), then
-  # twain-dsm's tests in both bitnesses, its bindings checked against twain.h.
-  # Its own timeout, since a hung driver call would otherwise hold the runner
-  # for hours.
+  # twain-dsm's, scan-device's and scan-worker's tests and lints in both
+  # bitnesses (including scan-device's 32-bit RawImage layout unit tests,
+  # TEST-12, and a 64-bit client driving both 64-bit and i686 workers), with
+  # twain-dsm's bindings checked against twain.h. Its own timeout, since a hung
+  # driver call would otherwise hold the runner for hours.
   twain-dsm:
-    name: twain-dsm through the sample source
+    name: TWAIN through the sample source (64- and 32-bit)
     runs-on: windows-latest
-    timeout-minutes: 15
-    # The sample is installed below, so a twain-dsm test that can't find it
+    timeout-minutes: 20
+    # The sample is installed below, so any TWAIN test that can't find it
     # fails rather than skipping.
     env:
       TWAIN_DSM_REQUIRE_SAMPLE: "1"
@@ -135,6 +137,16 @@ jobs:
         run: just twain-dsm-test i686-pc-windows-msvc
       - name: twain-dsm's lints, 32-bit
         run: just twain-dsm-clippy i686-pc-windows-msvc
+      - name: scan-device TWAIN and unit tests, 64-bit
+        run: just scan-device-twain-test x86_64-pc-windows-msvc
+      - name: scan-device TWAIN and 32-bit RawImage unit tests, 32-bit
+        run: just scan-device-twain-test i686-pc-windows-msvc
+      - name: scan-device's lints, 32-bit
+        run: just scan-device-clippy i686-pc-windows-msvc
+      - name: scan-worker's lints, 32-bit
+        run: just scan-worker-clippy i686-pc-windows-msvc
+      - name: scan-worker 32-bit unit tests, StopHandle, Job Object, and dual-bitness TWAIN
+        run: just scan-worker-twain-test
 
   # Without SANE installed: what the oldest Rust can break is compiling, and
   # the tests that need libsane say they skipped.
@@ -183,16 +195,16 @@ jobs:
       - name: Test
         run: just twain-dsm-msrv
 
-  # The crate's sources have no platform code, and the check job runs its
-  # tests on all three systems, so one runner checks what the oldest Rust can
-  # break. Its tests' Windows branches (the crash test's constant and exit
-  # code read, and the SANE backend's test that SANE isn't installed there)
-  # are left uncompiled on that Rust, which is accepted. SANE isn't
-  # installed here, so the SANE backend's tests through the real libsane say
-  # they skipped, while those through the fake libsane run.
+  # Both Unix (the SANE backend) and Windows (the TWAIN backend) branches of
+  # scan-device build and run their pure and fake tests on its minimum Rust;
+  # tests that need libsane or TWAIN's sample source say they skipped.
   scan-device-msrv:
-    name: scan-device on its minimum Rust
-    runs-on: ubuntu-latest
+    name: scan-device on its minimum Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -204,17 +216,17 @@ jobs:
       - name: Test
         run: just scan-device-msrv
 
-  # The check job runs the crate's tests on all three systems, so one runner
-  # checks what the oldest Rust can break. Its Windows branches (the worker
-  # started with creation_flags, stable since Rust 1.16, and its tests'
-  # constant and exit code read) are left uncompiled on that Rust, which is
-  # accepted. SANE isn't installed here, so the SANE worker's tests through
-  # the real libsane say they skipped, while those through the fake libsane
-  # run. Its tests run for the crate alone (-p), as a dependent's build has
-  # it, beside the check job's workspace run.
+  # Both Unix (fd stdout isolation, process groups, fake libsane) and Windows
+  # (handle/CRT stdout isolation, Job Objects, WindowGuard) branches of
+  # scan-worker build and run on its minimum Rust, for the crate alone (-p),
+  # beside the check job's workspace run.
   scan-worker-msrv:
-    name: scan-worker on its minimum Rust
-    runs-on: ubuntu-latest
+    name: scan-worker on its minimum Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -227,8 +239,9 @@ jobs:
         run: just scan-worker-msrv
 
   # sane-dl packaged as a publish would, in a fresh target directory, and
-  # what the package holds checked: its sources, README, CHANGELOG, manifest
-  # and lock, nothing else. A dry run: nothing is published.
+  # what the package holds checked: its sources, build script, README,
+  # CHANGELOG, manifest and lock, nothing else. A dry run: nothing is
+  # published.
   sane-dl-package:
     name: sane-dl packaged as a publish would
     runs-on: ubuntu-latest
@@ -241,16 +254,36 @@ jobs:
       - name: Package, and check what the package holds
         run: just sane-dl-package
 
-  # sane-dl's public API read from rustdoc's JSON, hidden items included: no
-  # unsafe function, method or trait, no unsafe function pointer, no raw
-  # pointer in a public signature, no static mut or target_feature function,
-  # no re-export of another crate's item (scripts/public-api.jq says it all);
-  # each unsafe impl and union listed. On a pinned nightly, so the JSON's
-  # format moves only when the pin does, never under an unrelated pull
-  # request.
+  # twain-dsm packaged as a publish would on Windows (so its full cfg(windows)
+  # implementation compiles during verification), and what the package holds
+  # checked: its sources, README, CHANGELOG, manifest and lock, nothing else.
+  twain-dsm-package:
+    name: twain-dsm packaged as a publish would
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: extractions/setup-just@v4
+      - name: Package, and check what the package holds
+        run: just twain-dsm-package
+
+  # Each publish-ready crate's public API read from rustdoc's JSON, hidden
+  # items included (sane-dl on Ubuntu and Windows; twain-dsm on Windows, where
+  # its cfg(windows) API is built, TEST-14): no unsafe function, method or
+  # trait, no unsafe function pointer, no raw pointer in a public signature,
+  # no static mut or target_feature function, no re-export of another crate's
+  # item (scripts/public-api.jq says it all); each unsafe impl and union
+  # listed. On a pinned nightly, so the JSON's format moves only when the pin
+  # does, never under an unrelated pull request.
   public-api:
-    name: sane-dl's public API holds no unsafe
-    runs-on: ubuntu-latest
+    name: Public API holds no unsafe (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:

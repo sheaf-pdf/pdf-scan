@@ -33,6 +33,16 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 `Encoded` is asked for, the settings window takes an owner, `Stopped` moves to `scan-worker`'s client, and
 `ScanError` gains `SettingsRefused`, `AccessDenied`, `TimedOut` and `Unsupported`.
 
+**Revised 2026-11-11 and 12 by S0 slice 9, `scan-device`'s `twain` backend, 32-bit worker, and Windows hardening**
+(`slices/s0-9-twain-backend.md`), settling the slice-9 TWAIN rows in sections 1, 2, 3, 6, 7 and 9 and the
+unknowns table, with zero breaking changes to the model: `Client::list_twain` merges concurrent 64- and 32-bit
+TWAIN listings in favour of 64-bit while keeping 32-bit-only drivers; `BadId`, `SettingsRefused`, `AccessDenied`
+and `Unsupported` map cleanly from TWAIN pre-checks and condition codes; `Paper::Size` sets `DAT_IMAGELAYOUT`
+while disabling sticky border detection and undefined image size (and `Paper::Auto` resets `DAT_IMAGELAYOUT`
+first); `ICAP_AUTOMATICROTATE` and `ICAP_AUTODISCARDBLANKPAGES` are turned off per batch; cancel wakes the STA
+loop every 100 ms in `Enabled::next_event`; and `WindowOwner` is validated for canonical 32-bit `HWND` range,
+`IsWindow`, and non-owning caller thread, with `EnableWindow` restored on failure/step-down.
+
 **Revised 2026-11-08 and 09 by S0 slice 8, `twain-dsm`, on the Windows machine beside slice 2, merged after it**
 (`archive/slices/s0-8-twain-dsm.md`, "So far"; slice 2's "as it left them", above, is of slice 7's TWAIN rows before
 these changes), in sections 3, 8 and the unknowns, where building the crate changed what the spike had:
@@ -373,12 +383,12 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 | `Busy` | `DEVICE_BUSY`, at open too (`pnm` opens one device at a time) | `TWCC_MAXCONNECTIONS` | `WIA_ERROR_BUSY` | to confirm |
 | `Gone` (unplugged, offline) | `IO_ERROR` after opening; `INVAL` from `sane_open`, for a device gone and a backend not installed alike (section 1) | `TWCC_CHECKDEVICEONLINE` (offline at state 3 or less, lost at 4 or more) | `WIA_ERROR_OFFLINE` | the device removed |
 | `Driver { message, shown }` | other statuses: `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers; every other `sane-dl` error ("The model, for slice 3", its mapping) | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
-| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`, neither the system's nor the one the app names (its bundled copy: `crates/twain-dsm.md`, slice 8); which the app names, slice 9's | to confirm | to confirm |
-| `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | slice 9's to say | to confirm | to confirm |
-| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`sane_start` in `backend/escl/escl.c`, `backend/lexmark.c`, `backend/pixma/pixma.c` and `backend/hp5590.c`, studied) | slice 9's to say | to confirm | to confirm |
-| `AccessDenied` (S0 slice 2's code review) | `ACCESS_DENIED`: the device's permissions (`epson2`, `epsonds` and `kodakaio` log "check that you have permissions on the device" as `sanei_usb_open` answers it; `pixma` maps its `EACCES` to it: studied), or an authorization the app doesn't give (no callback, FEAT-11) | slice 9's to say | to confirm | to confirm |
-| `TimedOut` (S0 slice 2's code review) | a listing past its deadline (`sane-dl`'s `DeadlineExceeded`, and `ListingPending` after it), in `list` or in `open`'s listing | the DSM walk past `open`'s deadline (slice 9) | to confirm | the browse past `open`'s deadline (to confirm) |
-| `Unsupported` (S0 slice 2's code review) | a settings window asked of a SANE device, which has none (section 9) | slice 9's to say | to confirm | to confirm |
+| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`: `LoadError::NotFound` (`Load::System` or `with_dsm_path`), or off Windows | to confirm | to confirm |
+| `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | refused before loading `TWAINDSM.dll` (S0 slice 9): wrong `Driver::Twain { bits }`, missing `twain32:`/`twain64:` prefix, empty `ProductName`, a `NUL`, or past 32 bytes (`TW_STR32`) | to confirm | to confirm |
+| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`sane_start` in `backend/escl/escl.c`, `backend/lexmark.c`, `backend/pixma/pixma.c` and `backend/hp5590.c`, studied) | `MSG_ENABLEDS` refused with `TWCC_BADVALUE` (S0 slice 9) | to confirm | to confirm |
+| `AccessDenied` (S0 slice 2's code review) | `ACCESS_DENIED`: the device's permissions (`epson2`, `epsonds` and `kodakaio` log "check that you have permissions on the device" as `sanei_usb_open` answers it; `pixma` maps its `EACCES` to it: studied), or an authorization the app doesn't give (no callback, FEAT-11) | `TWCC_DENIED` (S0 slice 9) | to confirm | to confirm |
+| `TimedOut` (S0 slice 2's code review) | a listing past its deadline (`sane-dl`'s `DeadlineExceeded`, and `ListingPending` after it), in `list` or in `open`'s listing | the DSM walk / STA request past `list` or `open`'s deadline (S0 slice 9) | to confirm | the browse past `open`'s deadline (to confirm) |
+| `Unsupported` (S0 slice 2's code review) | a settings window asked of a SANE device, which has none (section 9) | a source with no usable formats or resolutions, or `settings_window` refused with `TWCC_CAPUNSUPPORTED` / `TWCC_BADCAP` (S0 slice 9) | to confirm | to confirm |
 
 **SANE, as `sane-dl` gives it** (S0 slice 1): every status with the function that answered it
 (`Error::Status { status, call }`), statuses SANE doesn't define kept as integers. No libsane at all is no
@@ -791,7 +801,7 @@ pub trait Device: Send {
 **What slice 4 needs of it** (`crates/scan-worker.md`'s first protocol predated it; slice 4 wrote its protocol
 from this). S0 slice 4 built all of it, as the leanings below have it, in `scan-worker` and in `scan-device`'s
 `serde` feature (`crates/scan-worker.md` and `crates/scan-device.md` as built; the design and its decisions in
-`slices/s0-4-scan-worker.md`):
+`archive/slices/s0-4-scan-worker.md`):
 
 - every type plain data the worker can encode (decision 36): a `serde` feature of `scan-device` (leaning: the
   app stores `DeviceInfo` with it too, and the client then makes the `#[non_exhaustive]` structs by decoding,
@@ -889,16 +899,16 @@ Each section's "To settle", gathered, with what settles it:
 | SANE names that change on replugging, per backend; a fallback by vendor and model | **Answered, S0 slice 2** (section 1): each backend's names from its source or man page; `INVAL` at open for a name no longer there; the fallback by backend, vendor and model from a USB connection's name only, over a listing made before the open, in a worker started with the id's one-backend `ConfigDir` (revised by its code review). The fi-6130's name, and what replugging does to it: S0 slice 6 |
 | Whether SANE can stop after the page in flight | **Settled on the `test` backend and the fake, S0 slice 2** (section 7): the page read to `EOF`, no next start, the batch ended, the sheets after left in the feeder. Whether a real feeder has pulled the next sheet in: S0 slice 6 |
 | Whether `twain-dsm` hands over tiles or assembled images; what a DIB's palette becomes | **Settled, S0 slice 7:** tiles and the DIB's block; the backend assembles, decodes and applies the palette (section 3) |
-| How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | S0 slice 9 |
-| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). **S0 slice 8:** requests of the backend's own type served in every state, the source's messages first; inside a DSM call, none (slice 9) |
+| How TWAIN's 32- and 64-bit lists merge (leaning: `scan-worker`'s client) | **Settled, S0 slice 9:** `Client::list_twain` queries registered 64- and 32-bit workers concurrently, orders 64-bit before 32-bit, deduplicates dual-installed sources by `(maker, model, name)` in favour of 64-bit, keeps 32-bit-only drivers, and surfaces single-side failures in `TwainList::other_failed` |
+| How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). **S0 slice 8:** requests of the backend's own type served in every state, the source's messages first; inside a DSM call, `StopHandle` / watchdog terminates the worker (`FEAT-14`, `FEAT-17`, S0 slice 9) |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
-| Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile |
-| The cancel handle and progress through `in-progress` | **Taken by S0 slice 2, for review** (section 7; "The model, for slice 3"); the TWAIN thread's wake-up on a cancel, S0 slice 9 |
-| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | S0 slice 12, the hand checks; the `ica` slice |
+| Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile (`TwainBackend` auto-selects `Callback` for `DF_DS2` and `Events` for 1.x, S0 slice 9) |
+| The cancel handle and progress through `in-progress` | **Settled, S0 slices 2 and 9:** `in-progress` taken in slice 2; `Enabled::next_event` wakes every 100 ms in `twain/batch.rs` to check cancel between sheets |
+| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | PaperStream IP fills `TWEI_PAGESIDE` (2026-11-09 probe, `milestones/s0-devices.md`); FUJITSU TWAIN32 and WIA by hand in S0 slice 12; the `ica` slice |
 | "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam) |
-| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | S0 slice 4's throughput gate; slice 9 |
+| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | **Settled for S0:** raw transfers easily clear S0 slice 4's throughput gate (~70+ pages/s color in debug on Windows and Linux); `TwainBackend` leaves `encodings` empty in S0 slice 9 |
 | The raw layout's 1-bit polarity and 16-bit byte order | **Settled, S0 slice 2, for review** (section 3): 0 the least intensity at every format, the leftmost pixel in the high bit, padding bits 0, 16-bit little-endian, rows top down and packed, R, G, B; held beside `scanimage`'s PNG |
-| The driver window's owner across processes | **Taken by S0 slice 2's code review** (`WindowOwner`, section 9); which window the app passes, and the driver using it: S0 slice 9 |
+| The driver window's owner across processes | **Settled, S0 slice 9:** `WindowOwner(u64)` validated for canonical 32-bit `HWND`, `IsWindow`, and non-owning caller thread, passed via `Source::settings_ui(Option<u64>)`, with `EnableWindow` restored on step-down or worker failure |
 | Every ICA name marked "to confirm"; its run loop in a worker | The `ica` slice (later) |
 | Where driver-reported patch codes go (FEAT-5) | Later |
 | What a duplex scanner gives after a cancel that lands after a front: its back, before the batch ends (the model's "sheet in flight") | S0 slice 6 (SANE, the fi-6130); S0 slice 12 (TWAIN) |

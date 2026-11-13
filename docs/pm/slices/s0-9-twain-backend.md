@@ -340,3 +340,46 @@ changes):
   WS_CHILD)` + `SetParent` on `hParent` when non-null. Our integration tests verify both `None` (hidden window)
   and `Some(owner)` (with a real Win32 top-level window pumped on its own thread) so cross-thread and
   cross-process parenting + `EnableWindow` recovery are proven empirically.
+
+## So far
+
+- **Step 1 (`2eef030`, pushed):** Prepared `twain-dsm` `0.1.0-alpha.1` with `DG_IMAGE / DAT_IMAGELAYOUT`
+  (`TW_IMAGELAYOUT` in `ffi.rs` and `header_contract.rs` verified in 64- and 32-bit, `ImageLayout`, `Source` and
+  `Ready` layout methods), `DG_CONTROL / DAT_STATUS` (`Source::status`, `Enabled::status`), caller parent windows
+  (`Ui::ShownOwned(u64)`, `Source::settings_ui(Option<u64>)`, `Error::InvalidWindow { hwnd }`,
+  `window_belongs_to_current_thread`, and `EnableWindow` restore guard), `#![warn(missing_docs)]` (0 warnings),
+  `docs.rs` `x86_64-pc-windows-msvc` target metadata, `README.md`, `CHANGELOG.md`, `just twain-dsm-package`, and
+  Windows `twain-dsm:3000` in `just public-api`.
+- **Step 2 (`65a878a`, pushed):** Built the pure cross-platform layers of `scan_device::twain` behind optional
+  `twain = ["dep:twain-dsm"]` (`#![forbid(unsafe_code)]` preserved): `id.rs`, `error.rs`, `pixels.rs` (1/8/24-bit
+  DIB decoder + 1/8/16/24/48-bit strip, sub-row tile, and undefined `width`/`length == -1` memory assembler with
+  $O(1)$ top-down fast path and lazy `Vec<u64>` bitmap promotion), `caps.rs`, `settings.rs`, and non-Windows stub;
+  all 103 `scan-device --lib` unit tests pass on both `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`
+  (`TEST-12`).
+- **Step 3 (`45348a8`, pushed):** Built `session.rs` (process-wide lazy STA `Session` matching `twain-dsm`'s
+  `RunLock` and `Loaded::path()`, concurrent `list` via `Remote` without poisoning an active device), `batch.rs`,
+  and `TwainBackend` / `TwainDevice`, plus 9 end-to-end sample-source integration tests in
+  `/crates/scan-device/tests/twain.rs` (10-page batches, memory vs native pixel parity, custom `Paper::Size` via
+  `DAT_IMAGELAYOUT`, clamping, cancel, same-thread owner refusal, and error mapping) passing in both
+  `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`. Note: `Twain_DS_sample01`'s `ProductName` (`DeviceInfo.name`)
+  is `"TWAIN2 Software Scanner"`, `Manufacturer` (`maker`) is `"TWAIN Working Group"`, and `ProductFamily` (`model`)
+  is `"Software Scan"`.
+- **Step 4 (`514006b`, pushed):** Hardened `scan-worker` and added 32/64-bit TWAIN support:
+  - Dropped `sane-dl` and `libloading` completely from runtime `[dependencies]` (inlining `SANE_CONFIG_DIR` +
+    default `LC_ALL=C` in `client/spawn.rs`; `sane-dl` stays in `[dev-dependencies]` so `tests/support/sane.rs`
+    and `tests/sane_worker.rs` continue compiling cleanly on Windows too, skipping at runtime when SANE isn't
+    installed).
+  - Added `src/sys.rs` (`#![deny(unsafe_code)]` at crate root, `#[allow(unsafe_code)]` confined to `sys`): Unix
+    and Windows `isolate_stdout()` (duplicating the protocol stream non-inheritably and redirecting fd 1 +
+    `STD_OUTPUT_HANDLE` to `/dev/null` / `NUL` before any driver loads), Windows `Job`
+    (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` + `TerminateJobObject`, `FEAT-14`), and Windows `WindowGuard`.
+  - Added `RemoteDevice::stop_handle -> StopHandle` (`FEAT-17`) + `Error::Aborted` (unblocking full
+    `SyncSender<Event>` channels too) and concurrent `Client::list_twain -> TwainList`, verified with 51 unit
+    tests (64- and 32-bit), `tests/stop_handle.rs` (8 tests), and `tests/twain_worker.rs` (5 tests, including a
+    64-bit client driving both 64-bit and `i686` sample workers with `TWAIN_SHOWCONSOLEMESSAGES=1` and
+    `--noisy-stdout`).
+- **Step 5:** Wired `scan-device-twain-test`, `scan-device-clippy`, `scan-worker-twain-test`, and
+  `scan-worker-clippy` into `/justfile` and `/.github/workflows/ci.yml` (`twain-dsm` 64/32-bit job,
+  `twain-dsm-package`, Windows `public-api` `TEST-14` reading 3,665 `twain-dsm` items with 0 unsafe failures, and
+  Ubuntu+Windows MSRV 1.89 matrices for `scan-device` and `scan-worker`), archived `s0-4-scan-worker.md`, moved
+  `FEAT-14`, `FEAT-17`, `TEST-12`, and `TEST-14` to `archive/backlog-done.md`, and synced crate and PM docs.

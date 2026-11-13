@@ -6,19 +6,19 @@ holds them: planned, reviewed, built in steps, code-reviewed, fixed. When a slic
 here says how.
 
 Done: S0 slices 1 (`sane-dl` and the workspace it starts), 1a (`sane-dl`'s public API made safe), 2 (the seam
-note revised) and 3 (`scan-device` provisional), merged (pull requests #2, #7, #3 and #6, CI green on each);
-their plans are in [`archive/slices/s0-1-sane-dl.md`](../archive/slices/s0-1-sane-dl.md),
+note revised), 3 (`scan-device` provisional), 4 (`scan-worker`), and 5 (`scan-device`'s `sane` backend), merged
+(pull requests #2, #7, #3, #6, #8 and #9); their archived plans are in
+[`archive/slices/s0-1-sane-dl.md`](../archive/slices/s0-1-sane-dl.md),
 [`archive/slices/s0-1a-sane-dl-safe-api.md`](../archive/slices/s0-1a-sane-dl-safe-api.md),
-[`archive/slices/s0-2-seam-note.md`](../archive/slices/s0-2-seam-note.md) and
-[`archive/slices/s0-3-scan-device.md`](../archive/slices/s0-3-scan-device.md).
-
-Done on its branch, its code review's findings fixed, pushed, in pull request #8, waiting on review and CI:
-[`s0-4-scan-worker.md`](s0-4-scan-worker.md), S0 slice 4, `scan-worker` (five steps, each checked, then 20
-findings, 18 fixed whole and two in part, their other halves FEAT-16 and FEAT-17; branch `s0-4-scan-worker`,
-from `master` at `5a4bff2`, `master` merged in after #7).
+[`archive/slices/s0-2-seam-note.md`](../archive/slices/s0-2-seam-note.md),
+[`archive/slices/s0-3-scan-device.md`](../archive/slices/s0-3-scan-device.md), and
+[`archive/slices/s0-4-scan-worker.md`](../archive/slices/s0-4-scan-worker.md).
 
 Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request #1); its plan is in
 [`archive/slices/s0-7-twain-spike.md`](../archive/slices/s0-7-twain-spike.md).
 
 Done: S0 slice 8, `twain-dsm`, on the Windows machine, merged (pull request #4); its plan is in
 [`archive/slices/s0-8-twain-dsm.md`](../archive/slices/s0-8-twain-dsm.md).
+
+Running on `s0-9-twain-backend`: [`s0-9-twain-backend.md`](s0-9-twain-backend.md), S0 slice 9 (`twain-dsm`
+0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker` Windows hardening).

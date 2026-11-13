@@ -14,11 +14,11 @@ in a form the app asked for. The types are plain data, so they can cross a pipe 
 drivers, encoded through the `serde` feature.
 
 Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits, each behind a feature of its
-own. This version has the model, a scripted backend for tests, and SANE's scanners: devices listed and opened,
-what each can do, and batches.
+own. This version has the model, a scripted backend for tests, SANE's scanners on Unix-like systems, and
+TWAIN's scanners on Windows (32- and 64-bit).
 
 Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
-once a second one has been through it. No `unsafe` code.
+once the Windows backends are complete. No `unsafe` code.
 
 ## Features
 
@@ -54,6 +54,17 @@ None is on by default.
   there only by giving its page. Options the model doesn't carry are set by their SANE names, as the app
   chooses (`with_option`), at each open and each batch. SANE's backends are C code that runs in the process
   that loads them, so an app runs this one in a worker process of its own.
+- `twain`: `scan_device::twain::TwainBackend`, TWAIN's scanners on Windows in both 64-bit (`twain64:`) and
+  32-bit (`twain32:`), through `twain-dsm` and `TWAINDSM.dll` loaded at run time after its Authenticode
+  signature is verified (off Windows, listing and opening report `ScanError::NotInstalled`). Drives a lazy
+  process-wide STA session; auto-selects TWAIN 2 callbacks (`DF_DS2`) or TWAIN 1.x window-message delivery;
+  negotiates units, sources, duplex, resolutions, formats, sticky processing resets, and mutual exclusion
+  between `Paper::Auto` border detection and `Paper::Size` `DAT_IMAGELAYOUT` frames; assembles memory strips,
+  tiles, undefined-size transfers (`width` or `length` `-1`), and native DIBs into the checked raw layout;
+  reads `TWEI_PAGESIDE`, maps condition codes and unexpected `CloseRequest` statuses to `ScanError`, cancels
+  between sheets, and opens the driver's own settings window (`settings_window`). TWAIN data sources are
+  in-process `.ds` DLLs of their own bitness, so a 64-bit app drives both 64-bit and 32-bit TWAIN workers
+  through `scan-worker`.
 
 ## License
 

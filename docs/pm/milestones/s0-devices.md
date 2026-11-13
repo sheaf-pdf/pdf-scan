@@ -132,11 +132,11 @@ merged first.
    finished, none fed after), a version mismatch, a page cut short; the raw layout across the pipe byte for byte;
    throughput of 300 dpi pages in color and black and white at 2.3 a second (M5 slice 6's gate, its pipe's
    share), measured on every run.
-   **Done on the branch** (2026-11-09; `slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
+   **Done and merged** (2026-11-09, merged as pull request #8, squashed `d22a2f4`;
+   `archive/slices/s0-4-scan-worker.md`): branch `s0-4-scan-worker`, from `master`
    at `5a4bff2`, to `510d349` (the code review's fixes), then the record; five steps, each checked, then its
    code review's 20 findings (5 major), 18 fixed whole and two in part, their other halves deferred (FEAT-16,
-   FEAT-17), none refuted. Pushed with `master` merged in after #7, in pull request #8, waiting on review and
-   CI. `scan-worker` 0.0.0, unpublished,
+   FEAT-17), none refuted. `scan-worker` 0.0.0, unpublished,
    MSRV 1.89, no `unsafe` (`crates/scan-worker.md`): the protocol as the seam note asks it, the model's types
    through a new `serde` feature of `scan-device` (every variant round-tripped, a variant added failing the
    build until it's listed), a page's header, `Event`'s and `Pixels`' variants and a message's level carried
@@ -180,6 +180,9 @@ merged first.
    `SettingsRefused` when it repeats; `ACCESS_DENIED` as `AccessDenied`, a listing past its deadline as
    `TimedOut`; the feeder keeping its sheets after a cancel; the fake libsane's feeder and duplex names for each
    backend. Whatever the backend finds the model lacking goes into the seam note and the model, said.
+   **Done and merged** (2026-11-11, pull request #9, squashed `8de47ac`): `scan_device::sane::SaneBackend` on
+   `sane-dl` (with `SaneString` preserving raw backend bytes), tested against `fake-libsane` and SANE's `test`
+   and `pnm` backends in process and through `scan-worker`.
 6. **By hand on Linux:** an fi-6130 through SANE's fujitsu backend on a Linux laptop at the office (M5 ask
    12; SANE rates it complete): 50 mixed sheets duplex, a forced jam, an open cover, unplugged mid-scan, a
    cancel. A row per scanner and driver in the notes. Waits on the scanner; doesn't hold the rest back.
@@ -276,6 +279,33 @@ merged first.
        (`MSG_OPENDSM` loads every installed driver: the seam note's section 1).
      - **Not tried:** a memory transfer, a cancel, a jam the driver reports (the jammed sheet scanned all the
        same), an empty feeder: slice 9's checks and slice 12's.
+   - **Built 2026-11-11 to 12** (`slices/s0-9-twain-backend.md`, on branch `s0-9-twain-backend`):
+     - **`twain-dsm` 0.1.0-alpha.1, ready to publish:** caller parent windows (`Ui::ShownOwned(u64)`,
+       `Source::settings_ui(Option<u64>)`, `Error::InvalidWindow`) validated for canonical 32-bit `HWND` range,
+       `IsWindow`, and non-owning caller thread, with an `EnableWindow` restore guard on step-down;
+       `DG_IMAGE / DAT_IMAGELAYOUT` (`TW_IMAGELAYOUT` checked against `twain.h` in both bitnesses, `ImageLayout`,
+       `Source` and `Ready` methods using `MSG_GET`/`MSG_GETDEFAULT`/`MSG_RESET`/`MSG_SET`) and
+       `DG_CONTROL / DAT_STATUS` (`Source::status`, `Enabled::status`); `#![warn(missing_docs)]`, `docs.rs`
+       `x86_64-pc-windows-msvc` target, `README.md`, `CHANGELOG.md`, `just twain-dsm-package`, and Windows
+       `just public-api` (`TEST-14`, 3,665 items read, 0 unsafe failures).
+     - **`scan-device`'s `twain` backend** (`scan_device::twain::TwainBackend` behind `feature = "twain"`,
+       `#![forbid(unsafe_code)]` preserved, zero breaking changes to the model): process-wide lazy STA `Session`
+       matching `twain-dsm`'s `RunLock` and `Loaded::path()` (concurrent `list` routed via `Remote` without
+       poisoning an open device); `twain32:`/`twain64:` ids and `BadId` pre-checks before loading `TWAINDSM.dll`;
+       auto-selected `Delivery::Callback` (`DF_DS2`) vs `Delivery::Events`; capabilities across all `TWUN_*`
+       units, sticky processing resets (`ICAP_AUTODISCARDBLANKPAGES`, `ICAP_AUTOMATICROTATE`, `CAP_INDICATORS`),
+       and mutual exclusion of `Paper::Auto` border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005`
+       mm tolerance); `TWSX_MEMORY` (strip, tile, and undefined `width`/`length == -1`) and `TWSX_NATIVE` DIB
+       transfers assembled into `RawImage`; `TWEI_PAGESIDE`, unexpected `CloseRequest` status/feeder inspection,
+       sheet-granular cancel, and `settings_window`; 106 unit tests passing on both `x86_64-pc-windows-msvc` and
+       `i686-pc-windows-msvc` (`TEST-12`), plus 9 sample-source integration tests in both bitnesses.
+     - **`scan-worker` Windows hardening and 32/64-bit TWAIN:** runtime `sane-dl`/`libloading` dependency dropped
+       (`SANE_CONFIG_DIR` + `LC_ALL=C` inlined in `client/spawn.rs`); `serve`'s protocol stream isolated onto a
+       private non-inheritable handle/descriptor with `STD_OUTPUT_HANDLE` + UCRT fd 1 (and Unix fd 1) redirected
+       to `NUL` / `/dev/null` before any driver loads; Windows `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` containment
+       (`FEAT-14`); cross-thread `StopHandle` + `Error::Aborted` (`FEAT-17`) and client `WindowGuard`; concurrent
+       `Client::list_twain` -> `TwainList` merging 64- and 32-bit listings (64-bit preferred, 32-bit-only kept,
+       single-side failures surfaced in `other_failed`), tested end-to-end driving both 64-bit and `i686` workers.
 10. **scan-device's `wia` backend:** its STA thread, the feeder and duplex, errors by code. Checked against a
     fake of the WIA calls behind a trait (no virtual WIA device installs without a person).
 11. **The model frozen:** the seam note's unknowns all answered, `scan-device` and `scan-worker` out of 0.0.x
