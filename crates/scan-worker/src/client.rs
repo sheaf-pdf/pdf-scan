@@ -20,7 +20,23 @@ use scan_device::{
 };
 
 use crate::Error;
+pub use worker::StopHandle;
 use worker::Worker;
+
+/// The result of [`Client::list_twain`]: the merged 64-bit and 32-bit TWAIN scanners, and any
+/// failure from one bitness's worker when the other bitness succeeded.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct TwainList {
+    /// The TWAIN devices found, ordered 64-bit before 32-bit, with dual-installed sources
+    /// matching `(maker, model, name)` deduplicated in favour of the 64-bit entry while keeping
+    /// 32-bit-only drivers.
+    pub devices: Vec<DeviceInfo>,
+    /// When both 64-bit and 32-bit TWAIN workers were registered and one succeeded while the
+    /// other failed with anything other than [`ScanError::NotInstalled`], the failed bitness
+    /// (`32` or `64`) and its [`Error`].
+    pub other_failed: Option<(u8, Error)>,
+}
 
 /// Starts a worker for each listing and each device it opens, and makes the device model's calls
 /// through it: the app's side of drivers run in a process of their own.
@@ -133,6 +149,86 @@ impl Client {
         listed
     }
 
+    /// Lists TWAIN scanners across the registered 64-bit and 32-bit TWAIN workers concurrently,
+    /// each given the full `deadline`.
+    ///
+    /// On 64-bit Windows, vendors ship some TWAIN sources in both `twain_64` and `twain_32` and
+    /// others (such as older Fujitsu PaperStream IP packages) in `twain_32` alone. When both
+    /// `Driver::Twain { bits: 64 }` and `Driver::Twain { bits: 32 }` workers are registered,
+    /// both run in parallel: 64-bit entries come first, any 32-bit entry matching a 64-bit
+    /// entry's `(maker, model, name)` is dropped in favour of 64-bit, and 32-bit-only entries
+    /// follow.
+    ///
+    /// If one bitness answers [`ScanError::NotInstalled`] while the other succeeds, the missing
+    /// DSM is ignored cleanly (`other_failed` is `None`). If one bitness crashes, times out, or
+    /// fails to start while the other succeeds, the working bitness's scanners are returned with
+    /// the failure recorded in [`TwainList::other_failed`]. If only one TWAIN bitness is
+    /// registered on this client, only that worker runs; if neither is registered, answers
+    /// [`Error::NoWorker`].
+    pub fn list_twain(&self, deadline: Duration) -> Result<TwainList, Error> {
+        let d64 = Driver::Twain { bits: 64 };
+        let d32 = Driver::Twain { bits: 32 };
+        let has_64 = self.has_worker(d64);
+        let has_32 = self.has_worker(d32);
+
+        match (has_64, has_32) {
+            (false, false) => {
+                let host_bits = if cfg!(target_pointer_width = "32") {
+                    32
+                } else {
+                    64
+                };
+                Err(Error::NoWorker(Driver::Twain { bits: host_bits }))
+            }
+            (true, false) => self.list(d64, deadline).map(|devices| TwainList {
+                devices,
+                other_failed: None,
+            }),
+            (false, true) => self.list(d32, deadline).map(|devices| TwainList {
+                devices,
+                other_failed: None,
+            }),
+            (true, true) => {
+                let (res_64, res_32) = std::thread::scope(|scope| {
+                    let list_32 = scope.spawn(|| self.list(d32, deadline));
+                    let res_64 = self.list(d64, deadline);
+                    let res_32 = list_32
+                        .join()
+                        .expect("32-bit TWAIN listing thread panicked");
+                    (res_64, res_32)
+                });
+                match (res_64, res_32) {
+                    (Ok(devs_64), Ok(devs_32)) => Ok(TwainList {
+                        devices: merge_twain_devices(devs_64, devs_32),
+                        other_failed: None,
+                    }),
+                    (Ok(devs_64), Err(Error::Scan(ScanError::NotInstalled { .. }))) => {
+                        Ok(TwainList {
+                            devices: devs_64,
+                            other_failed: None,
+                        })
+                    }
+                    (Err(Error::Scan(ScanError::NotInstalled { .. })), Ok(devs_32)) => {
+                        Ok(TwainList {
+                            devices: devs_32,
+                            other_failed: None,
+                        })
+                    }
+                    (Ok(devs_64), Err(err_32)) => Ok(TwainList {
+                        devices: devs_64,
+                        other_failed: Some((32, err_32)),
+                    }),
+                    (Err(err_64), Ok(devs_32)) => Ok(TwainList {
+                        devices: devs_32,
+                        other_failed: Some((64, err_64)),
+                    }),
+                    (Err(Error::Scan(ScanError::NotInstalled { .. })), Err(err_32)) => Err(err_32),
+                    (Err(err_64), Err(_)) => Err(err_64),
+                }
+            }
+        }
+    }
+
     /// Opens `device`, as a listing gave it and the app stored it, within `deadline`, in a
     /// worker of its own: the worker for its [`DeviceInfo::driver`], which keeps the device
     /// until it's closed.
@@ -177,6 +273,11 @@ impl Client {
                 Err(error)
             }
         }
+    }
+
+    /// Whether a worker command is registered for `driver`.
+    fn has_worker(&self, driver: Driver) -> bool {
+        self.workers.iter().any(|(given, _)| *given == driver)
     }
 
     /// A worker for `driver` started, and its `hello` taken: for a listing, or to open `opens`.
@@ -361,6 +462,12 @@ impl RemoteDevice {
         self.worker.process_id()
     }
 
+    /// A [`StopHandle`] that can terminate this device's worker from another thread while a call
+    /// (such as an untimed [`RemoteDevice::settings_window`] or a hung batch) is in flight.
+    pub fn stop_handle(&self) -> StopHandle {
+        self.worker.stop_handle()
+    }
+
     /// What the device can do, per source.
     ///
     /// The worker's answer is checked as the model's rules have it: at least one source, each
@@ -414,9 +521,12 @@ impl RemoteDevice {
     /// Opens the driver's own settings window, owned by `owner`'s window where it gives one, and
     /// answers how it closed. The worker is never timed while it's open: it's the user's.
     ///
-    /// So only the window's closing, or the worker's end ([`Error::Crashed`]), ends the call: a
-    /// driver whose window never closes holds the calling thread until the app ends, and nothing
-    /// ends it from another thread.
+    /// Only the window's closing, [`StopHandle::stop`] from another thread ([`Error::Aborted`]),
+    /// or the worker's end ([`Error::Crashed`]) ends the call. On Windows, passing a live `HWND`
+    /// owned by the calling thread is refused before waiting on the worker
+    /// ([`ScanError::Driver`]), since blocking the window's own thread would deadlock synchronous
+    /// Win32 owner messages, and an enabled cross-thread `HWND` left disabled by a failed or
+    /// aborted modal driver is re-enabled before this call returns.
     pub fn settings_window(&mut self, owner: Option<WindowOwner>) -> Result<WindowClosed, Error> {
         self.worker.settings_window(owner)
     }
@@ -431,11 +541,80 @@ impl RemoteDevice {
     ///
     /// Errors: a worker that exits with a failure, [`Error::Crashed`]; one killed past the grace,
     /// [`Error::Stopped`] ([`Timeout::Exit`](crate::Timeout::Exit)). A worker an earlier failure
-    /// ended is closed already, so `Ok`. A worker that can't be reaped even once killed (a
-    /// process stuck in the system) is left to a thread that waits for it and then removes its
-    /// directory, so the caller is held at most twice the grace, and a moment more for the end
-    /// of its standard error.
+    /// or [`StopHandle::stop`] ended is closed already, so `Ok`. A worker that can't be reaped
+    /// even once killed (a process stuck in the system) is left to a thread that waits for it and
+    /// then removes its directory, so the caller is held at most twice the grace, and a moment
+    /// more for the end of its standard error.
     pub fn close(mut self) -> Result<(), Error> {
         self.worker.close()
+    }
+}
+
+/// Orders `devs_64` before `devs_32`, dropping any 32-bit entry whose `(maker, model, name)`
+/// already appears among `devs_64`.
+fn merge_twain_devices(devs_64: Vec<DeviceInfo>, devs_32: Vec<DeviceInfo>) -> Vec<DeviceInfo> {
+    let mut merged = devs_64;
+    let n64 = merged.len();
+    for dev in devs_32 {
+        let dup = merged[..n64]
+            .iter()
+            .any(|d64| d64.maker == dev.maker && d64.model == dev.model && d64.name == dev.name);
+        if !dup {
+            merged.push(dev);
+        }
+    }
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn twain_dev(bits: u8, product: &str, maker: &str, name: &str) -> DeviceInfo {
+        let prefix = if bits == 32 { "twain32:" } else { "twain64:" };
+        DeviceInfo::new(
+            DeviceId(format!("{prefix}{product}")),
+            name.to_owned(),
+            maker.to_owned(),
+            product.to_owned(),
+            Driver::Twain { bits },
+        )
+    }
+
+    #[test]
+    fn merge_twain_devices_prefers_64_bit_and_preserves_32_bit_only_sources() {
+        let devs_64 = vec![
+            twain_dev(
+                64,
+                "TWAIN2 Software Scanner",
+                "TWAIN Working Group",
+                "TWAIN Working Group TWAIN2 Software Scanner",
+            ),
+            twain_dev(64, "fi-8170", "PFU", "PFU fi-8170"),
+        ];
+        let devs_32 = vec![
+            twain_dev(
+                32,
+                "TWAIN2 Software Scanner",
+                "TWAIN Working Group",
+                "TWAIN Working Group TWAIN2 Software Scanner",
+            ),
+            twain_dev(
+                32,
+                "PaperStream IP fi-6130Zdj",
+                "FUJITSU",
+                "FUJITSU PaperStream IP fi-6130Zdj",
+            ),
+        ];
+        let merged = merge_twain_devices(devs_64, devs_32);
+        let ids: Vec<&str> = merged.iter().map(|d| d.id.0.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "twain64:TWAIN2 Software Scanner",
+                "twain64:fi-8170",
+                "twain32:PaperStream IP fi-6130Zdj",
+            ]
+        );
     }
 }

@@ -2,11 +2,12 @@
 //! events taken under the watchdog and checked, its process watched, and its end.
 
 use std::{
+    fmt,
     io::{self, Write},
     path::Path,
     process::{Child, ChildStdin, ExitStatus},
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
     },
@@ -32,19 +33,85 @@ use crate::{Error, ProtocolError, Timeout};
 /// worker asks whether its process has exited, while the worker is silent.
 const TICK: Duration = Duration::from_millis(50);
 
+/// How often a batch blocked on a full caller `SyncSender<Event>` polls [`Worker::is_aborted`] so
+/// [`StopHandle::stop`] never deadlocks behind a full channel.
+const SEND_POLL: Duration = Duration::from_millis(10);
+
 /// Once the worker's process has exited, how long its reader may go without a message before
 /// what it handed on is taken as all of it; and how long the end of its standard error is waited
 /// for once it has ended. A process leaves a pipe's buffer at most as it exits, read in a moment,
 /// and a process it started may hold its pipes open for good.
 const DRAIN: Duration = Duration::from_millis(250);
 
+/// The live worker process (and on Windows its Job Object), shared behind a mutex with
+/// [`StopHandle`] until it is reaped so [`StopHandle::stop`] never acts on a recycled process id.
+pub(super) struct LiveProcess {
+    pub(super) child: Child,
+    #[cfg(windows)]
+    pub(super) job: crate::sys::Job,
+}
+
+impl LiveProcess {
+    /// Terminates the worker (and on Windows every process in its job) at once.
+    pub(super) fn kill(&mut self) {
+        #[cfg(windows)]
+        self.job.terminate();
+        let _ = self.child.kill();
+    }
+}
+
+/// Stops an open [`RemoteDevice`](crate::RemoteDevice)'s worker from another thread.
+///
+/// Obtained from [`RemoteDevice::stop_handle`](crate::RemoteDevice::stop_handle). `Send`, `Sync`,
+/// and `Clone`: a caller may hand a clone to a UI thread or cancellation task before calling
+/// [`RemoteDevice::settings_window`](crate::RemoteDevice::settings_window) (which has no watchdog
+/// timeout) or [`RemoteDevice::scan`](crate::RemoteDevice::scan).
+#[derive(Clone)]
+pub struct StopHandle {
+    live: Arc<Mutex<Option<LiveProcess>>>,
+    aborted: Arc<AtomicBool>,
+    process_id: u32,
+}
+
+impl fmt::Debug for StopHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StopHandle")
+            .field("process_id", &self.process_id)
+            .field("aborted", &self.aborted.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
+impl StopHandle {
+    /// Terminates the worker process at once if it has not ended already.
+    ///
+    /// An in-flight call on the [`RemoteDevice`](crate::RemoteDevice), or the first call made
+    /// after an idle `stop`, answers [`Error::Aborted`]; every later call answers
+    /// [`Error::Ended`], and [`RemoteDevice::close`](crate::RemoteDevice::close) returns
+    /// `Ok(())`. If the worker had already ended before `stop` was called, `stop` does nothing.
+    pub fn stop(&self) {
+        let mut guard = lock_live(&self.live);
+        if let Some(live) = guard.as_mut() {
+            self.aborted.store(true, Ordering::Release);
+            live.kill();
+        }
+    }
+}
+
 /// A worker started for one listing or one open device.
 pub(super) struct Worker {
     /// The driver API it was started for: every device it gives must be one of it.
     driver: Driver,
     timeouts: Timeouts,
-    /// `None` once it has ended: reaped, or handed to a thread that waits for it.
-    process: Option<Process>,
+    /// Shared with [`StopHandle`]; `None` once reaped or handed to the reaper thread.
+    live: Arc<Mutex<Option<LiveProcess>>>,
+    /// The worker's private directory, removed once it has exited.
+    dir: Option<TempDir>,
+    /// Set by [`StopHandle::stop`] when it kills a live worker.
+    aborted: Arc<AtomicBool>,
+    /// Whether [`Error::Aborted`] has already been returned (or consumed by `close`), so later
+    /// calls answer [`Error::Ended`].
+    abort_reported: bool,
     /// `None` once it has ended, or a write to it failed.
     stdin: Option<ChildStdin>,
     /// What its reader hands on, one at a time.
@@ -56,12 +123,6 @@ pub(super) struct Worker {
     exited: Option<Instant>,
     stderr: Stderr,
     process_id: u32,
-}
-
-/// The worker's process, and its private directory, removed once it has exited.
-struct Process {
-    child: Child,
-    dir: TempDir,
 }
 
 /// How a worker's process ended.
@@ -101,7 +162,7 @@ impl Worker {
             program: command.program.clone(),
             source,
         };
-        let (mut child, dir) =
+        let (mut live, dir) =
             spawn::spawn(command, work_dir, driver, opens).map_err(|error| match error {
                 NotStarted::Program(source) => not_started(source),
                 NotStarted::WorkDir(source) => Error::WorkDir {
@@ -109,8 +170,12 @@ impl Worker {
                     source,
                 },
             })?;
-        let process_id = child.id();
-        let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+        let process_id = live.child.id();
+        let pipes = (
+            live.child.stdin.take(),
+            live.child.stdout.take(),
+            live.child.stderr.take(),
+        );
         let (sent, messages) = mpsc::sync_channel(0);
         let in_page = Arc::new(AtomicBool::new(false));
         let threads = match pipes {
@@ -124,15 +189,18 @@ impl Worker {
         let (stdin, stderr) = match threads {
             Ok(started) => started,
             Err(source) => {
-                let _ = child.kill();
-                reap(Process { child, dir }, timeouts.grace);
+                live.kill();
+                reap(live, Some(dir), timeouts.grace);
                 return Err(not_started(source));
             }
         };
         let mut worker = Worker {
             driver,
             timeouts,
-            process: Some(Process { child, dir }),
+            live: Arc::new(Mutex::new(Some(live))),
+            dir: Some(dir),
+            aborted: Arc::new(AtomicBool::new(false)),
+            abort_reported: false,
             stdin: Some(stdin),
             messages,
             in_page,
@@ -146,6 +214,15 @@ impl Worker {
 
     pub(super) fn process_id(&self) -> u32 {
         self.process_id
+    }
+
+    /// A [`StopHandle`] targeting this worker.
+    pub(super) fn stop_handle(&self) -> StopHandle {
+        StopHandle {
+            live: Arc::clone(&self.live),
+            aborted: Arc::clone(&self.aborted),
+            process_id: self.process_id,
+        }
     }
 
     /// Its first line, its `hello` with this client's protocol, within [`Timeouts::start`].
@@ -219,11 +296,15 @@ impl Worker {
         }
     }
 
-    /// The driver's settings window, untimed: only its answer, or the worker's end, ends it.
+    /// The driver's settings window, untimed: only its answer, [`StopHandle::stop`], or the
+    /// worker's end ends it.
     pub(super) fn settings_window(
         &mut self,
         owner: Option<WindowOwner>,
     ) -> Result<WindowClosed, Error> {
+        self.check_usable()?;
+        #[cfg(windows)]
+        let _window_guard = crate::sys::WindowGuard::check(owner).map_err(Error::Scan)?;
         self.request(&Request::SettingsWindow { owner })?;
         match self.answer(None, Timeout::Silence)? {
             Reply::Window(closed) => Ok(closed),
@@ -251,6 +332,9 @@ impl Worker {
         // after handing on its event.
         let mut since = Instant::now();
         loop {
+            if self.is_aborted() {
+                return Err(self.aborted());
+            }
             if batch.cancelled_at.is_none() && progress.is_cancelled() {
                 self.cancel(&mut batch);
             }
@@ -264,8 +348,14 @@ impl Worker {
                 None => now + TICK,
             };
             let Some(incoming) = self.next(Some(until)) else {
+                if self.is_aborted() {
+                    return Err(self.aborted());
+                }
                 continue;
             };
+            if self.is_aborted() {
+                return Err(self.aborted());
+            }
             let event = match incoming {
                 Incoming::Page(page) => Event::Page(page),
                 Incoming::Message(Reply::Applied(applied)) => Event::Applied(applied),
@@ -309,10 +399,26 @@ impl Worker {
             if let Err(error) = batch.order.take(&event, settings) {
                 return Err(self.broken(error));
             }
-            if !batch.receiver_gone && events.send(event).is_err() {
-                batch.receiver_gone = true;
-                if batch.cancelled_at.is_none() {
-                    self.cancel(&mut batch);
+            if !batch.receiver_gone {
+                let mut pending = event;
+                loop {
+                    if self.is_aborted() {
+                        return Err(self.aborted());
+                    }
+                    match events.try_send(pending) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(returned)) => {
+                            pending = returned;
+                            thread::sleep(SEND_POLL);
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => {
+                            batch.receiver_gone = true;
+                            if batch.cancelled_at.is_none() {
+                                self.cancel(&mut batch);
+                            }
+                            break;
+                        }
+                    }
                 }
             }
             since = Instant::now();
@@ -328,12 +434,35 @@ impl Worker {
         }
     }
 
-    /// `request` sent, if it can be: refused at once where the worker has ended
-    /// ([`Error::Ended`]) or the request can't cross ([`Error::Unsendable`]).
-    fn request(&mut self, request: &Request) -> Result<(), Error> {
-        if self.process.is_none() {
+    /// Whether [`StopHandle::stop`] has killed this worker.
+    fn is_aborted(&self) -> bool {
+        self.aborted.load(Ordering::Acquire)
+    }
+
+    /// Whether the worker has not yet been reaped.
+    fn has_live(&self) -> bool {
+        lock_live(&self.live).is_some()
+    }
+
+    /// Ensures the worker has neither been aborted nor ended at an earlier failure.
+    fn check_usable(&mut self) -> Result<(), Error> {
+        if self.is_aborted() {
+            if !self.abort_reported {
+                return Err(self.aborted());
+            }
             return Err(Error::Ended);
         }
+        if !self.has_live() {
+            return Err(Error::Ended);
+        }
+        Ok(())
+    }
+
+    /// `request` sent, if it can be: refused at once where the worker was aborted
+    /// ([`Error::Aborted`]) or has ended ([`Error::Ended`]), or where the request can't cross
+    /// ([`Error::Unsendable`]).
+    fn request(&mut self, request: &Request) -> Result<(), Error> {
+        self.check_usable()?;
         let line = sendable(request)?;
         self.write(&line);
         Ok(())
@@ -358,22 +487,28 @@ impl Worker {
     /// Whether the worker's process has exited, asked of the system where it isn't known yet:
     /// its status is kept by its `Child`, which reaps it.
     fn has_exited(&mut self) -> bool {
-        if self.exited.is_none()
-            && let Some(process) = &mut self.process
-            && let Ok(Some(_)) = process.child.try_wait()
-        {
-            self.exited = Some(Instant::now());
+        if self.exited.is_none() {
+            let mut guard = lock_live(&self.live);
+            if let Some(live) = guard.as_mut()
+                && let Ok(Some(_)) = live.child.try_wait()
+            {
+                self.exited = Some(Instant::now());
+            }
         }
         self.exited.is_some()
     }
 
     /// The reader's next message, waiting until `until` (for good where `None`), and `None`
-    /// once it has passed with none. The worker's process is watched meanwhile, every
-    /// [`TICK`] it's silent: once it has exited, what the reader still holds is taken, and a
-    /// reader quiet for [`DRAIN`] then is the output's end, whatever still holds the pipe
-    /// open (a process the worker's driver started, say).
+    /// once it has passed with none (or immediately once [`StopHandle::stop`] has fired). The
+    /// worker's process is watched meanwhile, every [`TICK`] it's silent: once it has exited,
+    /// what the reader still holds is taken, and a reader quiet for [`DRAIN`] then is the
+    /// output's end, whatever still holds the pipe open (a process the worker's driver started,
+    /// say).
     fn next(&mut self, until: Option<Instant>) -> Option<Incoming> {
         loop {
+            if self.is_aborted() {
+                return None;
+            }
             let now = Instant::now();
             let mut wait = match self.exited {
                 Some(at) => (at + DRAIN).saturating_duration_since(now),
@@ -400,6 +535,9 @@ impl Worker {
                     });
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    if self.is_aborted() {
+                        return None;
+                    }
                     if let Some(at) = self.exited
                         && at.elapsed() >= DRAIN
                     {
@@ -419,6 +557,7 @@ impl Worker {
         // Never where a limit is too long to add to the clock's.
         let until = limit.and_then(|limit| Instant::now().checked_add(limit));
         match self.next(until) {
+            _ if self.is_aborted() => Err(self.aborted()),
             Some(incoming) => Ok(incoming),
             None => Err(self.stopped(timeout, limit.unwrap_or_default())),
         }
@@ -438,6 +577,13 @@ impl Worker {
         }
     }
 
+    /// Reaps a worker killed by [`StopHandle::stop`] and marks [`Error::Aborted`] as reported.
+    fn aborted(&mut self) -> Error {
+        self.abort_reported = true;
+        self.end(Ending::Kill);
+        Error::Aborted
+    }
+
     /// `reply` out of its place: the worker killed.
     fn unexpected(&mut self, reply: &Reply) -> Error {
         self.broken(ProtocolError::Unexpected { got: reply.name() })
@@ -445,6 +591,9 @@ impl Worker {
 
     /// The protocol broken: the worker killed.
     fn broken(&mut self, error: ProtocolError) -> Error {
+        if self.is_aborted() {
+            return self.aborted();
+        }
         self.kill();
         Error::Protocol(error)
     }
@@ -452,6 +601,9 @@ impl Worker {
     /// Silent for `waited`, past `timeout`: the worker killed. One whose process has exited
     /// wasn't silent but ended, and is said so ([`Error::Crashed`]).
     fn stopped(&mut self, timeout: Timeout, waited: Duration) -> Error {
+        if self.is_aborted() {
+            return self.aborted();
+        }
         if self.has_exited() {
             return self.crashed(self.in_page.load(Ordering::Relaxed));
         }
@@ -466,10 +618,17 @@ impl Worker {
     /// The output ended unasked, or the process exited: the worker given the grace to exit, and
     /// killed if it hasn't.
     fn crashed(&mut self, page_cut_short: bool) -> Error {
+        if self.is_aborted() {
+            return self.aborted();
+        }
         let status = match self.end(Ending::Ended) {
             Reaped::Exited(status) => Some(status),
             Reaped::Killed => None,
         };
+        if self.is_aborted() {
+            self.abort_reported = true;
+            return Error::Aborted;
+        }
         Error::Crashed {
             status,
             page_cut_short,
@@ -483,15 +642,25 @@ impl Worker {
     }
 
     /// The worker asked to quit, given the grace to exit, and killed if it hasn't; `Ok` where
-    /// it has ended already.
+    /// it has ended or been stopped through its [`StopHandle`] already.
     pub(super) fn close(&mut self) -> Result<(), Error> {
-        if self.process.is_none() {
+        if self.is_aborted() {
+            self.abort_reported = true;
+            self.end(Ending::Kill);
+            return Ok(());
+        }
+        if !self.has_live() {
+            self.dir = None;
             return Ok(());
         }
         if let Ok(line) = wire::line(&Request::Quit) {
             self.write(&line);
         }
         match self.end(Ending::Quit) {
+            _ if self.is_aborted() => {
+                self.abort_reported = true;
+                Ok(())
+            }
             Reaped::Exited(status) if status.success() => Ok(()),
             Reaped::Exited(status) => Err(Error::Crashed {
                 status: Some(status),
@@ -507,27 +676,35 @@ impl Worker {
     }
 
     /// The worker ended as `ending` says, its input closed; reaped, or handed to a thread that
-    /// waits for it. Every call after it answers [`Error::Ended`].
+    /// waits for it. Every call after it answers [`Error::Ended`] (once any pending
+    /// [`Error::Aborted`] has been reported).
     fn end(&mut self, ending: Ending) -> Reaped {
         if ending != Ending::Quit {
             self.stdin = None;
         }
-        let Some(mut process) = self.process.take() else {
+        if !self.has_live() {
             self.stdin = None;
+            self.dir = None;
             return Reaped::Killed;
-        };
+        }
         let exited = match ending {
             Ending::Kill => None,
-            Ending::Ended | Ending::Quit => wait_for(&mut process.child, self.timeouts.grace),
+            Ending::Ended | Ending::Quit => {
+                wait_for_live(&self.live, &self.aborted, self.timeouts.grace)
+            }
         };
         self.stdin = None;
         if let Some(status) = exited {
-            // Its directory removed with it.
-            drop(process);
+            // `wait_for_live` already took `LiveProcess` (and on Windows terminated its Job so
+            // surviving helper processes release pipes and directories).
+            self.dir = None;
             return Reaped::Exited(status);
         }
-        let _ = process.child.kill();
-        reap(process, self.timeouts.grace);
+        let dir = self.dir.take();
+        if let Some(mut live) = lock_live(&self.live).take() {
+            live.kill();
+            reap(live, dir, self.timeouts.grace);
+        }
         Reaped::Killed
     }
 }
@@ -536,6 +713,11 @@ impl Drop for Worker {
     fn drop(&mut self) {
         let _ = self.close();
     }
+}
+
+/// Locks `live`, recovering across poison since its state is a simple `Option<LiveProcess>`.
+fn lock_live(live: &Mutex<Option<LiveProcess>>) -> MutexGuard<'_, Option<LiveProcess>> {
+    live.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The reader's thread and standard error's started.
@@ -798,6 +980,50 @@ fn check_caps(caps: &Caps) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// Waits up to `limit` for the live worker behind `live` to exit without holding the mutex across
+/// sleeps, so [`StopHandle::stop`] can interrupt at any time.
+fn wait_for_live(
+    live: &Mutex<Option<LiveProcess>>,
+    aborted: &AtomicBool,
+    limit: Duration,
+) -> Option<ExitStatus> {
+    let start = Instant::now();
+    let mut pause = Duration::from_millis(1);
+    loop {
+        if aborted.load(Ordering::Acquire) {
+            return None;
+        }
+        {
+            let mut guard = lock_live(live);
+            let proc = guard.as_mut()?;
+            match proc.child.try_wait() {
+                Ok(Some(status)) => {
+                    if aborted.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    let taken = guard.take();
+                    drop(guard);
+                    #[cfg(windows)]
+                    if let Some(taken) = taken {
+                        taken.job.terminate();
+                    }
+                    #[cfg(not(windows))]
+                    let _ = taken;
+                    return Some(status);
+                }
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+        }
+        let left = limit.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return None;
+        }
+        thread::sleep(pause.min(left));
+        pause = (pause * 2).min(Duration::from_millis(20));
+    }
+}
+
 /// `child`'s exit, waited for at most `limit`, without a handler of the process's signals: its
 /// status asked in turn, a pause between growing to 20 ms.
 fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
@@ -818,19 +1044,23 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     }
 }
 
-/// A killed `process` reaped within `limit`, its directory removed; or, where it isn't (a
+/// A killed `live` process reaped within `limit`, its `dir` removed; or, where it isn't (a
 /// process stuck in the system), handed to a thread that waits for it and then removes its
 /// directory, so the caller isn't held.
-fn reap(mut process: Process, limit: Duration) {
-    if wait_for(&mut process.child, limit).is_some() {
+fn reap(mut live: LiveProcess, dir: Option<TempDir>, limit: Duration) {
+    if wait_for(&mut live.child, limit).is_some() {
+        drop(live);
+        drop(dir);
         return;
     }
-    // Where no thread can be made, the process is dropped unreaped, and its directory removed.
+    // Where no thread can be made, `live` and `dir` drop here (closing the Windows Job with
+    // `KILL_ON_JOB_CLOSE`).
     let _ = thread::Builder::new()
         .name("scan-worker reaper".to_owned())
         .spawn(move || {
-            let _ = process.child.wait();
-            drop(process.dir);
+            let _ = live.child.wait();
+            drop(live);
+            drop(dir);
         });
 }
 

@@ -31,9 +31,12 @@ const PROGRESS_POLL: Duration = Duration::from_millis(100);
 /// output, until it says `quit` or its input ends: a worker binary's whole `main`.
 ///
 /// The process's standard input and output are the protocol's (the crate's docs, "The
-/// protocol"), so nothing else in the process may write to standard output: a line the client
-/// didn't expect is a protocol error to it. Standard error is free for a log, which a client can
-/// keep the end of for the errors that end a worker.
+/// protocol"). On Unix and Windows, `serve` duplicates its initial standard output to a private,
+/// non-inheritable file descriptor or handle before calling any backend, and redirects standard
+/// output (`fd 1`, and `STD_OUTPUT_HANDLE` on Windows) to `/dev/null` or `NUL`, so scanner
+/// drivers or child helpers that write to standard output cannot corrupt the protocol stream.
+/// Standard error remains free for a log, which a client keeps the end of for the errors that end
+/// a worker.
 ///
 /// Every call on a backend or the device it opens is made on the calling thread, in the order
 /// the requests came, so a driver that must be called from the thread that opened it is. The
@@ -63,7 +66,15 @@ const PROGRESS_POLL: Duration = Duration::from_millis(100);
 /// }
 /// ```
 pub fn serve(backends: Vec<Box<dyn Backend>>) -> ExitCode {
-    match run(backends, io::stdin(), io::stdout(), Some(ORPHAN_GRACE)) {
+    #[cfg(any(unix, windows))]
+    let output = match crate::sys::isolate_stdout() {
+        Ok(file) => file,
+        Err(_) => return ExitCode::from(1),
+    };
+    #[cfg(not(any(unix, windows)))]
+    let output = io::stdout();
+
+    match run(backends, io::stdin(), output, Some(ORPHAN_GRACE)) {
         Exit::Quit | Exit::InputEnded => ExitCode::SUCCESS,
         Exit::OutputFailed => ExitCode::from(1),
     }

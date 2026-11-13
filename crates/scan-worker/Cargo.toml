@@ -12,9 +12,6 @@ repository = "https://github.com/sheaf-pdf/pdf-scan"
 publish = false
 
 [dependencies]
-# For a SANE worker's one-backend configuration directory alone: the client
-# never loads libsane.
-sane-dl = { path = "../sane-dl" }
 # Its types are in this crate's API, and cross the pipe through its serde
 # form.
 scan-device = { path = "../scan-device", features = ["serde"] }
@@ -24,20 +21,41 @@ serde_json.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [features]
 # SANE's backend, `scan_device::sane`, through the re-export
 # `scan_worker::scan_device`, so an app's SANE worker serves the backend of
 # the scan-device this crate's `serve` takes: it turns on scan-device's
 # `sane`, and nothing else in the library changes with it.
 sane = ["scan-device/sane"]
+# TWAIN's backend, `scan_device::twain`, through the re-export
+# `scan_worker::scan_device`, so an app's 32-bit and 64-bit TWAIN workers
+# serve the backend of the scan-device this crate's `serve` takes: it turns
+# on scan-device's `twain`, and nothing else in the library changes with it.
+twain = ["scan-device/twain"]
 # The test worker, `scan-worker-fake`, a binary serving the scripted backend,
-# SANE's, and protocol written by hand: for this crate's tests, never for a
-# shipped build, since its scenarios hang, crash and break the protocol. It
-# turns on scan-device's `fake`, and `sane`, which the re-export
-# `scan_worker::scan_device` then holds; nothing else in the library changes
-# with it. A binary takes its package's dependencies, never its
-# dev-dependencies, so the backend it serves comes on through this feature.
-fake = ["scan-device/fake", "sane"]
+# SANE's, TWAIN's, and protocol written by hand: for this crate's tests,
+# never for a shipped build, since its scenarios hang, crash and break the
+# protocol. It turns on scan-device's `fake`, `sane` and `twain`, which the
+# re-export `scan_worker::scan_device` then holds; nothing else in the
+# library changes with it. A binary takes its package's dependencies, never
+# its dev-dependencies, so the backends it serves come on through this
+# feature.
+fake = ["scan-device/fake", "sane", "twain"]
 
 [dev-dependencies]
 # The tests take the test worker: a dev-dependency on the crate itself turns
@@ -46,6 +64,17 @@ fake = ["scan-device/fake", "sane"]
 scan-worker = { path = ".", features = ["fake"] }
 # The unit tests drive a worker over pipes with the scripted backend.
 scan-device = { path = "../scan-device", features = ["fake", "serde"] }
+# The SANE worker's integration tests write isolated test configurations and
+# find SANE's default library name through sane-dl.
+sane-dl = { path = "../sane-dl" }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [[bin]]
 name = "scan-worker-fake"
