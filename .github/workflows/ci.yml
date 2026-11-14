@@ -141,12 +141,18 @@ jobs:
         run: just scan-device-twain-test x86_64-pc-windows-msvc
       - name: scan-device TWAIN and 32-bit RawImage unit tests, 32-bit
         run: just scan-device-twain-test i686-pc-windows-msvc
+      - name: scan-device WIA unit, fake, and COM tests, 64-bit
+        run: just scan-device-wia-test x86_64-pc-windows-msvc
+      - name: scan-device WIA unit, fake, and COM tests, 32-bit
+        run: just scan-device-wia-test i686-pc-windows-msvc
       - name: scan-device's lints, 32-bit
         run: just scan-device-clippy i686-pc-windows-msvc
       - name: scan-worker's lints, 32-bit
         run: just scan-worker-clippy i686-pc-windows-msvc
       - name: scan-worker 32-bit unit tests, StopHandle, Job Object, and dual-bitness TWAIN
         run: just scan-worker-twain-test
+      - name: scan-worker WIA worker tests, 64-bit and 32-bit
+        run: just scan-worker-wia-test
 
   # Without SANE installed: what the oldest Rust can break is compiling, and
   # the tests that need libsane say they skipped.
@@ -195,9 +201,10 @@ jobs:
       - name: Test
         run: just twain-dsm-msrv
 
-  # Both Unix (the SANE backend) and Windows (the TWAIN backend) branches of
-  # scan-device build and run their pure and fake tests on its minimum Rust;
-  # tests that need libsane or TWAIN's sample source say they skipped.
+  # Both Unix (the SANE backend) and Windows (the TWAIN and WIA backends)
+  # branches of scan-device build and run their pure and fake tests on its
+  # minimum Rust; tests that need libsane or TWAIN's sample source say they
+  # skipped.
   scan-device-msrv:
     name: scan-device on its minimum Rust (${{ matrix.os }})
     strategy:

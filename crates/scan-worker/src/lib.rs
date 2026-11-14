@@ -59,9 +59,12 @@
 //! Windows, a 64-bit and a 32-bit TWAIN worker are built with the `twain` feature, each serving
 //! `scan_worker::scan_device::twain::TwainBackend::new()`, registered for
 //! `Driver::Twain { bits: 64 }` and `Driver::Twain { bits: 32 }`, and listed together through
-//! [`Client::list_twain`] ([`TwainList`]). Named through the re-export, each backend is one of
-//! the `scan-device` this crate's [`serve`] takes; a `scan-device` of another version, a
-//! dependency of the app's own, is another crate, whose backends `serve` doesn't take.
+//! [`Client::list_twain`] ([`TwainList`]); and a WIA 2.0 worker is built with the `wia` feature
+//! (or combined with the 64-bit TWAIN worker in one binary), serving
+//! `scan_worker::scan_device::wia::WiaBackend::new()` and registered for `Driver::Wia`. Named
+//! through the re-export, each backend is one of the `scan-device` this crate's [`serve`] takes;
+//! a `scan-device` of another version, a dependency of the app's own, is another crate, whose
+//! backends `serve` doesn't take.
 //!
 //! # The client
 //!

@@ -47,15 +47,20 @@ sane = ["scan-device/sane"]
 # serve the backend of the scan-device this crate's `serve` takes: it turns
 # on scan-device's `twain`, and nothing else in the library changes with it.
 twain = ["scan-device/twain"]
+# WIA 2.0's backend, `scan_device::wia`, through the re-export
+# `scan_worker::scan_device`, so an app's Windows WIA worker serves the
+# backend of the scan-device this crate's `serve` takes: it turns on
+# scan-device's `wia`, and nothing else in the library changes with it.
+wia = ["scan-device/wia"]
 # The test worker, `scan-worker-fake`, a binary serving the scripted backend,
-# SANE's, TWAIN's, and protocol written by hand: for this crate's tests,
-# never for a shipped build, since its scenarios hang, crash and break the
-# protocol. It turns on scan-device's `fake`, `sane` and `twain`, which the
-# re-export `scan_worker::scan_device` then holds; nothing else in the
-# library changes with it. A binary takes its package's dependencies, never
-# its dev-dependencies, so the backends it serves come on through this
+# SANE's, TWAIN's, WIA's, and protocol written by hand: for this crate's
+# tests, never for a shipped build, since its scenarios hang, crash and break
+# the protocol. It turns on scan-device's `fake`, `sane`, `twain` and `wia`,
+# which the re-export `scan_worker::scan_device` then holds; nothing else in
+# the library changes with it. A binary takes its package's dependencies,
+# never its dev-dependencies, so the backends it serves come on through this
 # feature.
-fake = ["scan-device/fake", "sane", "twain"]
+fake = ["scan-device/fake", "sane", "twain", "wia"]
 
 [dev-dependencies]
 # The tests take the test worker: a dev-dependency on the crate itself turns

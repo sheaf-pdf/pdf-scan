@@ -2,13 +2,16 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`), S0 slice 5 (`sane` backend, PR #9), and S0
-slice 9 (`twain` backend, `slices/s0-9-twain-backend.md`): `/crates/scan-device/`, 0.0.0, provisional and
-unpublished (`publish = false`): the model, and the `fake`, `sane`, and `twain` backends (`wia` is slice 10's).
-MSRV 1.89 (`decisions.md`). No `unsafe` (`#![forbid(unsafe_code)]`), and every public item documented
-(`#![warn(missing_docs)]`). Changed by S0 slice 4 for `scan-worker` (`archive/slices/s0-4-scan-worker.md`): a
-`serde` feature, and the fake's `Fault::AwaitCancel` ("Slice 4's changes", below); S0 slice 9's `twain` backend
-required zero breaking changes to the model.
+**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`), S0 slice 5 (`sane` backend, PR #9), S0 slice 9
+(`twain` backend, PR #11, `archive/slices/s0-9-twain-backend.md`), and S0 slice 10 (`wia` backend,
+`slices/s0-10-wia-backend.md`): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish = false`):
+the model, and the `fake`, `sane`, `twain`, and `wia` backends. MSRV 1.89 (`decisions.md`). `#![deny(unsafe_code)]`,
+with `#[allow(unsafe_code)]` confined strictly to `src/wia/com.rs` on Windows for `IWiaDevMgr2` /
+`IWiaTransferCallback` / `IStream` COM vtables (every `unsafe` block carrying its `// SAFETY:` invariant; builds
+without `wia` or off Windows hold zero `unsafe`), and every public item documented (`#![warn(missing_docs)]`).
+Changed by S0 slice 4 for `scan-worker` (`archive/slices/s0-4-scan-worker.md`): a `serde` feature, and the fake's
+`Fault::AwaitCancel` ("Slice 4's changes", below); both S0 slice 9's `twain` backend and S0 slice 10's `wia`
+backend required zero breaking changes to the model.
 
 - **What:** the device model of [M5 proposal 9](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p09-device-model.md), as `crates/scan-device-seam.md`'s "The model, for slice 3"
   writes its types and traits down (S0 slice 2, for review), built so in S0 slice 3, every name the note's; and
@@ -193,21 +196,38 @@ required zero breaking changes to the model.
       and stuck `TWCS_TOP`); inspects `DAT_STATUS` and `CAP_FEEDERLOADED` on unexpected `Event::CloseRequest`;
       pumps 100 ms intervals for sheet-granular cancel; opens `settings_window` with same-thread owner deadlock
       refusal.
-  - `wia` (Windows), on the `windows` crate's `Win32_Devices_ImageAcquisition` (0.62.2, entry 7): its own STA
-    thread; the root's `Feeder` child; `WIA_IPS_PAGES = 0`.
-    - **Duplex:** `WIA_IPS_DOCUMENT_HANDLING_SELECT` = `DUPLEX` or `FRONT_ONLY` (one, never both) written to
-      the Feeder item. `FEEDER` in that property is WIA 1.0's root value, obsolete since Vista; NAPS2 keeps
-      the combined value for WIA 1.0's root only.
-    - **The batch:** `WIA_STATUS_END_OF_MEDIA` (`0x210001`, named in the SDK metadata though Learn leaves it
-      out) ends a feeder batch. `FEED_READY` is a cached reading, wrong either way at times: a hint, not a
-      test. A page count can read back while the feeder keeps running: cancel the transfer and send
-      `WIA_CMD_STOP_FEEDER`. Progress from bytes, since the percentage peaks near 40 and jumps to 100. One
-      device open at a time (some WSD drivers fault with two).
-    - **Errors:** matched by the SDK's values and also by Learn's misprinted ones: cover open, lamp off,
-      multi-feed and the endorser counter are 0x80210010, 11, 14 and 15 in the SDK, 0x80210016, 17, 20 and
-      21 on Learn (Windows' WSD driver returns 0x80210010 for an open cover).
-    - These rules are ported from printscan-windows (MIT OR Apache-2.0, measured on Windows' WSD driver)
-      and NAPS2.Wia (MIT, which repeats Learn's codes), with credit, every value checked against `windows`.
+  - `wia` (Windows, **built in S0 slice 10**), on `windows` `0.62` (`Win32_Devices_ImageAcquisition`) and
+    `windows-core` `0.62` (`scan_device::wia::WiaBackend` behind `feature = "wia"`, building on every OS and
+    returning `NotInstalled { what: "WIA" }` off Windows after `BadId` pre-checks):
+    - **STA session & `OpenGate`:** dedicated STA thread (`CoInitializeEx(COINIT_APARTMENTTHREADED)`) with
+      `ComGuard` dropped last so all out-of-proc `stisvc` proxies release before `CoUninitialize()`; per-session
+      `OpenGate` enforces at most one open WIA device per process (concurrent `open` returns `Busy`), while
+      `StaActivity` guards `list` and `open` deadlines cleanly without spinning up duplicate STA threads.
+    - **Ids, camera filtering, and root verification:** `wia:<WIA_DIP_DEV_ID>`, refused as `BadId` before COM on
+      wrong `Driver`, missing `wia:` prefix, empty id, `NUL`, or `> 4096` bytes; `list` filters to
+      `StiDeviceTypeScanner` (`1`) with `WIA_WSD_MANUFACTURER` / `WIA_WSD_MODEL_NAME` / `WIA_WSD_FRIENDLY_NAME`
+      fallbacks, and `open` re-verifies `(maker, model)` on the root `IWiaItem2` so a reassigned STI `\NNNN`
+      instance index returns `Gone`.
+    - **Item-tree `Caps`, WDK property order, and WSD `WIA_IPS_PAGES`:** bounded folder walk deduplicating
+      `[Flatbed, Feeder]` (`WIA_CATEGORY_FEEDER` preferred over `WIA_CATEGORY_FEEDER_FRONT`, skipping
+      `FEEDER_BACK`, `FILM`, `FINISHED_FILE`), dynamic `DATATYPE` -> `DEPTH` probing with 16-bit gated on
+      `WiaImgFmt_RAW`, and `EnumWIA_FORMAT_INFO` transfer-pair lookup with property fallback; resets sticky
+      processing (`BLANK_PAGES`, `AUTO_DESKEW`, `ROTATION`, `PREVIEW`, `COMPRESSION`, `PLANAR`), writes `DUPLEX`
+      or `FRONT_ONLY` (never combined, preserving `FEEDER` when required by the constraint), negotiates
+      `WIA_IPS_PAGES = 0` with even non-zero multi-`Download` fallback for WSD drivers, and mutually excludes
+      `Paper::Auto` (`WIA_AUTO_CROP_SINGLE` / `WIA_PAGE_AUTO`) vs `Paper::Size` (`AUTO_CROP = 0`,
+      `WIA_PAGE_CUSTOM`, `XPOS`/`YPOS`, stepped `XEXTENT`/`YEXTENT`, `0.005` mm tolerance).
+    - **COM callback/stream, transfers, cancel, and errors:** manual `#[repr(C)]` `TransferCallbackCom` (rejecting
+      `IAgileObject` for STA affinity, enforcing `owner_thread` and non-reentrant `RestoreSink` / `SinkLease`, and
+      zeroing `*ppDestination` upfront on `S_FALSE`) plus `BoundedStream` (`512 MiB + 64 KiB` ceiling in checked
+      `u64` arithmetic returning `STG_E_MEDIUMFULL`); decodes `WiaImgFmt_BMP` and `WiaImgFmt_MEMORYBMP` via shared
+      `src/dib.rs` (`BI_RGB` and `16`/`32`-bit `BI_BITFIELDS`) and `WiaImgFmt_RAW` (`WIA_RAW_HEADER`) across all
+      five `Format`s (or validates magic headers for `Pixels::Encoded`), falls back from `TYMED_CALLBACK` to
+      `TYMED_FILE` on 0-page refusal, pairs `FRONT_FIRST` and `BACK_FIRST` duplex sides (`SideKnown::Inferred`),
+      emits `WarmingUp` once with bounded retry, restores byte progress past trailing empty streams, cancels
+      between sheets (`S_FALSE` + best-effort `WIA_CMD_STOP_FEEDER`), and maps both SDK (`0x80210010`..`15`) and
+      Microsoft Learn (`0x80210016`..`21`) `HRESULT`s (`0x80210015` disambiguated by operation context). Rules
+      ported from `printscan-windows` (MIT OR Apache-2.0) and `NAPS2.Wia` (MIT), with credit.
   - `ica` (macOS), later (entry 8): `objc2-image-capture-core` 0.3.2 (Zlib OR Apache-2.0 OR MIT) used
     directly, missing bindings contributed upstream; the session flow after scanline (MIT). A safe scanning
     layer over ImageCaptureCore is a hole nobody fills.
@@ -242,10 +262,14 @@ required zero breaking changes to the model.
   integration tests (`sane_fake.rs`, `sane_real.rs`), and **S0 slice 9** added `twain` unit tests (114 total
   `scan-device --features twain --lib` unit tests running on both `x86_64-pc-windows-msvc` and
   `i686-pc-windows-msvc` in CI, closing `TEST-12`) plus 8 live sample-source integration tests in
-  `/crates/scan-device/tests/twain.rs` in both bitnesses.
-- **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
-  frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
-  sheaf takes it no sooner (`sheaf/swaps.md`).
+  `/crates/scan-device/tests/twain.rs` in both bitnesses. **S0 slice 10** added shared `dib.rs` and `wia` unit tests
+  (144 total `scan-device --all-features --lib` unit tests running on both `x86_64-pc-windows-msvc` and
+  `i686-pc-windows-msvc`), 5 cross-platform scripted WIA integration tests in
+  `/crates/scan-device/tests/wia_fake.rs`, and live Windows COM WIA 2.0 tests in
+  `/crates/scan-device/tests/wia_com.rs` in both bitnesses.
+- **Stability:** provisional (0.0.x, unpublished) through S0's Linux and Windows backend slices; frozen at 0.1.0 in
+  S0 slice 11, now that `sane`, `twain`, and `wia` have all been built against it without breaking changes
+  (`decisions.md`, "Made here"). sheaf takes it no sooner (`sheaf/swaps.md`).
 - **The seam:** `crates/scan-device-seam.md`: for each concept of the model, how SANE, TWAIN, WIA and ICA
   deliver it, what the model makes of it, and what's still to settle, with the known unknowns. First version
   2026-11-08, before any driver layer; revised by the TWAIN spike (S0 slice 7) and by S0 slice 2 (its SANE

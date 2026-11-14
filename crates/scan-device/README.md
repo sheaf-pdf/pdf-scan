@@ -15,10 +15,11 @@ drivers, encoded through the `serde` feature.
 
 Each driver API (SANE, TWAIN, WIA, ...) is a backend behind the same two traits, each behind a feature of its
 own. This version has the model, a scripted backend for tests, SANE's scanners on Unix-like systems, and
-TWAIN's scanners on Windows (32- and 64-bit).
+TWAIN's and WIA 2.0's scanners on Windows.
 
 Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
-once the Windows backends are complete. No `unsafe` code.
+once the Windows backends are complete. `#![deny(unsafe_code)]`, with `unsafe` confined strictly to `wia/com.rs`
+on Windows for `IWiaDevMgr2` / `IWiaTransferCallback` / `IStream` COM vtables.
 
 ## Features
 
@@ -65,6 +66,17 @@ None is on by default.
   between sheets, and opens the driver's own settings window (`settings_window`). TWAIN data sources are
   in-process `.ds` DLLs of their own bitness, so a 64-bit app drives both 64-bit and 32-bit TWAIN workers
   through `scan-worker`.
+- `wia`: `scan_device::wia::WiaBackend`, Windows Image Acquisition (WIA 2.0) scanners on Windows, over COM on
+  a dedicated STA thread through `IWiaDevMgr2` (`CLSID_WiaDevMgr2`), reporting `ScanError::NotInstalled` when
+  the `stisvc` service isn't available or off Windows. Filters devices to `StiDeviceTypeScanner` with `wia:`
+  device ids and WSD metadata fallbacks, verifies maker and model on the root item at open, and keeps at most
+  one device open per process so WSD drivers never fault. Walks the `IWiaItem2` tree for `Flatbed` and `Feeder`
+  capabilities, negotiates WDK-ordered properties (`DATATYPE` before `DEPTH`, `TYMED` before `FORMAT`, `XRES`
+  before `YRES`, `AUTO_CROP` and `WIA_PAGE_CUSTOM` before stepped extents, sticky resets, and WSD non-zero
+  `WIA_IPS_PAGES` multi-download fallback) and reads them back for `Event::Applied`, decodes `.bmp`, DIB, and
+  8/16-bit `WIA_RAW_HEADER` transfers into the checked raw layout (or passes `Png`/`Jpeg`/`Tiff`/`Bmp` through
+  as `Pixels::Encoded`), pairs `FRONT_FIRST` and `BACK_FIRST` duplex sides, cancels between sheets (`S_FALSE`
+  plus `WIA_CMD_STOP_FEEDER`), and maps both the Windows SDK and Microsoft Learn `HRESULT` error tables.
 
 ## License
 

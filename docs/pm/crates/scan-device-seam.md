@@ -33,8 +33,20 @@ from a USB connection's name, events go on a bounded channel, the growing struct
 `Encoded` is asked for, the settings window takes an owner, `Stopped` moves to `scan-worker`'s client, and
 `ScanError` gains `SettingsRefused`, `AccessDenied`, `TimedOut` and `Unsupported`.
 
+**Revised 2026-11-14 by S0 slice 10, `scan-device`'s `wia` backend and `scan-worker`'s `wia` feature**
+(`slices/s0-10-wia-backend.md`), settling the WIA 2.0 rows in sections 1 to 9 and the unknowns table, again with
+zero breaking changes to the model: `WiaBackend` drives `IWiaDevMgr2` over COM on a dedicated STA thread (with a
+per-session `OpenGate` so at most one WIA device is open per process), filters listings to `StiDeviceTypeScanner`
+with `WIA_WSD_*` metadata fallbacks, validates `wia:` ids before touching COM (`BadId`), walks the `IWiaItem2`
+tree deduplicating `[Flatbed, Feeder]`, negotiates WDK-ordered properties (including WSD non-zero `WIA_IPS_PAGES`
+multi-`Download` continuation and 0-page `TYMED_CALLBACK` -> `TYMED_FILE` fallback), decodes `WiaImgFmt_BMP`,
+`WiaImgFmt_MEMORYBMP`, and `WiaImgFmt_RAW` (`WIA_RAW_HEADER`) into `RawImage` (or passes `Png`, `Tiff`, `Bmp`, and
+`Jpeg` through as `Pixels::Encoded`), pairs `FRONT_FIRST` and `BACK_FIRST` duplex sides (`SideKnown::Inferred`),
+cancels between sheets via `S_FALSE` + best-effort `WIA_CMD_STOP_FEEDER`, and maps both the Windows SDK and
+Microsoft Learn `HRESULT` error tables (`0x80210015` disambiguated by operation context).
+
 **Revised 2026-11-11 and 12 by S0 slice 9, `scan-device`'s `twain` backend, 32-bit worker, and Windows hardening**
-(`slices/s0-9-twain-backend.md`), settling the slice-9 TWAIN rows in sections 1, 2, 3, 6, 7 and 9 and the
+(`archive/slices/s0-9-twain-backend.md`), settling the slice-9 TWAIN rows in sections 1, 2, 3, 6, 7 and 9 and the
 unknowns table, with zero breaking changes to the model: `Client::list_twain` merges concurrent 64- and 32-bit
 TWAIN listings in favour of 64-bit while keeping 32-bit-only drivers; `BadId`, `SettingsRefused`, `AccessDenied`
 and `Unsupported` map cleanly from TWAIN pre-checks and condition codes; `Paper::Size` sets `DAT_IMAGELAYOUT`
@@ -293,7 +305,12 @@ jam mid-page) is never delivered.
 | Rows | Top down, packed: each row exactly its pixels' bytes; no stride stored, `stride()` worked out from format and width | Top down; `bytes_per_line` may pad, `sane-dl` drops it | DIB bottom up, or top down where its height is negative, rows padded to four bytes; memory strips top down (the sample pads to four bytes), tiles by offset | `twain`: a DIB's rows flipped where it's bottom up (a positive height), padding dropped, tiles placed |
 | Channels | R, G, B per pixel, interleaved | R, G, B (one frame, or three interleaved by `sane-dl`) | DIB B, G, R; memory R, G, B on the sample | `twain`: the DIB's swapped |
 
-WIA's and ICA's columns are to confirm (slice 10, and the `ica` slice). The layout is slice 7's comparable form
+WIA's column is settled in S0 slice 10 (`WiaImgFmt_BMP` and `WiaImgFmt_MEMORYBMP` decoded through the shared safe
+`dib.rs` decoder, flipping bottom-up rows, dropping 4-byte row padding, swapping BGR/BGRA, and applying `BI_RGB`
+palettes and `BI_BITFIELDS` masks; `WiaImgFmt_RAW` decoded from its 80-byte `WIA_RAW_HEADER` across all five
+`Format`s, inverting monochrome `WIA_PHOTO_WHITE_0` with 1-bit padding masked, swapping `WIA_DATA_RAW_BGR` in
+24/32/48/64-bit, flipping `LineOrder == 2`, and keeping little-endian 16-bit samples); ICA's column is to confirm
+(the `ica` slice). The layout is slice 7's comparable form
 (the spike's `image` module, its module doc: rows top down, packed, RGB, gray and 1-bit with 0 black, the first
 pixel in the high bit, the bits past a row's last pixel zero), with 16-bit little-endian added, so the TWAIN side's
 conversion exists already and SANE's 1-bit gray is the one format a backend inverts. **Held beside a third party**
@@ -383,12 +400,12 @@ that carries the sheet count on (`first_sheet`). For SANE, `Page::NoDocs` with `
 | `Busy` | `DEVICE_BUSY`, at open too (`pnm` opens one device at a time) | `TWCC_MAXCONNECTIONS` | `WIA_ERROR_BUSY` | to confirm |
 | `Gone` (unplugged, offline) | `IO_ERROR` after opening; `INVAL` from `sane_open`, for a device gone and a backend not installed alike (section 1) | `TWCC_CHECKDEVICEONLINE` (offline at state 3 or less, lost at 4 or more) | `WIA_ERROR_OFFLINE` | the device removed |
 | `Driver { message, shown }` | other statuses: `NO_MEM`, `UNSUPPORTED`; 12 and 13, which `sane.h` 1.4.0 reserves for a later SANE (`#if 0`), kept as integers; every other `sane-dl` error ("The model, for slice 3", its mapping) | `TWCC_OPERATIONERROR` (the driver has already shown the user its message: `shown`), others | others, decided by code (`E_FAIL`'s text is localized) | others |
-| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`: `LoadError::NotFound` (`Load::System` or `with_dsm_path`), or off Windows | to confirm | to confirm |
-| `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | refused before loading `TWAINDSM.dll` (S0 slice 9): wrong `Driver::Twain { bits }`, missing `twain32:`/`twain64:` prefix, empty `ProductName`, a `NUL`, or past 32 bytes (`TW_STR32`) | to confirm | to confirm |
-| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`sane_start` in `backend/escl/escl.c`, `backend/lexmark.c`, `backend/pixma/pixma.c` and `backend/hp5590.c`, studied) | `MSG_ENABLEDS` refused with `TWCC_BADVALUE` (S0 slice 9) | to confirm | to confirm |
-| `AccessDenied` (S0 slice 2's code review) | `ACCESS_DENIED`: the device's permissions (`epson2`, `epsonds` and `kodakaio` log "check that you have permissions on the device" as `sanei_usb_open` answers it; `pixma` maps its `EACCES` to it: studied), or an authorization the app doesn't give (no callback, FEAT-11) | `TWCC_DENIED` (S0 slice 9) | to confirm | to confirm |
-| `TimedOut` (S0 slice 2's code review) | a listing past its deadline (`sane-dl`'s `DeadlineExceeded`, and `ListingPending` after it), in `list` or in `open`'s listing | the DSM walk / STA request past `list` or `open`'s deadline (S0 slice 9) | to confirm | the browse past `open`'s deadline (to confirm) |
-| `Unsupported` (S0 slice 2's code review) | a settings window asked of a SANE device, which has none (section 9) | a source with no usable formats or resolutions, or `settings_window` refused with `TWCC_CAPUNSUPPORTED` / `TWCC_BADCAP` (S0 slice 9) | to confirm | to confirm |
+| `NotInstalled { what }` (S0 slice 2) | no libsane: `LoadError::NotFound`, with the names tried | no `TWAINDSM.dll`: `LoadError::NotFound` (`Load::System` or `with_dsm_path`), or off Windows | `stisvc` disabled/stopped (`ERROR_SERVICE_DISABLED`, `ERROR_SERVICE_DOES_NOT_EXIST`, `CO_E_SERVER_EXEC_FAILURE`), `WIA_S_NO_DEVICE_AVAILABLE` (`0x80210015`) at `CoCreateInstance`, `REGDB_E_CLASSNOTREG`, or off Windows (`what: "WIA"`, S0 slice 10) | to confirm |
+| `BadId` (S0 slice 2) | a stored id refused before `sane_open` (section 1): not `sane:` and Latin-1, a `NUL` (`sane-dl`'s `NulInName`), `dll`'s testing prefixes, a leading `:`, the empty name | refused before loading `TWAINDSM.dll` (S0 slice 9): wrong `Driver::Twain { bits }`, missing `twain32:`/`twain64:` prefix, empty `ProductName`, a `NUL`, or past 32 bytes (`TW_STR32`) | refused before COM on every OS (S0 slice 10): wrong `Driver`, missing `wia:` prefix, empty id, a `NUL`, or past 4096 bytes | to confirm |
+| `SettingsRefused` (S0 slice 2's code review) | `INVAL` from `sane_start` again once the settings are set again (`StartInvalid` twice running): `escl`'s empty scan region, `lexmark`'s zero size, `pixma`'s and `hp5590`'s parameters it can't scan with (`sane_start` in `backend/escl/escl.c`, `backend/lexmark.c`, `backend/pixma/pixma.c` and `backend/hp5590.c`, studied) | `MSG_ENABLEDS` refused with `TWCC_BADVALUE` (S0 slice 9) | `WIA_ERROR_INCORRECT_HARDWARE_SETTING` (`0x8021000C`), `WIA_ERROR_INVALID_DRIVER_RESPONSE` (`0x8021000F`), or `E_INVALIDARG` (`0x80070057`) during property negotiation or before any stream begins (S0 slice 10) | to confirm |
+| `AccessDenied` (S0 slice 2's code review) | `ACCESS_DENIED`: the device's permissions (`epson2`, `epsonds` and `kodakaio` log "check that you have permissions on the device" as `sanei_usb_open` answers it; `pixma` maps its `EACCES` to it: studied), or an authorization the app doesn't give (no callback, FEAT-11) | `TWCC_DENIED` (S0 slice 9) | `E_ACCESSDENIED` (`0x80070005`), or `WIA_ERROR_USER_INTERVENTION` (`0x80210008`) at `CreateDevice` (S0 slice 10) | to confirm |
+| `TimedOut` (S0 slice 2's code review) | a listing past its deadline (`sane-dl`'s `DeadlineExceeded`, and `ListingPending` after it), in `list` or in `open`'s listing | the DSM walk / STA request past `list` or `open`'s deadline (S0 slice 9) | STA request / `EnumDeviceInfo` / `CreateDevice` past `list` or `open`'s deadline (S0 slice 10) | the browse past `open`'s deadline (to confirm) |
+| `Unsupported` (S0 slice 2's code review) | a settings window asked of a SANE device, which has none (section 9) | a source with no usable formats or resolutions, or `settings_window` refused with `TWCC_CAPUNSUPPORTED` / `TWCC_BADCAP` (S0 slice 9) | a device tree with zero usable `Flatbed`/`Feeder` sources, `settings_window` (WIA has no driver settings dialog), or `WIA_ERROR_PROPERTY_DONT_EXIST` / `E_NOTIMPL` (S0 slice 10) | to confirm |
 
 **SANE, as `sane-dl` gives it** (S0 slice 1): every status with the function that answered it
 (`Error::Status { status, call }`), statuses SANE doesn't define kept as integers. No libsane at all is no
@@ -903,10 +920,10 @@ Each section's "To settle", gathered, with what settles it:
 | How events cross from the TWAIN thread to the backend's; posting cancels to its loop | **Settled, S0 slice 7:** a channel out; requests posted to the window, matched by window, kept while the loop waits, never forwarded; a cancel queued before the enable, and one during a memory transfer, shown (section 8). **S0 slice 8:** requests of the backend's own type served in every state, the source's messages first; inside a DSM call, `StopHandle` / watchdog terminates the worker (`FEAT-14`, `FEAT-17`, S0 slice 9) |
 | Whether TWAIN can finish the page in flight and feed no more | **Settled for transfers, S0 slice 7** (`MSG_ENDXFER`, then `MSG_RESET`); whether the feeder stops, and `MSG_STOPFEEDER`, S0 slice 12 |
 | Whether `DAT_CALLBACK2` is enough without the loop for sources that signal later | S0 slice 12; the loop stays meanwhile (`TwainBackend` auto-selects `Callback` for `DF_DS2` and `Events` for 1.x, S0 slice 9) |
-| The cancel handle and progress through `in-progress` | **Settled, S0 slices 2 and 9:** `in-progress` taken in slice 2; `Enabled::next_event` wakes every 100 ms in `twain/batch.rs` to check cancel between sheets |
-| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | PaperStream IP fills `TWEI_PAGESIDE` (2026-11-09 probe, `milestones/s0-devices.md`); FUJITSU TWAIN32 and WIA by hand in S0 slice 12; the `ica` slice |
-| "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam) |
-| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | **Settled for S0:** raw transfers easily clear S0 slice 4's throughput gate (~70+ pages/s color in debug on Windows and Linux); `TwainBackend` leaves `encodings` empty in S0 slice 9 |
+| The cancel handle and progress through `in-progress` | **Settled, S0 slices 2, 9 and 10:** `in-progress` taken in slice 2; `Enabled::next_event` wakes every 100 ms in `twain/batch.rs` and `TransferCallbackCom` checks `Progress::check()` between sheets (`S_FALSE` + `WIA_CMD_STOP_FEEDER`) in `wia/batch.rs` |
+| Which drivers fill `TWEI_PAGESIDE`; whether WIA or ICA say a page's side | PaperStream IP fills `TWEI_PAGESIDE` (2026-11-09 probe, `milestones/s0-devices.md`); WIA 2.0 has no per-page side property, so `WiaBackend` pairs duplex streams in `FRONT_FIRST` / `BACK_FIRST` order as `SideKnown::Inferred` (S0 slice 10); FUJITSU TWAIN32 and WIA hardware by hand in S0 slice 12; the `ica` slice |
+| "Continue" after a jam in TWAIN | S0 slice 12 (the sample source can't jam; WIA starts a fresh `IWiaTransfer::Download` on the next `scan`) |
+| Compressed transfers (G4, JPEG) for the pipe's throughput, or raw only at first | **Settled for S0:** raw transfers easily clear S0 slice 4's throughput gate (~70+ pages/s color in debug on Windows and Linux); `TwainBackend` leaves `encodings` empty in S0 slice 9, while `WiaBackend` exposes `TYMED_FILE` `Png`/`Tiff`/`Bmp`/`Jpeg` when `Settings::encodings` asks for them (S0 slice 10) |
 | The raw layout's 1-bit polarity and 16-bit byte order | **Settled, S0 slice 2, for review** (section 3): 0 the least intensity at every format, the leftmost pixel in the high bit, padding bits 0, 16-bit little-endian, rows top down and packed, R, G, B; held beside `scanimage`'s PNG |
 | The driver window's owner across processes | **Settled, S0 slice 9:** `WindowOwner(u64)` validated for canonical 32-bit `HWND`, `IsWindow`, and non-owning caller thread, passed via `Source::settings_ui(Option<u64>)`, with `EnableWindow` restored on step-down or worker failure |
 | Every ICA name marked "to confirm"; its run loop in a worker | The `ica` slice (later) |

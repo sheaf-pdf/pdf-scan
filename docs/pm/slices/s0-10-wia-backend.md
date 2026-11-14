@@ -399,3 +399,12 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
   `/crates/scan-device/tests/wia_fake.rs` and `/crates/scan-device/tests/wia_com.rs` (plus back-patched `.bmp` +
   `STG_E_MEDIUMFULL` COM vtable tests in `wia/com.rs`), and verified all 64-bit, `i686`, single-feature clippy,
   `just doc`, and MSRV `1.89` gates green.
+- **Step 4 complete:** Added `wia = ["scan-device/wia"]` (and included `wia` in `fake`) in
+  `/crates/scan-worker/Cargo.toml`, implemented `wia` and `wia-fake` worker scenarios in
+  `/crates/scan-worker/src/bin/scan-worker-fake/wia.rs`, added process-isolated worker integration tests in
+  `/crates/scan-worker/tests/wia_worker.rs` (verifying camera filtering, noisy driver `stdout` isolation, `caps()`,
+  `settings_window` -> `Unsupported`, `.bmp` raw and `Png` encoded scans, WSD multi-`Download` duplex + `WarmingUp` +
+  byte progress restoration, deterministic mid-sheet duplex cancel + `WIA_CMD_STOP_FEEDER`, `FeederEmpty`, mid-batch
+  `Jammed` page preservation, `BadId`-before-`NotInstalled`, multi-backend `TwainBackend` + `WiaBackend` open routing,
+  and live OS `wia` workers in both 64-bit and `i686`), wired `scan-device-wia-test` and `scan-worker-wia-test` into
+  `/justfile` and `/.github/workflows/ci.yml`, and synced crate READMEs, lib docs, and `docs/pm/`.

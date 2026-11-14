@@ -313,6 +313,18 @@ merged first.
        4 parallel adversarial code reviews run and every finding fixed.
 10. **scan-device's `wia` backend:** its STA thread, the feeder and duplex, errors by code. Checked against a
     fake of the WIA calls behind a trait (no virtual WIA device installs without a person).
+    - **Built on `s0-10-wia-backend`, 2026-11-14** (`slices/s0-10-wia-backend.md`): `scan_device::wia::WiaBackend`
+      behind `feature = "wia"` (`windows = "0.62"`, `windows-core = "0.62"` on Windows; cross-platform `BadId`-first
+      + `NotInstalled { what: "WIA" }` stub elsewhere), shared safe `dib.rs` (`BITMAPFILEHEADER` `bfOffBits`,
+      `BI_RGB`, and `16`/`32`-bit `BI_BITFIELDS`), dedicated STA session with `OpenGate` (`Busy` on second open) and
+      `ComGuard` drop-last hygiene, manual `TransferCallbackCom` (rejecting `IAgileObject`, enforcing `owner_thread`
+      and non-reentrant `RestoreSink` / `SinkLease`, zeroing `*ppDestination` on `S_FALSE`) + `BoundedStream`
+      (`512 MiB + 64 KiB` checked `u64` cap returning `STG_E_MEDIUMFULL`), `IWiaItem2` tree discovery, WDK-ordered
+      property negotiation + WSD multi-`Download` continuation + 0-page `TYMED_CALLBACK` -> `TYMED_FILE` fallback,
+      `WiaImgFmt_BMP` / `WiaImgFmt_MEMORYBMP` / `WiaImgFmt_RAW` (`WIA_RAW_HEADER`) decoding across all five `Format`s
+      plus magic-checked `Pixels::Encoded`, `FRONT_FIRST` and `BACK_FIRST` duplex pairing, mid-sheet-safe cancel +
+      `WIA_CMD_STOP_FEEDER`, dual SDK/Learn `HRESULT` mapping (`0x80210015` disambiguated by operation context), and
+      `scan-worker`'s `wia` feature + `wia_worker.rs` tests in 64-bit and `i686` wired into `justfile` and CI.
 11. **The model frozen:** the seam note's unknowns all answered, `scan-device` and `scan-worker` out of 0.0.x
     (0.1.0), the protocol's version bumped once for it.
 12. **By hand on Windows:** an fi-6130 on FUJITSU TWAIN32 through the 32-bit worker (and PaperStream IP x64

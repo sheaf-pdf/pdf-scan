@@ -2,12 +2,14 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 4 (`archive/slices/s0-4-scan-worker.md`) and hardened for Windows and 32/64-bit TWAIN in
-S0 slice 9 (`slices/s0-9-twain-backend.md`): `/crates/scan-worker/`, 0.0.0, provisional and unpublished
-(`publish = false`), on `scan-device`'s model (`sane` and `twain` features optional); MSRV 1.89 (`decisions.md`).
-`#![deny(unsafe_code)]` with `#[allow(unsafe_code)]` confined strictly to `src/sys.rs` (stdout isolation on Unix
-and Windows, and Windows Job Objects + `WindowGuard`), every block carrying its `// SAFETY:` invariant
-(`scan-worker-fake` keeps `#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`).
+**As built** in S0 slice 4 (`archive/slices/s0-4-scan-worker.md`), hardened for Windows and 32/64-bit TWAIN in S0
+slice 9 (PR #11, `archive/slices/s0-9-twain-backend.md`), and extended with the `wia` feature and WIA worker tests
+in S0 slice 10 (`slices/s0-10-wia-backend.md`): `/crates/scan-worker/`, 0.0.0, provisional and unpublished
+(`publish = false`), on `scan-device`'s model (`sane`, `twain`, and `wia` features optional); MSRV 1.89
+(`decisions.md`). `#![deny(unsafe_code)]` with `#[allow(unsafe_code)]` confined strictly to `src/sys.rs` (stdout
+isolation on Unix and Windows, and Windows Job Objects + `WindowGuard`), every block carrying its `// SAFETY:`
+invariant (`scan-worker-fake` keeps `#![forbid(unsafe_code)]`), and every public item documented
+(`#![warn(missing_docs)]`).
 
 - **What:** drivers in a process of their own
   ([M5 proposal 4](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p04-scanner-drivers-run-worker-process.md)).
@@ -117,14 +119,15 @@ and Windows, and Windows Job Objects + `WindowGuard`), every block carrying its 
   fake's scripts through `serve` (a feeder, encodings, jams, a double feed, an open cover, gone, warming up, a
   settings window, a renamed device, not installed, a hang, a crash, an exit, a cancel awaited mid-page, a
   minute's listing, a slow exit), a backend that reports its environment as `Driver::Sane` (the SANE spawn
-  tested without SANE), and workers that break the protocol by hand, one for each `ProtocolError` and, since
-  the code review, for each of the model's rules the client checks, and two whose driver starts a process
-  holding the worker's pipes (`held`, the test worker again) and then aborts or exits. Never for a shipped
-  build: its scenarios hang, crash and exit by design.
+  tested without SANE), TWAIN (`twain`, `twain-fake`) and WIA (`wia`, `wia-fake`) scenarios, and workers that
+  break the protocol by hand, one for each `ProtocolError` and, since the code review, for each of the model's
+  rules the client checks, and two whose driver starts a process holding the worker's pipes (`held`, the test
+  worker again) and then aborts or exits. Never for a shipped build: its scenarios hang, crash and exit by
+  design.
 - **Boundary:** no image codec, imageproc, PDF crate or GUI toolkit under it, and nothing links libsane (the
-  client never loads it): the gates' devices loop reads its graph with every feature on (31 packages), and
-  the libsane gate reads every `bin` target's executable since this slice, the test worker the first. Its
-  dependencies: `scan-device` (path, with `serde`; `sane` and `twain` optional; public, re-exported), `serde` and
+  client never loads it): the gates' devices loop reads its graph with every feature on, and the libsane gate
+  reads every `bin` target's executable since this slice, the test worker the first. Its dependencies:
+  `scan-device` (path, with `serde`; `sane`, `twain`, and `wia` optional; public, re-exported), `serde` and
   `serde_json` (the workspace's), `tempfile` 3 and `thiserror` (the workspace's), `libc` 0.2 on Unix, and
   `windows-sys` 0.61 on Windows (`sane-dl` is kept in `[dev-dependencies]` only, for `tests/sane_worker.rs`, so
   runtime builds pull neither `sane-dl` nor `libloading` unless `sane` is enabled).
@@ -148,7 +151,9 @@ and Windows, and Windows Job Objects + `WindowGuard`), every block carrying its 
   (about 25 MB a page raw) then black and white, the rate written on standard error and asserted at 2.3
   pages a second (about 58 MB/s). Here, in the debug build the tests run, about 29 pages a second in color
   (740 MB/s, the pipe the bound), 13 times the gate; 15.8 at the lowest, under outside load. On Windows and
-  macOS: CI's run of the slice's pull request (TEST-16).
+  macOS: CI's run of the slice's pull request (TEST-16). **S0 slice 9** added `stop_handle.rs` and `twain_worker.rs`
+  (64-bit and `i686`), and **S0 slice 10** added `wia_worker.rs` (cross-platform `wia-fake` worker tests plus live
+  Windows 64-bit and `i686` `wia` worker checks).
 - **Stability:** provisional with `scan-device`'s model, whose types its protocol carries; frozen with it at
   0.1.0 in S0 slice 11, the protocol's version bumped once then. Its `serde` form and the three things it
   carries by name (a page's header, `Event`'s and `Pixels`' variants, a message's level), with fields added
