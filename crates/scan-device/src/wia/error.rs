@@ -6,6 +6,8 @@
 //! `NAPS2.Wia`, MIT). All `Driver` messages are formatted from the numeric `HRESULT` and symbolic
 //! constant rather than localized OS `FormatMessageW` strings (`E_FAIL` text varies by locale).
 
+#![allow(missing_docs)]
+
 use crate::ScanError;
 
 /// What isn't installed when the WIA 2.0 COM service (`CLSID_WiaDevMgr2` / `stisvc`) is missing
@@ -13,73 +15,73 @@ use crate::ScanError;
 pub(super) const WIA: &str = "WIA";
 
 // Standard COM / Win32 HRESULTs (`u32::cast_signed()`).
-pub(super) const S_OK_HR: i32 = 0;
-pub(super) const S_FALSE_HR: i32 = 1;
-pub(super) const E_NOTIMPL_HR: i32 = 0x8000_4001u32.cast_signed();
-pub(super) const E_NOINTERFACE_HR: i32 = 0x8000_4002u32.cast_signed();
-pub(super) const E_POINTER_HR: i32 = 0x8000_4003u32.cast_signed();
-pub(super) const E_ABORT_HR: i32 = 0x8000_4004u32.cast_signed();
-pub(super) const E_FAIL_HR: i32 = 0x8000_4005u32.cast_signed();
-pub(super) const REGDB_E_CLASSNOTREG_HR: i32 = 0x8004_0154u32.cast_signed();
-pub(super) const CO_E_OBJNOTCONNECTED_HR: i32 = 0x8004_01FDu32.cast_signed();
-pub(super) const STG_E_MEDIUMFULL_HR: i32 = 0x8003_0070u32.cast_signed();
-pub(super) const E_ACCESSDENIED_HR: i32 = 0x8007_0005u32.cast_signed();
-pub(super) const E_OUTOFMEMORY_HR: i32 = 0x8007_000Eu32.cast_signed();
-pub(super) const E_INVALIDARG_HR: i32 = 0x8007_0057u32.cast_signed();
-pub(super) const ERROR_FILE_NOT_FOUND_HR: i32 = 0x8007_0002u32.cast_signed();
-pub(super) const ERROR_BUSY_HR: i32 = 0x8007_00AAu32.cast_signed();
-pub(super) const ERROR_SERVICE_DISABLED_HR: i32 = 0x8007_0422u32.cast_signed();
-pub(super) const ERROR_SERVICE_DOES_NOT_EXIST_HR: i32 = 0x8007_0424u32.cast_signed();
-pub(super) const ERROR_SERVICE_NOT_ACTIVE_HR: i32 = 0x8007_0426u32.cast_signed();
-pub(super) const ERROR_DEVICE_NOT_CONNECTED_HR: i32 = 0x8007_048Fu32.cast_signed();
-pub(super) const ERROR_NOT_FOUND_HR: i32 = 0x8007_0490u32.cast_signed();
-pub(super) const ERROR_CANCELLED_HR: i32 = 0x8007_04C7u32.cast_signed();
-pub(super) const RPC_S_SERVER_UNAVAILABLE_HR: i32 = 0x8007_06BAu32.cast_signed();
-pub(super) const RPC_S_CALL_FAILED_HR: i32 = 0x8007_06BEu32.cast_signed();
+pub const S_OK_HR: i32 = 0;
+pub const S_FALSE_HR: i32 = 1;
+pub const E_NOTIMPL_HR: i32 = 0x8000_4001u32.cast_signed();
+pub const E_NOINTERFACE_HR: i32 = 0x8000_4002u32.cast_signed();
+pub const E_POINTER_HR: i32 = 0x8000_4003u32.cast_signed();
+pub const E_ABORT_HR: i32 = 0x8000_4004u32.cast_signed();
+pub const E_FAIL_HR: i32 = 0x8000_4005u32.cast_signed();
+pub const REGDB_E_CLASSNOTREG_HR: i32 = 0x8004_0154u32.cast_signed();
+pub const CO_E_OBJNOTCONNECTED_HR: i32 = 0x8004_01FDu32.cast_signed();
+pub const STG_E_MEDIUMFULL_HR: i32 = 0x8003_0070u32.cast_signed();
+pub const E_ACCESSDENIED_HR: i32 = 0x8007_0005u32.cast_signed();
+pub const E_OUTOFMEMORY_HR: i32 = 0x8007_000Eu32.cast_signed();
+pub const E_INVALIDARG_HR: i32 = 0x8007_0057u32.cast_signed();
+pub const ERROR_FILE_NOT_FOUND_HR: i32 = 0x8007_0002u32.cast_signed();
+pub const ERROR_BUSY_HR: i32 = 0x8007_00AAu32.cast_signed();
+pub const ERROR_SERVICE_DISABLED_HR: i32 = 0x8007_0422u32.cast_signed();
+pub const ERROR_SERVICE_DOES_NOT_EXIST_HR: i32 = 0x8007_0424u32.cast_signed();
+pub const ERROR_SERVICE_NOT_ACTIVE_HR: i32 = 0x8007_0426u32.cast_signed();
+pub const ERROR_DEVICE_NOT_CONNECTED_HR: i32 = 0x8007_048Fu32.cast_signed();
+pub const ERROR_NOT_FOUND_HR: i32 = 0x8007_0490u32.cast_signed();
+pub const ERROR_CANCELLED_HR: i32 = 0x8007_04C7u32.cast_signed();
+pub const RPC_S_SERVER_UNAVAILABLE_HR: i32 = 0x8007_06BAu32.cast_signed();
+pub const RPC_S_CALL_FAILED_HR: i32 = 0x8007_06BEu32.cast_signed();
 
 // WIA 2.0 non-negative status HRESULTs (`FACILITY_WIA = 33 = 0x21`, `SEVERITY_SUCCESS = 0`).
-pub(super) const WIA_STATUS_END_OF_MEDIA_HR: i32 = 0x0021_0001;
-pub(super) const WIA_STATUS_WARMING_UP_HR: i32 = 0x0021_0002;
-pub(super) const WIA_STATUS_CALIBRATING_HR: i32 = 0x0021_0003;
-pub(super) const WIA_STATUS_RESERVING_NETWORK_DEVICE_HR: i32 = 0x0021_0006;
-pub(super) const WIA_STATUS_NETWORK_DEVICE_RESERVED_HR: i32 = 0x0021_0007;
-pub(super) const WIA_STATUS_CLEAR_HR: i32 = 0x0021_0008;
-pub(super) const WIA_STATUS_SKIP_ITEM_HR: i32 = 0x0021_0009;
-pub(super) const WIA_STATUS_NOT_HANDLED_HR: i32 = 0x0021_000A;
+pub const WIA_STATUS_END_OF_MEDIA_HR: i32 = 0x0021_0001;
+pub const WIA_STATUS_WARMING_UP_HR: i32 = 0x0021_0002;
+pub const WIA_STATUS_CALIBRATING_HR: i32 = 0x0021_0003;
+pub const WIA_STATUS_RESERVING_NETWORK_DEVICE_HR: i32 = 0x0021_0006;
+pub const WIA_STATUS_NETWORK_DEVICE_RESERVED_HR: i32 = 0x0021_0007;
+pub const WIA_STATUS_CLEAR_HR: i32 = 0x0021_0008;
+pub const WIA_STATUS_SKIP_ITEM_HR: i32 = 0x0021_0009;
+pub const WIA_STATUS_NOT_HANDLED_HR: i32 = 0x0021_000A;
 
 // WIA 2.0 negative error HRESULTs (`WiaDef.h`, `FACILITY_WIA = 33 = 0x21`, `SEVERITY_ERROR = 1`).
-pub(super) const WIA_ERROR_GENERAL_ERROR_HR: i32 = 0x8021_0001u32.cast_signed();
-pub(super) const WIA_ERROR_PAPER_JAM_HR: i32 = 0x8021_0002u32.cast_signed();
-pub(super) const WIA_ERROR_PAPER_EMPTY_HR: i32 = 0x8021_0003u32.cast_signed();
-pub(super) const WIA_ERROR_PAPER_PROBLEM_HR: i32 = 0x8021_0004u32.cast_signed();
-pub(super) const WIA_ERROR_OFFLINE_HR: i32 = 0x8021_0005u32.cast_signed();
-pub(super) const WIA_ERROR_BUSY_HR: i32 = 0x8021_0006u32.cast_signed();
-pub(super) const WIA_ERROR_WARMING_UP_HR: i32 = 0x8021_0007u32.cast_signed();
-pub(super) const WIA_ERROR_USER_INTERVENTION_HR: i32 = 0x8021_0008u32.cast_signed();
-pub(super) const WIA_ERROR_ITEM_DELETED_HR: i32 = 0x8021_0009u32.cast_signed();
-pub(super) const WIA_ERROR_DEVICE_COMMUNICATION_HR: i32 = 0x8021_000Au32.cast_signed();
-pub(super) const WIA_ERROR_INVALID_COMMAND_HR: i32 = 0x8021_000Bu32.cast_signed();
-pub(super) const WIA_ERROR_INCORRECT_HARDWARE_SETTING_HR: i32 = 0x8021_000Cu32.cast_signed();
-pub(super) const WIA_ERROR_DEVICE_LOCKED_HR: i32 = 0x8021_000Du32.cast_signed();
-pub(super) const WIA_ERROR_EXCEPTION_IN_DRIVER_HR: i32 = 0x8021_000Eu32.cast_signed();
-pub(super) const WIA_ERROR_INVALID_DRIVER_RESPONSE_HR: i32 = 0x8021_000Fu32.cast_signed();
-pub(super) const WIA_ERROR_COVER_OPEN_HR: i32 = 0x8021_0010u32.cast_signed();
-pub(super) const WIA_ERROR_LAMP_OFF_HR: i32 = 0x8021_0011u32.cast_signed();
-pub(super) const WIA_ERROR_DESTINATION_HR: i32 = 0x8021_0012u32.cast_signed();
-pub(super) const WIA_ERROR_NETWORK_RESERVATION_FAILED_HR: i32 = 0x8021_0013u32.cast_signed();
-pub(super) const WIA_ERROR_MULTI_FEED_HR: i32 = 0x8021_0014u32.cast_signed();
+pub const WIA_ERROR_GENERAL_ERROR_HR: i32 = 0x8021_0001u32.cast_signed();
+pub const WIA_ERROR_PAPER_JAM_HR: i32 = 0x8021_0002u32.cast_signed();
+pub const WIA_ERROR_PAPER_EMPTY_HR: i32 = 0x8021_0003u32.cast_signed();
+pub const WIA_ERROR_PAPER_PROBLEM_HR: i32 = 0x8021_0004u32.cast_signed();
+pub const WIA_ERROR_OFFLINE_HR: i32 = 0x8021_0005u32.cast_signed();
+pub const WIA_ERROR_BUSY_HR: i32 = 0x8021_0006u32.cast_signed();
+pub const WIA_ERROR_WARMING_UP_HR: i32 = 0x8021_0007u32.cast_signed();
+pub const WIA_ERROR_USER_INTERVENTION_HR: i32 = 0x8021_0008u32.cast_signed();
+pub const WIA_ERROR_ITEM_DELETED_HR: i32 = 0x8021_0009u32.cast_signed();
+pub const WIA_ERROR_DEVICE_COMMUNICATION_HR: i32 = 0x8021_000Au32.cast_signed();
+pub const WIA_ERROR_INVALID_COMMAND_HR: i32 = 0x8021_000Bu32.cast_signed();
+pub const WIA_ERROR_INCORRECT_HARDWARE_SETTING_HR: i32 = 0x8021_000Cu32.cast_signed();
+pub const WIA_ERROR_DEVICE_LOCKED_HR: i32 = 0x8021_000Du32.cast_signed();
+pub const WIA_ERROR_EXCEPTION_IN_DRIVER_HR: i32 = 0x8021_000Eu32.cast_signed();
+pub const WIA_ERROR_INVALID_DRIVER_RESPONSE_HR: i32 = 0x8021_000Fu32.cast_signed();
+pub const WIA_ERROR_COVER_OPEN_HR: i32 = 0x8021_0010u32.cast_signed();
+pub const WIA_ERROR_LAMP_OFF_HR: i32 = 0x8021_0011u32.cast_signed();
+pub const WIA_ERROR_DESTINATION_HR: i32 = 0x8021_0012u32.cast_signed();
+pub const WIA_ERROR_NETWORK_RESERVATION_FAILED_HR: i32 = 0x8021_0013u32.cast_signed();
+pub const WIA_ERROR_MULTI_FEED_HR: i32 = 0x8021_0014u32.cast_signed();
 /// In `WiaDef.h`, `MAKE_HRESULT(SEVERITY_ERROR, FACILITY_WIA, 21)` (`0x8021_0015`) is defined
 /// twice: as `WIA_S_NO_DEVICE_AVAILABLE` (returned by `stisvc` `CreateDevice` for missing device
 /// IDs) and as `WIA_ERROR_MAXIMUM_PRINTER_ENDORSER_COUNTER` (returned during transfer).
-pub(super) const WIA_NO_DEVICE_OR_ENDORSER_HR: i32 = 0x8021_0015u32.cast_signed();
+pub const WIA_NO_DEVICE_OR_ENDORSER_HR: i32 = 0x8021_0015u32.cast_signed();
 
 // Microsoft Learn documentation hex misprints (decimal 16..=21 written as 0x16..=0x21).
-pub(super) const LEARN_WIA_ERROR_COVER_OPEN_HR: i32 = 0x8021_0016u32.cast_signed();
-pub(super) const LEARN_WIA_ERROR_LAMP_OFF_HR: i32 = 0x8021_0017u32.cast_signed();
-pub(super) const LEARN_WIA_ERROR_DESTINATION_HR: i32 = 0x8021_0018u32.cast_signed();
-pub(super) const LEARN_WIA_ERROR_NETWORK_RESERVATION_FAILED_HR: i32 = 0x8021_0019u32.cast_signed();
-pub(super) const LEARN_WIA_ERROR_MULTI_FEED_HR: i32 = 0x8021_0020u32.cast_signed();
-pub(super) const LEARN_WIA_ERROR_MAX_ENDORSER_HR: i32 = 0x8021_0021u32.cast_signed();
+pub const LEARN_WIA_ERROR_COVER_OPEN_HR: i32 = 0x8021_0016u32.cast_signed();
+pub const LEARN_WIA_ERROR_LAMP_OFF_HR: i32 = 0x8021_0017u32.cast_signed();
+pub const LEARN_WIA_ERROR_DESTINATION_HR: i32 = 0x8021_0018u32.cast_signed();
+pub const LEARN_WIA_ERROR_NETWORK_RESERVATION_FAILED_HR: i32 = 0x8021_0019u32.cast_signed();
+pub const LEARN_WIA_ERROR_MULTI_FEED_HR: i32 = 0x8021_0020u32.cast_signed();
+pub const LEARN_WIA_ERROR_MAX_ENDORSER_HR: i32 = 0x8021_0021u32.cast_signed();
 
 /// Which WIA operation produced an `HRESULT`, disambiguating overloaded codes such as
 /// `0x8021_0015` (`WIA_S_NO_DEVICE_AVAILABLE` vs `WIA_ERROR_MAXIMUM_PRINTER_ENDORSER_COUNTER`),

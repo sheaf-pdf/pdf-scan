@@ -3,6 +3,8 @@
 //!
 //! Pure safe Rust: compiled on Linux, macOS, and Windows with zero `windows` crate types.
 
+#![allow(missing_docs)]
+
 #[cfg(any(test, feature = "fake"))]
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(any(test, feature = "fake"))]
@@ -16,150 +18,150 @@ use super::id::RawDeviceProps;
 use crate::ScanError;
 
 /// WIA property identifier (`PROPID`).
-pub(super) type PropId = u32;
+pub type PropId = u32;
 
 // Device information properties (`WIA_DIP_*` and `WIA_WSD_*`).
-pub(super) const WIA_DIP_DEV_ID: PropId = 2;
-pub(super) const WIA_DIP_VEND_DESC: PropId = 3;
-pub(super) const WIA_DIP_DEV_DESC: PropId = 4;
-pub(super) const WIA_DIP_DEV_TYPE: PropId = 5;
-pub(super) const WIA_DIP_DEV_NAME: PropId = 7;
-pub(super) const WIA_WSD_MANUFACTURER: PropId = 38914;
-pub(super) const WIA_WSD_MODEL_NAME: PropId = 38916;
-pub(super) const WIA_WSD_FRIENDLY_NAME: PropId = 38920;
+pub const WIA_DIP_DEV_ID: PropId = 2;
+pub const WIA_DIP_VEND_DESC: PropId = 3;
+pub const WIA_DIP_DEV_DESC: PropId = 4;
+pub const WIA_DIP_DEV_TYPE: PropId = 5;
+pub const WIA_DIP_DEV_NAME: PropId = 7;
+pub const WIA_WSD_MANUFACTURER: PropId = 38914;
+pub const WIA_WSD_MODEL_NAME: PropId = 38916;
+pub const WIA_WSD_FRIENDLY_NAME: PropId = 38920;
 
 // Scanner root & item properties (`WIA_DPS_*`, `WIA_IPA_*`, `WIA_IPS_*`).
-pub(super) const WIA_DPS_HORIZONTAL_BED_SIZE: PropId = 3074;
-pub(super) const WIA_DPS_VERTICAL_BED_SIZE: PropId = 3075;
-pub(super) const WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE: PropId = 3076;
-pub(super) const WIA_DPS_VERTICAL_SHEET_FEED_SIZE: PropId = 3077;
-pub(super) const WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES: PropId = 3086;
-pub(super) const WIA_DPS_DOCUMENT_HANDLING_STATUS: PropId = 3087;
-pub(super) const WIA_IPS_DOCUMENT_HANDLING_SELECT: PropId = 3088;
-pub(super) const WIA_IPS_OPTICAL_XRES: PropId = 3090;
-pub(super) const WIA_IPS_OPTICAL_YRES: PropId = 3091;
-pub(super) const WIA_IPS_PAGES: PropId = 3096;
-pub(super) const WIA_IPS_PAGE_SIZE: PropId = 3097;
-pub(super) const WIA_IPS_PAGE_WIDTH: PropId = 3098;
-pub(super) const WIA_IPS_PAGE_HEIGHT: PropId = 3099;
-pub(super) const WIA_IPS_PREVIEW: PropId = 3100;
-pub(super) const WIA_IPS_AUTO_DESKEW: PropId = 3107;
+pub const WIA_DPS_HORIZONTAL_BED_SIZE: PropId = 3074;
+pub const WIA_DPS_VERTICAL_BED_SIZE: PropId = 3075;
+pub const WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE: PropId = 3076;
+pub const WIA_DPS_VERTICAL_SHEET_FEED_SIZE: PropId = 3077;
+pub const WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES: PropId = 3086;
+pub const WIA_DPS_DOCUMENT_HANDLING_STATUS: PropId = 3087;
+pub const WIA_IPS_DOCUMENT_HANDLING_SELECT: PropId = 3088;
+pub const WIA_IPS_OPTICAL_XRES: PropId = 3090;
+pub const WIA_IPS_OPTICAL_YRES: PropId = 3091;
+pub const WIA_IPS_PAGES: PropId = 3096;
+pub const WIA_IPS_PAGE_SIZE: PropId = 3097;
+pub const WIA_IPS_PAGE_WIDTH: PropId = 3098;
+pub const WIA_IPS_PAGE_HEIGHT: PropId = 3099;
+pub const WIA_IPS_PREVIEW: PropId = 3100;
+pub const WIA_IPS_AUTO_DESKEW: PropId = 3107;
 
-pub(super) const WIA_IPA_ITEM_NAME: PropId = 4098;
-pub(super) const WIA_IPA_FULL_ITEM_NAME: PropId = 4099;
-pub(super) const WIA_IPA_ITEM_FLAGS: PropId = 4101;
-pub(super) const WIA_IPA_DATATYPE: PropId = 4103;
-pub(super) const WIA_IPA_DEPTH: PropId = 4104;
-pub(super) const WIA_IPA_FORMAT: PropId = 4106;
-pub(super) const WIA_IPA_COMPRESSION: PropId = 4107;
-pub(super) const WIA_IPA_TYMED: PropId = 4108;
-pub(super) const WIA_IPA_CHANNELS_PER_PIXEL: PropId = 4109;
-pub(super) const WIA_IPA_BITS_PER_CHANNEL: PropId = 4110;
-pub(super) const WIA_IPA_PLANAR: PropId = 4111;
-pub(super) const WIA_IPA_PIXELS_PER_LINE: PropId = 4112;
-pub(super) const WIA_IPA_BYTES_PER_LINE: PropId = 4113;
-pub(super) const WIA_IPA_NUMBER_OF_LINES: PropId = 4114;
-pub(super) const WIA_IPA_ITEM_SIZE: PropId = 4116;
-pub(super) const WIA_IPA_ITEM_CATEGORY: PropId = 4125;
+pub const WIA_IPA_ITEM_NAME: PropId = 4098;
+pub const WIA_IPA_FULL_ITEM_NAME: PropId = 4099;
+pub const WIA_IPA_ITEM_FLAGS: PropId = 4101;
+pub const WIA_IPA_DATATYPE: PropId = 4103;
+pub const WIA_IPA_DEPTH: PropId = 4104;
+pub const WIA_IPA_FORMAT: PropId = 4106;
+pub const WIA_IPA_COMPRESSION: PropId = 4107;
+pub const WIA_IPA_TYMED: PropId = 4108;
+pub const WIA_IPA_CHANNELS_PER_PIXEL: PropId = 4109;
+pub const WIA_IPA_BITS_PER_CHANNEL: PropId = 4110;
+pub const WIA_IPA_PLANAR: PropId = 4111;
+pub const WIA_IPA_PIXELS_PER_LINE: PropId = 4112;
+pub const WIA_IPA_BYTES_PER_LINE: PropId = 4113;
+pub const WIA_IPA_NUMBER_OF_LINES: PropId = 4114;
+pub const WIA_IPA_ITEM_SIZE: PropId = 4116;
+pub const WIA_IPA_ITEM_CATEGORY: PropId = 4125;
 
-pub(super) const WIA_IPS_BLANK_PAGES: PropId = 4167;
-pub(super) const WIA_IPS_MULTI_FEED: PropId = 4168;
-pub(super) const WIA_IPS_AUTO_CROP: PropId = 4170;
-pub(super) const WIA_IPS_CUR_INTENT: PropId = 6146;
-pub(super) const WIA_IPS_XRES: PropId = 6147;
-pub(super) const WIA_IPS_YRES: PropId = 6148;
-pub(super) const WIA_IPS_XPOS: PropId = 6149;
-pub(super) const WIA_IPS_YPOS: PropId = 6150;
-pub(super) const WIA_IPS_XEXTENT: PropId = 6151;
-pub(super) const WIA_IPS_YEXTENT: PropId = 6152;
-pub(super) const WIA_IPS_PHOTOMETRIC_INTERP: PropId = 6153;
-pub(super) const WIA_IPS_ORIENTATION: PropId = 6156;
-pub(super) const WIA_IPS_ROTATION: PropId = 6157;
-pub(super) const WIA_IPS_MAX_HORIZONTAL_SIZE: PropId = 6165;
-pub(super) const WIA_IPS_MAX_VERTICAL_SIZE: PropId = 6166;
-pub(super) const WIA_IPS_MIN_HORIZONTAL_SIZE: PropId = 6167;
-pub(super) const WIA_IPS_MIN_VERTICAL_SIZE: PropId = 6168;
-pub(super) const WIA_IPS_TRANSFER_CAPABILITIES: PropId = 6169;
+pub const WIA_IPS_BLANK_PAGES: PropId = 4167;
+pub const WIA_IPS_MULTI_FEED: PropId = 4168;
+pub const WIA_IPS_AUTO_CROP: PropId = 4170;
+pub const WIA_IPS_CUR_INTENT: PropId = 6146;
+pub const WIA_IPS_XRES: PropId = 6147;
+pub const WIA_IPS_YRES: PropId = 6148;
+pub const WIA_IPS_XPOS: PropId = 6149;
+pub const WIA_IPS_YPOS: PropId = 6150;
+pub const WIA_IPS_XEXTENT: PropId = 6151;
+pub const WIA_IPS_YEXTENT: PropId = 6152;
+pub const WIA_IPS_PHOTOMETRIC_INTERP: PropId = 6153;
+pub const WIA_IPS_ORIENTATION: PropId = 6156;
+pub const WIA_IPS_ROTATION: PropId = 6157;
+pub const WIA_IPS_MAX_HORIZONTAL_SIZE: PropId = 6165;
+pub const WIA_IPS_MAX_VERTICAL_SIZE: PropId = 6166;
+pub const WIA_IPS_MIN_HORIZONTAL_SIZE: PropId = 6167;
+pub const WIA_IPS_MIN_VERTICAL_SIZE: PropId = 6168;
+pub const WIA_IPS_TRANSFER_CAPABILITIES: PropId = 6169;
 
 // `EnumDeviceInfo` flags.
-pub(super) const WIA_DEVINFO_ENUM_LOCAL: i32 = 0x10;
+pub const WIA_DEVINFO_ENUM_LOCAL: i32 = 0x10;
 
 // `IWiaItem2::GetItemType` bitflags (`WiaDef.h`).
-pub(super) const WIA_ITEM_TYPE_IMAGE: i32 = 0x0000_0001;
-pub(super) const WIA_ITEM_TYPE_FILE: i32 = 0x0000_0002;
-pub(super) const WIA_ITEM_TYPE_FOLDER: i32 = 0x0000_0004;
-pub(super) const WIA_ITEM_TYPE_ROOT: i32 = 0x0000_0008;
-pub(super) const WIA_ITEM_TYPE_TRANSFER: i32 = 0x0000_2000;
-pub(super) const WIA_ITEM_TYPE_DOCUMENT: i32 = 0x0004_0000;
-pub(super) const WIA_ITEM_TYPE_PROGRAMMABLE: i32 = 0x0008_0000;
+pub const WIA_ITEM_TYPE_IMAGE: i32 = 0x0000_0001;
+pub const WIA_ITEM_TYPE_FILE: i32 = 0x0000_0002;
+pub const WIA_ITEM_TYPE_FOLDER: i32 = 0x0000_0004;
+pub const WIA_ITEM_TYPE_ROOT: i32 = 0x0000_0008;
+pub const WIA_ITEM_TYPE_TRANSFER: i32 = 0x0000_2000;
+pub const WIA_ITEM_TYPE_DOCUMENT: i32 = 0x0004_0000;
+pub const WIA_ITEM_TYPE_PROGRAMMABLE: i32 = 0x0008_0000;
 
 // `GetPropertyAttributes` access & constraint flags (`WiaDef.h`).
-pub(super) const WIA_PROP_READ: u32 = 0x01;
-pub(super) const WIA_PROP_WRITE: u32 = 0x02;
-pub(super) const WIA_PROP_RW: u32 = WIA_PROP_READ | WIA_PROP_WRITE;
-pub(super) const WIA_PROP_NONE: u32 = 0x08;
-pub(super) const WIA_PROP_RANGE: u32 = 0x10;
-pub(super) const WIA_PROP_LIST: u32 = 0x20;
-pub(super) const WIA_PROP_FLAG: u32 = 0x40;
+pub const WIA_PROP_READ: u32 = 0x01;
+pub const WIA_PROP_WRITE: u32 = 0x02;
+pub const WIA_PROP_RW: u32 = WIA_PROP_READ | WIA_PROP_WRITE;
+pub const WIA_PROP_NONE: u32 = 0x08;
+pub const WIA_PROP_RANGE: u32 = 0x10;
+pub const WIA_PROP_LIST: u32 = 0x20;
+pub const WIA_PROP_FLAG: u32 = 0x40;
 
 // `WIA_IPA_TYMED` media constants (`objidl.h` + `WiaDef.h`).
-pub(super) const TYMED_FILE: i32 = 2;
-pub(super) const TYMED_CALLBACK: i32 = 128;
-pub(super) const TYMED_MULTIPAGE_FILE: i32 = 256;
-pub(super) const TYMED_MULTIPAGE_CALLBACK: i32 = 512;
+pub const TYMED_FILE: i32 = 2;
+pub const TYMED_CALLBACK: i32 = 128;
+pub const TYMED_MULTIPAGE_FILE: i32 = 256;
+pub const TYMED_MULTIPAGE_CALLBACK: i32 = 512;
 
 // `WIA_IPA_DATATYPE` constants (`WiaDef.h`).
-pub(super) const WIA_DATA_THRESHOLD: i32 = 0;
-pub(super) const WIA_DATA_DITHER: i32 = 1;
-pub(super) const WIA_DATA_GRAYSCALE: i32 = 2;
-pub(super) const WIA_DATA_COLOR: i32 = 3;
-pub(super) const WIA_DATA_RAW_RGB: i32 = 6;
-pub(super) const WIA_DATA_RAW_BGR: i32 = 7;
+pub const WIA_DATA_THRESHOLD: i32 = 0;
+pub const WIA_DATA_DITHER: i32 = 1;
+pub const WIA_DATA_GRAYSCALE: i32 = 2;
+pub const WIA_DATA_COLOR: i32 = 3;
+pub const WIA_DATA_RAW_RGB: i32 = 6;
+pub const WIA_DATA_RAW_BGR: i32 = 7;
 
 // `WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES` & `WIA_IPS_DOCUMENT_HANDLING_SELECT` flags.
-pub(super) const FEED: i32 = 0x001;
-pub(super) const FLAT: i32 = 0x002;
-pub(super) const DUP: i32 = 0x004;
+pub const FEED: i32 = 0x001;
+pub const FLAT: i32 = 0x002;
+pub const DUP: i32 = 0x004;
 
-pub(super) const FEEDER: i32 = 0x001;
-pub(super) const FLATBED: i32 = 0x002;
-pub(super) const DUPLEX: i32 = 0x004;
-pub(super) const FRONT_FIRST: i32 = 0x008;
-pub(super) const BACK_FIRST: i32 = 0x010;
-pub(super) const FRONT_ONLY: i32 = 0x020;
-pub(super) const BACK_ONLY: i32 = 0x040;
-pub(super) const ADVANCED_DUPLEX: i32 = 0x400;
+pub const FEEDER: i32 = 0x001;
+pub const FLATBED: i32 = 0x002;
+pub const DUPLEX: i32 = 0x004;
+pub const FRONT_FIRST: i32 = 0x008;
+pub const BACK_FIRST: i32 = 0x010;
+pub const FRONT_ONLY: i32 = 0x020;
+pub const BACK_ONLY: i32 = 0x040;
+pub const ADVANCED_DUPLEX: i32 = 0x400;
 
 // Sticky / page / photometric constants (`WiaDef.h`).
-pub(super) const ALL_PAGES: i32 = 0;
-pub(super) const PORTRAIT: i32 = 0;
-pub(super) const WIA_FINAL_SCAN: i32 = 0;
-pub(super) const WIA_AUTO_DESKEW_ON: i32 = 0;
-pub(super) const WIA_AUTO_DESKEW_OFF: i32 = 1;
-pub(super) const WIA_BLANK_PAGE_DETECTION_DISABLED: i32 = 0;
-pub(super) const WIA_AUTO_CROP_DISABLED: i32 = 0;
-pub(super) const WIA_AUTO_CROP_SINGLE: i32 = 1;
-pub(super) const WIA_PAGE_A4: i32 = 0;
-pub(super) const WIA_PAGE_LETTER: i32 = 1;
-pub(super) const WIA_PAGE_CUSTOM: i32 = 2;
-pub(super) const WIA_PAGE_AUTO: i32 = 100;
-pub(super) const WIA_PHOTO_WHITE_1: i32 = 0;
-pub(super) const WIA_PHOTO_WHITE_0: i32 = 1;
-pub(super) const WIA_COMPRESSION_NONE: i32 = 0;
-pub(super) const WIA_PACKED_PIXEL: i32 = 0;
-pub(super) const WIA_LINE_ORDER_TOP_TO_BOTTOM: u32 = 1;
-pub(super) const WIA_LINE_ORDER_BOTTOM_TO_TOP: u32 = 2;
+pub const ALL_PAGES: i32 = 0;
+pub const PORTRAIT: i32 = 0;
+pub const WIA_FINAL_SCAN: i32 = 0;
+pub const WIA_AUTO_DESKEW_ON: i32 = 0;
+pub const WIA_AUTO_DESKEW_OFF: i32 = 1;
+pub const WIA_BLANK_PAGE_DETECTION_DISABLED: i32 = 0;
+pub const WIA_AUTO_CROP_DISABLED: i32 = 0;
+pub const WIA_AUTO_CROP_SINGLE: i32 = 1;
+pub const WIA_PAGE_A4: i32 = 0;
+pub const WIA_PAGE_LETTER: i32 = 1;
+pub const WIA_PAGE_CUSTOM: i32 = 2;
+pub const WIA_PAGE_AUTO: i32 = 100;
+pub const WIA_PHOTO_WHITE_1: i32 = 0;
+pub const WIA_PHOTO_WHITE_0: i32 = 1;
+pub const WIA_COMPRESSION_NONE: i32 = 0;
+pub const WIA_PACKED_PIXEL: i32 = 0;
+pub const WIA_LINE_ORDER_TOP_TO_BOTTOM: u32 = 1;
+pub const WIA_LINE_ORDER_BOTTOM_TO_TOP: u32 = 2;
 
 // `IWiaTransferCallback` message types (`WiaDef.h`).
-pub(super) const WIA_TRANSFER_MSG_STATUS: i32 = 1;
-pub(super) const WIA_TRANSFER_MSG_END_OF_STREAM: i32 = 2;
-pub(super) const WIA_TRANSFER_MSG_END_OF_TRANSFER: i32 = 3;
-pub(super) const WIA_TRANSFER_MSG_DEVICE_STATUS: i32 = 5;
-pub(super) const WIA_TRANSFER_MSG_NEW_PAGE: i32 = 6;
+pub const WIA_TRANSFER_MSG_STATUS: i32 = 1;
+pub const WIA_TRANSFER_MSG_END_OF_STREAM: i32 = 2;
+pub const WIA_TRANSFER_MSG_END_OF_TRANSFER: i32 = 3;
+pub const WIA_TRANSFER_MSG_DEVICE_STATUS: i32 = 5;
+pub const WIA_TRANSFER_MSG_NEW_PAGE: i32 = 6;
 
 /// Platform-independent COM `GUID` value (`data1`, `data2`, `data3`, `data4`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct GuidBytes {
+pub struct GuidBytes {
     pub d1: u32,
     pub d2: u16,
     pub d3: u16,
@@ -167,7 +169,7 @@ pub(crate) struct GuidBytes {
 }
 
 impl GuidBytes {
-    pub(super) const fn new(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> Self {
+    pub const fn new(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> Self {
         GuidBytes { d1, d2, d3, d4 }
     }
 }
@@ -193,55 +195,55 @@ impl core::fmt::Debug for GuidBytes {
 }
 
 // `WIA_IPA_ITEM_CATEGORY` GUIDs (`WiaDef.h`).
-pub(super) const WIA_CATEGORY_FINISHED_FILE_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FINISHED_FILE_GUID: GuidBytes = GuidBytes::new(
     0xff2b_77ca,
     0xcf84,
     0x432b,
     [0xa7, 0x35, 0x3a, 0x13, 0x0d, 0xde, 0x2a, 0x88],
 );
-pub(super) const WIA_CATEGORY_FLATBED_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FLATBED_GUID: GuidBytes = GuidBytes::new(
     0xfb60_7b1f,
     0x43f3,
     0x488b,
     [0x85, 0x5b, 0xfb, 0x70, 0x3e, 0xc3, 0x42, 0xa6],
 );
-pub(super) const WIA_CATEGORY_FEEDER_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FEEDER_GUID: GuidBytes = GuidBytes::new(
     0xfe13_1934,
     0xf84c,
     0x42ad,
     [0x8d, 0xa4, 0x61, 0x29, 0xcd, 0xdd, 0x72, 0x88],
 );
-pub(super) const WIA_CATEGORY_FILM_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FILM_GUID: GuidBytes = GuidBytes::new(
     0xfcf6_5be7,
     0x3ce3,
     0x4473,
     [0xaf, 0x85, 0xf5, 0xd3, 0x7d, 0x21, 0xb6, 0x8a],
 );
-pub(super) const WIA_CATEGORY_ROOT_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_ROOT_GUID: GuidBytes = GuidBytes::new(
     0xf193_526f,
     0x59b8,
     0x4a26,
     [0x98, 0x88, 0xe1, 0x6e, 0x4f, 0x97, 0xce, 0x10],
 );
-pub(super) const WIA_CATEGORY_FOLDER_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FOLDER_GUID: GuidBytes = GuidBytes::new(
     0xc692_a446,
     0x6f5a,
     0x481d,
     [0x85, 0xbb, 0x92, 0xe2, 0xe8, 0x6f, 0xd3, 0x0a],
 );
-pub(super) const WIA_CATEGORY_FEEDER_FRONT_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FEEDER_FRONT_GUID: GuidBytes = GuidBytes::new(
     0x4823_175c,
     0x3b28,
     0x487b,
     [0xa7, 0xe6, 0xee, 0xbc, 0x17, 0x61, 0x4f, 0xd1],
 );
-pub(super) const WIA_CATEGORY_FEEDER_BACK_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_FEEDER_BACK_GUID: GuidBytes = GuidBytes::new(
     0x61ca_74d4,
     0x39db,
     0x42aa,
     [0x89, 0xb1, 0x8c, 0x19, 0xc9, 0xcd, 0x4c, 0x23],
 );
-pub(super) const WIA_CATEGORY_AUTO_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CATEGORY_AUTO_GUID: GuidBytes = GuidBytes::new(
     0xdefe_5fd8,
     0x6c97,
     0x4dde,
@@ -249,37 +251,37 @@ pub(super) const WIA_CATEGORY_AUTO_GUID: GuidBytes = GuidBytes::new(
 );
 
 // `WiaImgFmt_*` GUIDs (`WiaDef.h`).
-pub(super) const WIA_IMG_FMT_MEMORYBMP_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_MEMORYBMP_GUID: GuidBytes = GuidBytes::new(
     0xb96b_3caa,
     0x0728,
     0x11d3,
     [0x9d, 0x7b, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e],
 );
-pub(super) const WIA_IMG_FMT_BMP_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_BMP_GUID: GuidBytes = GuidBytes::new(
     0xb96b_3cab,
     0x0728,
     0x11d3,
     [0x9d, 0x7b, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e],
 );
-pub(super) const WIA_IMG_FMT_JPEG_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_JPEG_GUID: GuidBytes = GuidBytes::new(
     0xb96b_3cae,
     0x0728,
     0x11d3,
     [0x9d, 0x7b, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e],
 );
-pub(super) const WIA_IMG_FMT_PNG_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_PNG_GUID: GuidBytes = GuidBytes::new(
     0xb96b_3caf,
     0x0728,
     0x11d3,
     [0x9d, 0x7b, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e],
 );
-pub(super) const WIA_IMG_FMT_TIFF_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_TIFF_GUID: GuidBytes = GuidBytes::new(
     0xb96b_3cb1,
     0x0728,
     0x11d3,
     [0x9d, 0x7b, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e],
 );
-pub(super) const WIA_IMG_FMT_RAW_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_IMG_FMT_RAW_GUID: GuidBytes = GuidBytes::new(
     0x6f12_0719,
     0xf1a8,
     0x4e07,
@@ -287,25 +289,25 @@ pub(super) const WIA_IMG_FMT_RAW_GUID: GuidBytes = GuidBytes::new(
 );
 
 // `WIA_CMD_*` GUIDs (`WiaDef.h`).
-pub(super) const WIA_CMD_STOP_FEEDER_GUID: GuidBytes = GuidBytes::new(
+pub const WIA_CMD_STOP_FEEDER_GUID: GuidBytes = GuidBytes::new(
     0xd847_b06d,
     0x3905,
     0x459c,
     [0x95, 0x09, 0x9b, 0x29, 0xcd, 0xb6, 0x91, 0xe7],
 );
 
-/// Index of an item inside an open [`WiaDeviceTree`], where `ItemId::ROOT` (`0`) is always the
+/// Index of an item inside an open `WiaDeviceTree`, where `ItemId::ROOT` (`0`) is always the
 /// root `IWiaItem2`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ItemId(pub usize);
+pub struct ItemId(pub usize);
 
 impl ItemId {
-    pub(crate) const ROOT: ItemId = ItemId(0);
+    pub const ROOT: ItemId = ItemId(0);
 }
 
 /// Decoded value of a WIA property (`PROPVARIANT`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PropValue {
+pub enum PropValue {
     /// 32-bit integer (`VT_I4`, `VT_UI4`, `VT_I2`, `VT_UI2`, `VT_UI1`, `VT_INT`, `VT_UINT`, `VT_BOOL`).
     I4(i32),
     /// String (`VT_BSTR` / `VT_LPWSTR`).
@@ -315,21 +317,21 @@ pub(crate) enum PropValue {
 }
 
 impl PropValue {
-    pub(super) fn as_i4(&self) -> Option<i32> {
+    pub fn as_i4(&self) -> Option<i32> {
         match self {
             PropValue::I4(v) => Some(*v),
             _ => None,
         }
     }
 
-    pub(super) fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
             PropValue::Str(s) => Some(s),
             _ => None,
         }
     }
 
-    pub(super) fn as_guid(&self) -> Option<GuidBytes> {
+    pub fn as_guid(&self) -> Option<GuidBytes> {
         match self {
             PropValue::Guid(g) => Some(*g),
             _ => None,
@@ -339,7 +341,7 @@ impl PropValue {
 
 /// Valid-value constraint decoded from `IWiaPropertyStorage::GetPropertyAttributes`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PropConstraint {
+pub enum PropConstraint {
     /// Unconstrained (`WIA_PROP_NONE`) or unrecognized attribute variant.
     None,
     /// `WIA_PROP_RANGE`: `[min, nom, max, step]`.
@@ -363,20 +365,20 @@ pub(crate) enum PropConstraint {
 
 /// Property access flags + valid-value constraint from `GetPropertyAttributes`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PropAttr {
+pub struct PropAttr {
     pub access_flags: u32,
     pub constraint: PropConstraint,
 }
 
 impl PropAttr {
-    pub(super) fn is_writable(&self) -> bool {
+    pub fn is_writable(&self) -> bool {
         (self.access_flags & WIA_PROP_WRITE) != 0
     }
 }
 
 /// One `(guidFormatId, lTymed)` entry from `IWiaTransfer::EnumWIA_FORMAT_INFO`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct FormatPair {
+pub struct FormatPair {
     pub format: GuidBytes,
     pub tymed: i32,
 }
@@ -496,8 +498,8 @@ pub(crate) mod fake_wia {
     }
 
     /// One scripted callback event inside a [`FakeDownloadCall`].
-    #[derive(Clone, Debug)]
-    pub(crate) enum FakeTransferEvent {
+    #[derive(Clone)]
+    pub enum FakeTransferEvent {
         /// Emits `on_status(msg, transferred_bytes, hr_status)`.
         Status {
             msg: i32,
@@ -505,8 +507,7 @@ pub(crate) mod fake_wia {
             hr_status: i32,
         },
         /// Requests a stream via `on_next_stream`, optionally emits intermediate status updates,
-        /// and delivers `bytes` to `on_stream_complete` (unless `stream_error_hr` is negative or
-        /// `zero_byte_abort_hr` aborts before completion).
+        /// and delivers `bytes` to `on_stream_complete`.
         Page { chunks: Vec<u64>, bytes: Vec<u8> },
         /// Calls `on_next_stream` (allocating an empty stream) and then reports a negative
         /// `hrErrorStatus` without completing a page (simulating WSD / ADF empty-paper or jam
@@ -514,11 +515,44 @@ pub(crate) mod fake_wia {
         EmptyStreamError { hr_status: i32 },
         /// Simulates a stream exceeding `MAX_DIB_BYTES` (`STG_E_MEDIUMFULL`).
         StreamOverflow { return_hr: i32 },
+        /// Runs a test synchronization callback on the STA thread mid-`Download`.
+        Hook(Arc<dyn Fn() + Send + Sync>),
+    }
+
+    impl core::fmt::Debug for FakeTransferEvent {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            match self {
+                FakeTransferEvent::Status {
+                    msg,
+                    transferred_bytes,
+                    hr_status,
+                } => f
+                    .debug_struct("Status")
+                    .field("msg", msg)
+                    .field("transferred_bytes", transferred_bytes)
+                    .field("hr_status", hr_status)
+                    .finish(),
+                FakeTransferEvent::Page { chunks, bytes } => f
+                    .debug_struct("Page")
+                    .field("chunks", chunks)
+                    .field("bytes_len", &bytes.len())
+                    .finish(),
+                FakeTransferEvent::EmptyStreamError { hr_status } => f
+                    .debug_struct("EmptyStreamError")
+                    .field("hr_status", hr_status)
+                    .finish(),
+                FakeTransferEvent::StreamOverflow { return_hr } => f
+                    .debug_struct("StreamOverflow")
+                    .field("return_hr", return_hr)
+                    .finish(),
+                FakeTransferEvent::Hook(_) => f.write_str("Hook(..)"),
+            }
+        }
     }
 
     /// Scripted outcome of one `IWiaTransfer::Download` invocation.
     #[derive(Clone, Debug)]
-    pub(crate) struct FakeDownloadCall {
+    pub struct FakeDownloadCall {
         pub events: Vec<FakeTransferEvent>,
         pub return_hr: i32,
         /// Optional required `WIA_IPA_TYMED` value; if the item's `WIA_IPA_TYMED` differs,
@@ -530,7 +564,7 @@ pub(crate) mod fake_wia {
     }
 
     impl FakeDownloadCall {
-        pub(crate) fn ok(events: Vec<FakeTransferEvent>) -> Self {
+        pub fn ok(events: Vec<FakeTransferEvent>) -> Self {
             FakeDownloadCall {
                 events,
                 return_hr: S_OK_HR,
@@ -538,15 +572,24 @@ pub(crate) mod fake_wia {
                 stdout_chatter: None,
             }
         }
+
+        pub fn with_hr(events: Vec<FakeTransferEvent>, return_hr: i32) -> Self {
+            FakeDownloadCall {
+                events,
+                return_hr,
+                require_tymed: None,
+                stdout_chatter: None,
+            }
+        }
     }
 
     /// Write-hook behavior when a property is written on a [`FakeItem`].
-    pub(crate) type WriteHook =
+    pub type WriteHook =
         Arc<dyn Fn(&mut FakeItem, PropId, &PropValue) -> Result<(), i32> + Send + Sync>;
 
     /// A scripted `IWiaItem2` node inside a [`FakeDeviceSpec`].
     #[derive(Clone)]
-    pub(crate) struct FakeItem {
+    pub struct FakeItem {
         pub item_type: i32,
         pub children: Vec<usize>,
         pub props: BTreeMap<PropId, PropValue>,
@@ -568,7 +611,7 @@ pub(crate) mod fake_wia {
     }
 
     impl FakeItem {
-        pub(crate) fn new(item_type: i32) -> Self {
+        pub fn new(item_type: i32) -> Self {
             FakeItem {
                 item_type,
                 children: Vec::new(),
@@ -581,12 +624,7 @@ pub(crate) mod fake_wia {
             }
         }
 
-        pub(crate) fn with_prop(
-            mut self,
-            id: PropId,
-            val: PropValue,
-            attr: Option<PropAttr>,
-        ) -> Self {
+        pub fn with_prop(mut self, id: PropId, val: PropValue, attr: Option<PropAttr>) -> Self {
             self.props.insert(id, val);
             if let Some(a) = attr {
                 self.attrs.insert(id, a);
@@ -594,12 +632,17 @@ pub(crate) mod fake_wia {
             self
         }
 
-        pub(crate) fn with_formats(mut self, formats: Vec<FormatPair>) -> Self {
+        pub fn with_formats(mut self, formats: Vec<FormatPair>) -> Self {
             self.formats = formats;
             self
         }
 
-        pub(crate) fn with_write_hook<F>(mut self, hook: F) -> Self
+        pub fn with_downloads(mut self, calls: impl IntoIterator<Item = FakeDownloadCall>) -> Self {
+            self.downloads.extend(calls);
+            self
+        }
+
+        pub fn with_write_hook<F>(mut self, hook: F) -> Self
         where
             F: Fn(&mut FakeItem, PropId, &PropValue) -> Result<(), i32> + Send + Sync + 'static,
         {
@@ -608,9 +651,9 @@ pub(crate) mod fake_wia {
         }
     }
 
-    /// Scripted WIA device entry registered in [`FakeWiaConfig`].
+    /// Scripted WIA device entry registered in [`FakeWiaState`].
     #[derive(Clone, Debug)]
-    pub(crate) struct FakeDeviceSpec {
+    pub struct FakeDeviceSpec {
         pub enum_props: RawDeviceProps,
         pub root_props: RawDeviceProps,
         /// Whether `EnumDeviceInfo(WIA_DEVINFO_ENUM_LOCAL)` lists this device.
@@ -628,7 +671,7 @@ pub(crate) mod fake_wia {
     }
 
     impl FakeDeviceSpec {
-        pub(crate) fn new(props: RawDeviceProps) -> Self {
+        pub fn new(props: RawDeviceProps) -> Self {
             let root = FakeItem::new(WIA_ITEM_TYPE_ROOT | WIA_ITEM_TYPE_FOLDER);
             FakeDeviceSpec {
                 root_props: props.clone(),
@@ -642,7 +685,7 @@ pub(crate) mod fake_wia {
             }
         }
 
-        pub(crate) fn add_child(&mut self, parent: ItemId, child: FakeItem) -> ItemId {
+        pub fn add_child(&mut self, parent: ItemId, child: FakeItem) -> ItemId {
             let idx = self.items.len();
             self.items.push(child);
             self.items[parent.0].children.push(idx);
@@ -650,9 +693,9 @@ pub(crate) mod fake_wia {
         }
     }
 
-    /// Shared mutable state of a scripted [`FakeWiaSystem`].
+    /// Shared mutable state of a scripted `FakeWiaSystem`.
     #[derive(Debug, Default)]
-    pub(crate) struct FakeWiaState {
+    pub struct FakeWiaState {
         pub list_error_hr: Option<i32>,
         pub list_delay: Duration,
         pub list_stdout_chatter: Option<String>,
@@ -660,18 +703,18 @@ pub(crate) mod fake_wia {
         pub active_opens: AtomicUsize,
     }
 
-    /// Handle to a scripted [`WiaSystem`] shared between tests and the STA session thread.
+    /// Handle to a scripted `WiaSystem` shared between tests and the STA session thread.
     #[derive(Clone, Debug, Default)]
-    pub(crate) struct FakeWiaHandle {
+    pub struct FakeWiaHandle {
         pub state: Arc<Mutex<FakeWiaState>>,
     }
 
     impl FakeWiaHandle {
-        pub(crate) fn new() -> Self {
+        pub fn new() -> Self {
             Self::default()
         }
 
-        pub(crate) fn add_device(&self, spec: FakeDeviceSpec) {
+        pub fn add_device(&self, spec: FakeDeviceSpec) {
             lock(&self.state).devices.push(spec);
         }
 
@@ -981,6 +1024,9 @@ pub(crate) mod fake_wia {
                             stream_overflowed: true,
                             callback_panic: None,
                         });
+                    }
+                    FakeTransferEvent::Hook(hook) => {
+                        hook();
                     }
                 }
             }

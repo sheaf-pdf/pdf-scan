@@ -69,7 +69,9 @@ use std::time::Duration;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
-#[cfg(any(windows, test, feature = "fake"))]
+#[cfg_attr(not(any(windows, test, feature = "fake")), allow(dead_code))]
+mod batch;
+#[cfg_attr(not(any(windows, test, feature = "fake")), allow(dead_code))]
 mod caps;
 #[cfg(windows)]
 mod com;
@@ -79,11 +81,62 @@ mod driver;
 mod error;
 #[cfg_attr(not(any(windows, test, feature = "fake")), allow(dead_code))]
 mod id;
+#[cfg_attr(not(any(windows, test, feature = "fake")), allow(dead_code))]
+mod pixels;
 #[cfg(any(windows, test, feature = "fake"))]
 mod session;
-#[cfg(any(windows, test, feature = "fake"))]
-#[allow(dead_code)]
+#[cfg_attr(not(any(windows, test, feature = "fake")), allow(dead_code))]
 mod settings;
+
+/// Internal scripted WIA 2.0 test harness exposed solely for crate integration tests and
+/// `scan-worker-fake` when `feature = "fake"` is enabled.
+#[cfg(feature = "fake")]
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub mod fake_wia {
+    pub use super::driver::fake_wia::{
+        FakeDeviceSpec, FakeDownloadCall, FakeItem, FakeTransferEvent, FakeWiaHandle, FakeWiaState,
+        WriteHook,
+    };
+    pub use super::driver::{
+        ALL_PAGES, BACK_FIRST, DUP, DUPLEX, FEED, FEEDER, FLAT, FLATBED, FRONT_FIRST, FRONT_ONLY,
+        FormatPair, GuidBytes, ItemId, PORTRAIT, PropAttr, PropConstraint, PropId, PropValue,
+        TYMED_CALLBACK, TYMED_FILE, WIA_AUTO_CROP_DISABLED, WIA_AUTO_CROP_SINGLE,
+        WIA_AUTO_DESKEW_OFF, WIA_AUTO_DESKEW_ON, WIA_BLANK_PAGE_DETECTION_DISABLED,
+        WIA_CATEGORY_FEEDER_BACK_GUID, WIA_CATEGORY_FEEDER_FRONT_GUID, WIA_CATEGORY_FEEDER_GUID,
+        WIA_CATEGORY_FILM_GUID, WIA_CATEGORY_FINISHED_FILE_GUID, WIA_CATEGORY_FLATBED_GUID,
+        WIA_CATEGORY_FOLDER_GUID, WIA_CMD_STOP_FEEDER_GUID, WIA_COMPRESSION_NONE, WIA_DATA_COLOR,
+        WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD,
+        WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, WIA_DPS_HORIZONTAL_BED_SIZE,
+        WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE, WIA_DPS_VERTICAL_BED_SIZE,
+        WIA_DPS_VERTICAL_SHEET_FEED_SIZE, WIA_FINAL_SCAN, WIA_IMG_FMT_BMP_GUID,
+        WIA_IMG_FMT_JPEG_GUID, WIA_IMG_FMT_MEMORYBMP_GUID, WIA_IMG_FMT_PNG_GUID,
+        WIA_IMG_FMT_RAW_GUID, WIA_IMG_FMT_TIFF_GUID, WIA_IPA_BITS_PER_CHANNEL, WIA_IPA_COMPRESSION,
+        WIA_IPA_DATATYPE, WIA_IPA_DEPTH, WIA_IPA_FORMAT, WIA_IPA_ITEM_CATEGORY, WIA_IPA_ITEM_NAME,
+        WIA_IPA_PLANAR, WIA_IPA_TYMED, WIA_IPS_AUTO_CROP, WIA_IPS_AUTO_DESKEW, WIA_IPS_BLANK_PAGES,
+        WIA_IPS_DOCUMENT_HANDLING_SELECT, WIA_IPS_MAX_HORIZONTAL_SIZE, WIA_IPS_MAX_VERTICAL_SIZE,
+        WIA_IPS_PAGE_SIZE, WIA_IPS_PAGES, WIA_IPS_PHOTOMETRIC_INTERP, WIA_IPS_PREVIEW,
+        WIA_IPS_ROTATION, WIA_IPS_XEXTENT, WIA_IPS_XPOS, WIA_IPS_XRES, WIA_IPS_YEXTENT,
+        WIA_IPS_YPOS, WIA_IPS_YRES, WIA_ITEM_TYPE_FILE, WIA_ITEM_TYPE_FOLDER, WIA_ITEM_TYPE_IMAGE,
+        WIA_ITEM_TYPE_ROOT, WIA_ITEM_TYPE_TRANSFER, WIA_LINE_ORDER_BOTTOM_TO_TOP,
+        WIA_LINE_ORDER_TOP_TO_BOTTOM, WIA_PACKED_PIXEL, WIA_PAGE_AUTO, WIA_PAGE_CUSTOM,
+        WIA_PAGE_LETTER, WIA_PHOTO_WHITE_0, WIA_PHOTO_WHITE_1, WIA_PROP_FLAG, WIA_PROP_LIST,
+        WIA_PROP_NONE, WIA_PROP_RANGE, WIA_PROP_READ, WIA_PROP_RW, WIA_PROP_WRITE,
+        WIA_TRANSFER_MSG_DEVICE_STATUS, WIA_TRANSFER_MSG_STATUS,
+    };
+    pub use super::error::{
+        CO_E_OBJNOTCONNECTED_HR, E_ABORT_HR, E_ACCESSDENIED_HR, E_FAIL_HR, E_INVALIDARG_HR,
+        E_NOTIMPL_HR, ERROR_BUSY_HR, ERROR_CANCELLED_HR, ERROR_DEVICE_NOT_CONNECTED_HR,
+        ERROR_SERVICE_DISABLED_HR, LEARN_WIA_ERROR_COVER_OPEN_HR, LEARN_WIA_ERROR_MULTI_FEED_HR,
+        REGDB_E_CLASSNOTREG_HR, S_FALSE_HR, S_OK_HR, STG_E_MEDIUMFULL_HR, WIA_ERROR_BUSY_HR,
+        WIA_ERROR_COVER_OPEN_HR, WIA_ERROR_DEVICE_COMMUNICATION_HR, WIA_ERROR_DEVICE_LOCKED_HR,
+        WIA_ERROR_GENERAL_ERROR_HR, WIA_ERROR_INCORRECT_HARDWARE_SETTING_HR,
+        WIA_ERROR_MULTI_FEED_HR, WIA_ERROR_OFFLINE_HR, WIA_ERROR_PAPER_EMPTY_HR,
+        WIA_ERROR_PAPER_JAM_HR, WIA_ERROR_WARMING_UP_HR, WIA_NO_DEVICE_OR_ENDORSER_HR,
+        WIA_STATUS_CALIBRATING_HR, WIA_STATUS_END_OF_MEDIA_HR, WIA_STATUS_WARMING_UP_HR,
+    };
+    pub use super::id::RawDeviceProps;
+}
 
 /// Windows Image Acquisition (WIA 2.0) scanner backend (`wia:<WIA_DIP_DEV_ID>`).
 ///
@@ -101,14 +154,30 @@ impl WiaBackend {
         WiaBackend::default()
     }
 
-    #[cfg(any(test, feature = "fake"))]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(feature = "fake")]
+    #[doc(hidden)]
+    pub fn from_fake(handle: &fake_wia::FakeWiaHandle) -> Result<WiaBackend, ScanError> {
+        let session = session::Session::spawn_with(Box::new(handle.make_system()))?;
+        Ok(WiaBackend {
+            session: Some(session),
+        })
+    }
+
+    #[cfg(all(test, not(feature = "fake")))]
     pub(crate) fn from_fake(
         handle: &driver::fake_wia::FakeWiaHandle,
     ) -> Result<WiaBackend, ScanError> {
         let session = session::Session::spawn_with(Box::new(handle.make_system()))?;
         Ok(WiaBackend {
             session: Some(session),
+        })
+    }
+
+    #[cfg(feature = "fake")]
+    #[doc(hidden)]
+    pub fn share_fake(&self) -> Option<WiaBackend> {
+        self.session.as_ref().map(|s| WiaBackend {
+            session: Some(Arc::clone(s)),
         })
     }
 

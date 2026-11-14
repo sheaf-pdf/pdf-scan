@@ -1753,7 +1753,7 @@ mod tests {
                 // Mode 1: verify null `ppDestination` -> `E_POINTER`, `GetNextStream` cancel
                 // returns `S_FALSE` (`HRESULT(1)`) AND zeroes a pre-filled non-null
                 // `*ppDestination`, and panic containment returns `E_FAIL`.
-                _ => {
+                1 => {
                     let name = BSTR::from("Feeder");
                     let full = BSTR::from("0000\\Root\\Feeder");
                     let mut raw_stream: *mut core::ffi::c_void = core::ptr::dangling_mut();
@@ -1790,6 +1790,130 @@ mod tests {
                             &jam_status,
                         );
                         assert_eq!(panic_hr, E_FAIL);
+                    }
+                    Err(windows_core::Error::from_hresult(E_FAIL))
+                }
+                // Mode 2: Stream 1 writes placeholder BMP header, streams pixel row, seeks back
+                // to byte 2 and byte 10 to back-patch `bfSize` and `bfOffBits`, then sends
+                // `END_OF_STREAM`; Stream 2 writes past `stream_cap`, gets `STG_E_MEDIUMFULL`,
+                // and returns generic `E_FAIL`.
+                _ => {
+                    let name = BSTR::from("Feeder");
+                    let full = BSTR::from("0000\\Root\\Feeder");
+                    let mut raw_s1: *mut core::ffi::c_void = core::ptr::null_mut();
+                    // SAFETY: Exercising `GetNextStream`, `IStream::Write`/`Seek`, and `END_OF_STREAM`.
+                    unsafe {
+                        assert_eq!(
+                            (Interface::vtable(cb).GetNextStream)(
+                                Interface::as_raw(cb),
+                                0,
+                                core::mem::transmute_copy(&name),
+                                core::mem::transmute_copy(&full),
+                                &mut raw_s1,
+                            ),
+                            S_OK
+                        );
+                        let st1 = IStream::from_raw(raw_s1);
+                        // Write 14-byte placeholder BITMAPFILEHEADER (`bfSize = 0`, `bfOffBits = 0`).
+                        let mut bmp = Vec::with_capacity(58);
+                        bmp.extend_from_slice(b"BM");
+                        bmp.extend_from_slice(&[0u8; 12]);
+                        bmp.extend_from_slice(&40u32.to_le_bytes());
+                        bmp.extend_from_slice(&1i32.to_le_bytes());
+                        bmp.extend_from_slice(&1i32.to_le_bytes());
+                        bmp.extend_from_slice(&1u16.to_le_bytes());
+                        bmp.extend_from_slice(&24u16.to_le_bytes());
+                        bmp.extend_from_slice(&0u32.to_le_bytes());
+                        bmp.extend_from_slice(&4u32.to_le_bytes());
+                        bmp.extend_from_slice(&[0u8; 16]);
+                        bmp.extend_from_slice(&[0xCC, 0xBB, 0xAA, 0x00]); // BGR -> RGB (0xAA, 0xBB, 0xCC)
+
+                        assert_eq!(
+                            (Interface::vtable(&st1).base__.Write)(
+                                Interface::as_raw(&st1),
+                                bmp.as_ptr().cast(),
+                                bmp.len() as u32,
+                                core::ptr::null_mut(),
+                            ),
+                            S_OK
+                        );
+                        // Seek back to byte 2 to patch `bfSize = 58`, and byte 10 to patch `bfOffBits = 54`.
+                        assert_eq!(
+                            (Interface::vtable(&st1).Seek)(
+                                Interface::as_raw(&st1),
+                                2,
+                                STREAM_SEEK_SET,
+                                core::ptr::null_mut(),
+                            ),
+                            S_OK
+                        );
+                        let bf_size = 58u32.to_le_bytes();
+                        assert_eq!(
+                            (Interface::vtable(&st1).base__.Write)(
+                                Interface::as_raw(&st1),
+                                bf_size.as_ptr().cast(),
+                                4,
+                                core::ptr::null_mut(),
+                            ),
+                            S_OK
+                        );
+                        assert_eq!(
+                            (Interface::vtable(&st1).Seek)(
+                                Interface::as_raw(&st1),
+                                10,
+                                STREAM_SEEK_SET,
+                                core::ptr::null_mut(),
+                            ),
+                            S_OK
+                        );
+                        let bf_off = 54u32.to_le_bytes();
+                        assert_eq!(
+                            (Interface::vtable(&st1).base__.Write)(
+                                Interface::as_raw(&st1),
+                                bf_off.as_ptr().cast(),
+                                4,
+                                core::ptr::null_mut(),
+                            ),
+                            S_OK
+                        );
+                        let eos = WiaTransferParams {
+                            lMessage: WIA_TRANSFER_MSG_END_OF_STREAM,
+                            lPercentComplete: 100,
+                            ulTransferredBytes: 58,
+                            hrErrorStatus: S_OK,
+                        };
+                        assert_eq!(
+                            (Interface::vtable(cb).TransferCallback)(
+                                Interface::as_raw(cb),
+                                0,
+                                &eos,
+                            ),
+                            S_OK
+                        );
+
+                        // Stream 2: exceed 64-byte cap -> STG_E_MEDIUMFULL!
+                        let mut raw_s2: *mut core::ffi::c_void = core::ptr::null_mut();
+                        assert_eq!(
+                            (Interface::vtable(cb).GetNextStream)(
+                                Interface::as_raw(cb),
+                                0,
+                                core::mem::transmute_copy(&name),
+                                core::mem::transmute_copy(&full),
+                                &mut raw_s2,
+                            ),
+                            S_OK
+                        );
+                        let st2 = IStream::from_raw(raw_s2);
+                        let oversized = [0x55u8; 80];
+                        assert_eq!(
+                            (Interface::vtable(&st2).base__.Write)(
+                                Interface::as_raw(&st2),
+                                oversized.as_ptr().cast(),
+                                oversized.len() as u32,
+                                core::ptr::null_mut(),
+                            ),
+                            STG_E_MEDIUMFULL
+                        );
                     }
                     Err(windows_core::Error::from_hresult(E_FAIL))
                 }
@@ -1844,6 +1968,32 @@ mod tests {
         assert_eq!(out2.callback_error_hr, Some(error::WIA_ERROR_PAPER_JAM_HR));
         assert_eq!(out2.callback_panic.as_deref(), Some("boom inside sink"));
         assert!(sink2.pages.is_empty());
+
+        // Mode 2: back-patched `.bmp` stream decodes cleanly via `pixels::decode_stream`, while
+        // the second stream exceeding the 64-byte cap sets `stream_overflowed = true` and is never
+        // delivered to `on_stream_complete`.
+        let transfer_bmp_overflow: IWiaTransfer = MockComTransfer { mode: 2 }.into();
+        let mut sink3 = RecordingSink {
+            cancel_on_next: false,
+            panic_on_status: false,
+            pages: Vec::new(),
+            statuses: Vec::new(),
+        };
+        let out3 = run_download_with_callback(&transfer_bmp_overflow, 64, &mut sink3);
+        assert_eq!(out3.hr, E_FAIL.0);
+        assert!(out3.stream_overflowed);
+        assert_eq!(sink3.pages.len(), 1);
+        let (decoded, dpi) = super::super::pixels::decode_stream(
+            sink3.pages.remove(0),
+            super::super::settings::TransferMode::RawBmp,
+            (300.0, 300.0),
+        )
+        .unwrap();
+        assert_eq!(dpi, (300.0, 300.0));
+        let crate::Pixels::Raw(img) = decoded else {
+            panic!("expected RawImage");
+        };
+        assert_eq!(img.data(), &[0xAA, 0xBB, 0xCC]);
     }
 
     #[test]

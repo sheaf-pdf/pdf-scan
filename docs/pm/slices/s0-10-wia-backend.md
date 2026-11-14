@@ -385,3 +385,17 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
   `Paper::Auto` vs `Paper::Size` `AUTO_CROP=0` + `WIA_PAGE_CUSTOM` + `XPOS`/`YPOS` + stepped `XEXTENT`/`YEXTENT` +
   `0.005` mm tolerance readback, and `fallback_callback_to_file`), wired `Device::caps` in `wia/session.rs`, and
   verified all 64-bit, `i686`, single-feature clippy, `just doc`, and MSRV `1.89` gates green.
+- **Step 3 complete:** Implemented `/crates/scan-device/src/wia/pixels.rs` (`WiaImgFmt_BMP` / `WiaImgFmt_MEMORYBMP`
+  decoding via `crate::dib`, `WiaImgFmt_RAW` 80-byte `WIA_RAW_HEADER` validation and decoding across all five
+  `Format`s, `WIA_PHOTO_WHITE_0` mono-only inversion with 1-bit padding masking, `WIA_DATA_RAW_BGR` 24/32/48/64-bit
+  channel swaps, `LineOrder == 2` bottom-up flip, `BytesPerLine` row stride, per-axis fallback to applied DPI on
+  zero header DPI, `512 MiB` ceiling, and `Pixels::Encoded` magic-header validation) and
+  `/crates/scan-device/src/wia/batch.rs` (`SheetTracker` for `FRONT_FIRST` and `BACK_FIRST`, `WarmingUp` status +
+  bounded retry, monotonic `ulTransferredBytes` byte progress with restoration of the last completed page's count
+  on trailing empty streams, specific callback `hrErrorStatus` precedence over generic `E_FAIL`, 0-page
+  `TYMED_CALLBACK` -> `TYMED_FILE` fallback, deferred `Event::Sheet`, WSD multi-`Download` continuation, `Flatbed`
+  `Done::OnePage`, receiver-drop cancel, and mid-sheet-safe `S_FALSE` cancel + `WIA_CMD_STOP_FEEDER`), exposed
+  `#[doc(hidden)] pub mod fake_wia` + `WiaBackend::{from_fake, share_fake}` behind `feature = "fake"`, added
+  `/crates/scan-device/tests/wia_fake.rs` and `/crates/scan-device/tests/wia_com.rs` (plus back-patched `.bmp` +
+  `STG_E_MEDIUMFULL` COM vtable tests in `wia/com.rs`), and verified all 64-bit, `i686`, single-feature clippy,
+  `just doc`, and MSRV `1.89` gates green.

@@ -210,7 +210,6 @@
 mod caps;
 mod device;
 #[cfg(any(feature = "twain", feature = "wia"))]
-#[cfg_attr(not(feature = "twain"), allow(dead_code))]
 mod dib;
 mod error;
 #[cfg(feature = "fake")]

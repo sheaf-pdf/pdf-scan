@@ -725,14 +725,13 @@ fn handle_caps(tree: &mut dyn WiaDeviceTree) -> Result<Caps, ScanError> {
 }
 
 fn handle_scan(
-    _tree: &mut dyn WiaDeviceTree,
-    _settings: &Settings,
-    _first_sheet: u32,
-    _events: &SyncSender<Event>,
-    _progress: &dyn Progress,
+    tree: &mut dyn WiaDeviceTree,
+    settings: &Settings,
+    first_sheet: u32,
+    events: &SyncSender<Event>,
+    progress: &dyn Progress,
 ) -> Result<Done, ScanError> {
-    let _ = _progress.is_cancelled();
-    Err(ScanError::Unsupported)
+    super::batch::run(tree, settings, first_sheet, events, progress)
 }
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 //! A WIA 2.0 device's id (`wia:<WIA_DIP_DEV_ID>`), pre-COM validation (`ScanError::BadId`),
 //! `StiDeviceTypeScanner` filtering, WSD metadata fallback, and root-item identity verification.
 
+#![allow(missing_docs)]
+
 use crate::{DeviceId, DeviceInfo, Driver, ScanError};
 
 /// Prefix of every WIA device id.
@@ -14,7 +16,7 @@ const STI_DEVICE_TYPE_SCANNER: u16 = 1;
 
 /// Raw root/enumeration properties read for a WIA device node.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RawDeviceProps {
+pub struct RawDeviceProps {
     pub dev_id: String,
     pub dev_type: Option<i32>,
     pub dev_name: Option<String>,
