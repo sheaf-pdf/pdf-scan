@@ -360,3 +360,17 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
    proxy pointers release before `CoUninitialize()`; `needs_drop::<PROPVARIANT>()` is asserted at compile time,
    `ReadMultiple`/`GetPropertyAttributes` always use fresh `VT_EMPTY` vectors, and `VT_CLSID` values are built
    via `InitPropVariantFromCLSID` (`CoTaskMemAlloc`).
+
+## So far
+
+- **Step 1 complete:** Extracted `/crates/scan-device/src/dib.rs` (shared safe DIB / `.bmp` decoder supporting
+  14-byte `BITMAPFILEHEADER` `bfOffBits`, `BI_RGB`, and `16`/`32`-bit `BI_BITFIELDS` with `biSize == 40` vs
+  `biSize >= 52` mask offsets), wired `windows = "0.62"` / `windows-core = "0.62"` behind `feature = "wia"` in
+  `/crates/scan-device/Cargo.toml`, and implemented `wia/{mod.rs, id.rs, error.rs, driver.rs, com.rs, session.rs}`.
+  Note on `IWiaTransferCallback` COM soundness: `windows-core`'s `#[implement]` macro automatically answers `S_OK`
+  to `IAgileObject` and its generated `IWiaTransferCallback_Vtbl::GetNextStream` shim does not zero
+  `*ppDestination` on `Err(Error::from_hresult(S_FALSE))`. `com.rs` therefore uses a manual `#[repr(C)]`
+  `TransferCallbackCom` that rejects `IAgileObject` (`E_NOINTERFACE`, preserving STA apartment affinity), verifies
+  `owner_thread` (`RPC_E_WRONG_THREAD`) and non-reentrant `RestoreSink` exclusivity before dereferencing `&mut dyn
+  TransferSink`, and zeroes `*ppDestination` upfront on every `GetNextStream` call. All 64-bit, `i686`, single-
+  feature clippy, `just doc`, and MSRV `1.89` gates are green.

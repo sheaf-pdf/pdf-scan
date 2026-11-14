@@ -2,25 +2,14 @@
 //! undefined-size transfers where state 6 reports `-1` width or length) into [`RawImage`].
 //!
 //! Pure safe Rust: every header field, palette index, row stride, tile offset, and dynamic growth
-//! step is checked in `u64` / `usize` arithmetic against [`MAX_PIXELS`] and
+//! step is checked in `u64` / `usize` arithmetic against [`crate::dib::MAX_PIXELS`] and
 //! [`RawImage::data_len`] before allocating or indexing.
 
 use twain_dsm::ffi;
 
 use super::error::driver_msg;
-use crate::{Format, LayoutError, RawImage, ScanError};
-
-/// Maximum pixels per image (`16,384 × 16,384 = 268,435,456`).
-pub(super) const MAX_PIXELS: u64 = 1 << 28;
-
-/// Maximum packed image buffer size (`512 MiB`): matches the fake backend's page ceiling, stays
-/// within `scan-worker`'s default 1 GiB page wire limit, and preserves address space in 32-bit
-/// (`i686`) workers.
-pub(super) const MAX_IMAGE_BYTES: usize = 512 << 20;
-
-/// Maximum native-transfer DIB block accepted: [`MAX_IMAGE_BYTES`] plus 64 KiB for header and
-/// palette (a 32-bit `BGRX` DIB up to `512 MiB` decodes into `384 MiB` of `Rgb8`).
-pub(super) const MAX_DIB_BYTES: u64 = (MAX_IMAGE_BYTES as u64) + (1 << 16);
+use crate::dib::{DibMode, checked_data_len, clear_bw_padding, row_bytes};
+use crate::{Format, RawImage, ScanError};
 
 /// Which sample value represents black in `Bw1`, `Gray8`, and `Gray16` memory transfers
 /// (`ICAP_PIXELFLAVOR`).
@@ -100,49 +89,6 @@ impl<'a> From<twain_dsm::Strip<'a>> for StripDesc<'a> {
     }
 }
 
-/// Packed unpadded byte length of one row of `width` pixels in `format`.
-fn row_bytes(format: Format, width: u32) -> u64 {
-    let bits: u64 = match format {
-        Format::Bw1 => 1,
-        Format::Gray8 => 8,
-        Format::Gray16 => 16,
-        Format::Rgb8 => 24,
-        Format::Rgb16 => 48,
-    };
-    (u64::from(width) * bits).div_ceil(8)
-}
-
-/// Validates `(format, width, height)` against [`MAX_PIXELS`], [`MAX_IMAGE_BYTES`], and
-/// [`RawImage::data_len`], returning the exact packed buffer byte length.
-fn checked_data_len(format: Format, width: u32, height: u32) -> Result<usize, ScanError> {
-    if width == 0 || height == 0 {
-        return Err(driver_msg(format!(
-            "the scanner reported an empty {width} by {height} image"
-        )));
-    }
-    let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_PIXELS {
-        return Err(driver_msg(format!(
-            "the scanner gave a {width} by {height} image, past the {MAX_PIXELS}-pixel cap; \
-             a lower resolution asks for less"
-        )));
-    }
-    let len = RawImage::data_len(format, width, height).map_err(|err| match err {
-        LayoutError::TooLarge { width, height } => driver_msg(format!(
-            "the scanner gave a {width} by {height} image, more than this process can hold; \
-             a lower resolution asks for less"
-        )),
-        other => driver_msg(format!("invalid image layout: {other}")),
-    })?;
-    if len > MAX_IMAGE_BYTES {
-        return Err(driver_msg(format!(
-            "the scanner gave a {width} by {height} image ({len} bytes), past the \
-             {MAX_IMAGE_BYTES}-byte cap; a lower resolution asks for less"
-        )));
-    }
-    Ok(len)
-}
-
 /// Maps `DAT_IMAGEINFO` to [`Format`], refusing compressed, planar multi-channel, or unrecognized
 /// layouts. Accepts total bits-per-pixel (`24` or `48`) in `bits_per_sample` for drivers that
 /// report bpp there instead of bits-per-channel.
@@ -179,182 +125,13 @@ pub(super) fn format_from_info(info: &ImageDesc) -> Result<Format, ScanError> {
 /// Decodes a Windows packed DIB (`BITMAPINFOHEADER` or larger header, color table, 4-byte padded
 /// rows) from a native transfer (`DAT_IMAGENATIVEXFER`) into a checked [`RawImage`].
 pub(super) fn decode_dib(bytes: &[u8]) -> Result<RawImage, ScanError> {
-    if bytes.is_empty() {
-        return Err(driver_msg("the scanner returned an empty DIB handle"));
-    }
-    if (bytes.len() as u64) > MAX_DIB_BYTES {
-        return Err(driver_msg(format!(
-            "the scanner's DIB is {} bytes, past the {MAX_DIB_BYTES}-byte cap; \
-             a lower resolution asks for less",
-            bytes.len()
-        )));
-    }
-    if bytes.len() < 40 {
-        return Err(driver_msg(format!(
-            "the scanner's DIB is {} bytes, shorter than a 40-byte BITMAPINFOHEADER",
-            bytes.len()
-        )));
-    }
-    let header_size = u32_at(bytes, 0);
-    let width = i32_at(bytes, 4);
-    let height = i32_at(bytes, 8);
-    let planes = u16_at(bytes, 12);
-    let bits = u16_at(bytes, 14);
-    let compression = u32_at(bytes, 16);
-    let colors_used = u32_at(bytes, 32);
-
-    if header_size < 40 || u64::from(header_size) > bytes.len() as u64 {
-        return Err(driver_msg(format!(
-            "the scanner's DIB header size ({header_size}) is invalid"
-        )));
-    }
-    if planes != 1 {
-        return Err(driver_msg(format!(
-            "the scanner's DIB has {planes} planes, expected 1"
-        )));
-    }
-    if compression != 0 {
-        return Err(driver_msg(format!(
-            "the scanner's DIB uses compression {compression}, expected BI_RGB (0)"
-        )));
-    }
-    let initial_format = match bits {
-        1 => Format::Bw1,
-        8 => Format::Gray8,
-        24 | 32 => Format::Rgb8,
-        other => {
-            return Err(driver_msg(format!(
-                "the scanner's DIB uses {other} bits per pixel, expected 1, 8, 24, or 32"
-            )));
-        }
-    };
-    if width <= 0 || height == 0 || height == i32::MIN {
-        return Err(driver_msg(format!(
-            "the scanner's DIB has invalid dimensions ({width} by {height})"
-        )));
-    }
-    let (w, h) = (width as u32, height.unsigned_abs());
-    let bottom_up = height > 0;
-    let _ = checked_data_len(initial_format, w, h)?;
-
-    let max_entries = if bits <= 8 { 1u32 << bits } else { 256 };
-    let entries = match colors_used {
-        0 if bits <= 8 => max_entries,
-        0 => 0,
-        n => n,
-    };
-    if entries > max_entries {
-        return Err(driver_msg(format!(
-            "the scanner's DIB palette has {entries} entries, past {max_entries} for {bits}-bit data"
-        )));
-    }
-
-    let palette_at = u64::from(header_size);
-    let rows_at = palette_at + u64::from(entries) * 4;
-    let dib_stride = (u64::from(w) * u64::from(bits)).div_ceil(32) * 4;
-    let need = rows_at + dib_stride * u64::from(h);
-    if (bytes.len() as u64) < need {
-        return Err(driver_msg(format!(
-            "the scanner's DIB holds {} bytes, and its rows need {need}",
-            bytes.len()
-        )));
-    }
-
-    let palette: Vec<[u8; 3]> = (0..entries as usize)
-        .map(|i| {
-            let at = palette_at as usize + i * 4;
-            [bytes[at + 2], bytes[at + 1], bytes[at]]
-        })
-        .collect();
-
-    let (rows_at, dib_stride) = (rows_at as usize, dib_stride as usize);
-
-    let (format, invert_bw) = match bits {
-        1 => {
-            if palette.len() < 2 {
-                return Err(driver_msg(
-                    "the scanner's 1-bit DIB palette has fewer than 2 entries",
-                ));
-            }
-            let lum =
-                |c: [u8; 3]| 77 * u32::from(c[0]) + 150 * u32::from(c[1]) + 29 * u32::from(c[2]);
-            let (l0, l1) = (lum(palette[0]), lum(palette[1]));
-            if l0 == l1 {
-                return Err(driver_msg(
-                    "the scanner's 1-bit DIB palette has two identical-luminance entries",
-                ));
-            }
-            (Format::Bw1, l0 > l1)
-        }
-        8 => {
-            let mut has_color = false;
-            for y in 0..h as usize {
-                let src = &bytes[rows_at + y * dib_stride..][..w as usize];
-                for &idx in src {
-                    let Some(&[r, g, b]) = palette.get(usize::from(idx)) else {
-                        return Err(driver_msg(format!(
-                            "the scanner's 8-bit DIB references palette index {idx} past {entries} entries"
-                        )));
-                    };
-                    if r != g || g != b {
-                        has_color = true;
-                    }
-                }
-            }
-            let fmt = if has_color {
-                Format::Rgb8
-            } else {
-                Format::Gray8
-            };
-            (fmt, false)
-        }
-        24 | 32 => (Format::Rgb8, false),
-        _ => unreachable!(),
-    };
-
-    let total = checked_data_len(format, w, h)?;
-    let src_row_bytes = ((u64::from(w) * u64::from(bits)).div_ceil(8)) as usize;
-    let mut data = Vec::new();
-    data.try_reserve_exact(total).map_err(|_| {
-        driver_msg(format!(
-            "couldn't allocate {total} bytes for a {w} by {h} DIB; a lower resolution asks for less"
-        ))
-    })?;
-
-    for y in 0..h as usize {
-        let src_row = if bottom_up { h as usize - 1 - y } else { y };
-        let src = &bytes[rows_at + src_row * dib_stride..][..src_row_bytes];
-        match (bits, format) {
-            (24, Format::Rgb8) => {
-                for &[b, g, r] in src.as_chunks::<3>().0 {
-                    data.extend_from_slice(&[r, g, b]);
-                }
-            }
-            (32, Format::Rgb8) => {
-                for &[b, g, r, _] in src.as_chunks::<4>().0 {
-                    data.extend_from_slice(&[r, g, b]);
-                }
-            }
-            (8, Format::Gray8) => {
-                for &idx in src {
-                    data.push(palette[usize::from(idx)][0]);
-                }
-            }
-            (8, Format::Rgb8) => {
-                for &idx in src {
-                    data.extend_from_slice(&palette[usize::from(idx)]);
-                }
-            }
-            (1, Format::Bw1) => {
-                data.extend(src.iter().map(|&b| if invert_bw { !b } else { b }));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    clear_bw_padding(format, w, &mut data);
-    RawImage::new(format, w, h, data)
-        .map_err(|err| driver_msg(format!("decoded DIB failed layout check: {err}")))
+    crate::dib::decode(
+        bytes,
+        DibMode {
+            allow_file_header: false,
+            allow_bare_dib: true,
+        },
+    )
 }
 
 /// Assembles `TWSX_MEMORY` strips or tiles into a [`RawImage`].
@@ -795,33 +572,6 @@ fn parse_dim(raw: i32, label: &str) -> Result<Option<u32>, ScanError> {
             "the scanner reported an invalid {label} ({raw})"
         )))
     }
-}
-
-/// Clears trailing bits past `width` on every row of a [`Format::Bw1`] buffer.
-fn clear_bw_padding(format: Format, width: u32, data: &mut [u8]) {
-    let used = width % 8;
-    if format != Format::Bw1 || used == 0 {
-        return;
-    }
-    let keep = 0xffu8 << (8 - used);
-    let stride = row_bytes(format, width) as usize;
-    for row in data.chunks_exact_mut(stride) {
-        if let Some(last) = row.last_mut() {
-            *last &= keep;
-        }
-    }
-}
-
-fn u16_at(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
-}
-
-fn i32_at(bytes: &[u8], at: usize) -> i32 {
-    i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
 #[cfg(test)]
