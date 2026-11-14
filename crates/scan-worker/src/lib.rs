@@ -55,18 +55,22 @@
 //!
 //! A SANE worker is built the same way with this crate's `sane` feature, which turns on
 //! `scan-device`'s: its `main` serves `scan_worker::scan_device::sane::SaneBackend::new()` where
-//! this one serves the scripted backend, and the client is given it for `Driver::Sane`. Named
-//! through the re-export, the backend is one of the `scan-device` this crate's [`serve`] takes; a
-//! `scan-device` of another version, a dependency of the app's own, is another crate, whose
-//! backends `serve` doesn't take.
+//! this one serves the scripted backend, and the client is given it for `Driver::Sane`. On
+//! Windows, a 64-bit and a 32-bit TWAIN worker are built with the `twain` feature, each serving
+//! `scan_worker::scan_device::twain::TwainBackend::new()`, registered for
+//! `Driver::Twain { bits: 64 }` and `Driver::Twain { bits: 32 }`, and listed together through
+//! [`Client::list_twain`] ([`TwainList`]). Named through the re-export, each backend is one of
+//! the `scan-device` this crate's [`serve`] takes; a `scan-device` of another version, a
+//! dependency of the app's own, is another crate, whose backends `serve` doesn't take.
 //!
 //! # The client
 //!
-//! A listing ([`Client::list`]) starts a worker of its own, which lists, answers and is quit, so
-//! a slow listing never holds a device that scans; an open ([`Client::open`]) starts a worker
-//! that keeps the device until [`RemoteDevice::close`], or its drop, asks it to quit. Each is the
-//! worker given for the device's [`Driver`](scan_device::Driver) ([`Client::worker`]), a program
-//! named by an absolute path, never searched for.
+//! A listing ([`Client::list`], or [`Client::list_twain`] across both TWAIN bitnesses in
+//! parallel) starts a worker of its own, which lists, answers and is quit, so a slow listing
+//! never holds a device that scans; an open ([`Client::open`]) starts a worker that keeps the
+//! device until [`RemoteDevice::close`], or its drop, asks it to quit. Each is the worker given
+//! for the device's [`Driver`](scan_device::Driver) ([`Client::worker`]), a program named by an
+//! absolute path, never searched for.
 //!
 //! Each worker starts in a private directory of its own, made under the work directory
 //! ([`Client::work_dir`], the system's temporary directory by default) at once under a random
@@ -81,14 +85,17 @@
 //! and its worker reads what the command or the app gives, or SANE's own list. Whatever the id,
 //! the worker's backend is the one to refuse it. On Unix a worker leads a process group of its
 //! own, so a terminal's interrupt reaches the app, which decides, and not the worker mid-sheet;
-//! on Windows it's started with no console window.
+//! on Windows it's started with no console window and placed in a Job Object
+//! (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), so any helper processes a driver spawns end with the
+//! worker and never outlive the client.
 //!
-//! A worker inherits the app's environment, and its command's variables are set after it, in
-//! order ([`WorkerCommand::env`]), then a SANE open's `SANE_CONFIG_DIR`: so an app gives a
-//! worker what its process reads as it starts, such as the system loader's search path that
-//! chooses the SANE library it loads, and the configuration of an app's own SANE, without
-//! changing its own environment. The client sets each as given, the app's own choice, as its
-//! program is; a search path holds absolute entries alone.
+//! A worker inherits the app's environment, with `LC_ALL=C` set first on SANE workers so decimal
+//! option formatting is locale-independent; its command's variables are set after it, in order
+//! ([`WorkerCommand::env`], which can override `LC_ALL` too), then a SANE open's
+//! `SANE_CONFIG_DIR`: so an app gives a worker what its process reads as it starts, such as the
+//! system loader's search path that chooses the SANE library it loads, and the configuration of
+//! an app's own SANE, without changing its own environment. The client sets each as given, the
+//! app's own choice, as its program is; a search path holds absolute entries alone.
 //!
 //! The client trusts nothing a worker says, since a driver's code runs there: every line is
 //! capped before it's read whole ([`Limits::line`]); a page's bytes are capped
@@ -133,13 +140,18 @@
 //! | A batch, once cancelled | `cancel`, 10 s, counted from the later of the cancel and the last line, so the sheet in flight finishes while it sends |
 //! | A listing or an open | its deadline, and `grace`, 5 s |
 //! | `caps` | `silence` |
-//! | The settings window | never: it's the user's, and only its answer or the worker's end ends the call |
+//! | The settings window | never: it's the user's, and only its answer, [`StopHandle::stop`], or the worker's end ends the call |
 //!
 //! A worker writes a progress line only when the count moves, so a driver stuck mid-page goes
 //! silent. A batch's caller cancels through its [`Progress`](scan_device::in_progress::Progress),
 //! which the client reads every 50 ms and at each message and sends on once: the worker finishes
 //! the sheet in flight, front and back, and feeds no more. A caller's receiver gone is a cancel
-//! too, the rest of the batch read and dropped. A listing or an open the backend timed out
+//! too, the rest of the batch read and dropped. To force-terminate an open device's worker from
+//! another thread (for instance when a driver's untimed settings window hangs, or a batch must
+//! stop immediately even if the caller's event channel is full), [`RemoteDevice::stop_handle`]
+//! hands out a `Send + Sync + Clone` [`StopHandle`]: [`StopHandle::stop`] kills the worker and
+//! makes the interrupted call (or the first call after an idle `stop`) answer [`Error::Aborted`],
+//! with [`Error::Ended`] thereafter. A listing or an open the backend timed out
 //! ([`ScanError::TimedOut`](scan_device::ScanError::TimedOut)) kills its worker at once, since
 //! its driver may still be at it.
 //!
@@ -311,15 +323,18 @@
 //! types, so a change to the model changes the protocol; [`PROTOCOL`] stays 1 until the two are
 //! frozen, and changes with every change of form from then on.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 mod client;
 mod error;
 mod serve;
+#[cfg(any(unix, windows))]
+#[allow(unsafe_code)]
+mod sys;
 mod wire;
 
-pub use client::{Client, Limits, RemoteDevice, Timeouts, WorkerCommand};
+pub use client::{Client, Limits, RemoteDevice, StopHandle, Timeouts, TwainList, WorkerCommand};
 pub use error::{Error, ProtocolError, Timeout};
 pub use serve::serve;
 pub use wire::PROTOCOL;

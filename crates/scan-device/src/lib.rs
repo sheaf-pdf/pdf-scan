@@ -118,6 +118,19 @@
 //!   loads them, so an app runs this one in a worker process of its own. Builds on every system;
 //!   where there's no SANE (Windows among them), listing and opening say it isn't installed.
 //!
+//! - `twain`: `scan_device::twain::TwainBackend`, TWAIN's scanners on Windows, through the Data
+//!   Source Manager (`TWAINDSM.dll`) loaded at run time after checking its machine, Authenticode
+//!   signature and signer, and never linked, so a program built with it runs where the DSM isn't
+//!   installed and hears so as [`ScanError::NotInstalled`]. Its devices' ids are `twain32:` or
+//!   `twain64:` (by the process's pointer width) and TWAIN's product names, a stored one opened
+//!   after checking its name, maker and family against the DSM's listing. A batch resets sticky
+//!   driver processing, negotiates its settings in order and reads them back for [`Event::Applied`],
+//!   transfers pages by memory buffers (`TWSX_MEMORY`, falling back to `TWSX_NATIVE`, or native
+//!   when `TwainBackend::with_native_transfer` asks) into the raw layout, and reads `TWEI_PAGESIDE`
+//!   where the driver reports it. TWAIN drivers are in-process DLLs, and 32-bit drivers load only
+//!   in a 32-bit process, so an app runs a 64-bit and a 32-bit worker process for them. Builds on
+//!   every system; off Windows, listing and opening say TWAIN isn't installed.
+//!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
 //! # Example
@@ -195,6 +208,8 @@ mod page;
 mod round_trip;
 #[cfg(feature = "sane")]
 pub mod sane;
+#[cfg(feature = "twain")]
+pub mod twain;
 
 pub use caps::{Applied, Caps, Clamped, Paper, Resolutions, Settings, SizeMm, Source, SourceCaps};
 pub use device::{

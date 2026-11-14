@@ -1,9 +1,10 @@
 # pdf-scan: the plan
 
-As of 2026-11-09. S0 slices 1, 2, 3, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane` for its
-tests, the seam note revised, `scan-device` provisional (`archive/slices/s0-3-scan-device.md`), the TWAIN spike
-and `twain-dsm`. S0 slice 4 has built `scan-worker` on `scan-device`, done on its branch with its code review's
-findings fixed, waiting on review (`slices/s0-4-scan-worker.md`); the rest is planned.
+As of 2026-11-12. S0 slices 1, 1a, 2, 3, 4, 5, 7 and 8 are merged: the workspace, `sane-dl` with `fake-libsane`
+for its tests, the seam note revised, `scan-device` provisional with its `fake` and `sane` backends, `scan-worker`
+on `scan-device`, the TWAIN spike and `twain-dsm`. S0 slice 9 (`twain-dsm` 0.1.0-alpha.1, `scan-device`'s `twain`
+backend, 32-bit worker, and `scan-worker` Windows hardening) is built on `s0-9-twain-backend`
+(`slices/s0-9-twain-backend.md`); the rest is planned.
 
 pdf-scan is a workspace of crates for getting paper into PDF, which sheaf will depend on: scanners driven
 through each system's own driver API, in a worker process; page images cleaned up, judged blank or not, and
@@ -35,10 +36,10 @@ Eleven crates in three layers, nine published and two for tests (details and bou
 
 | Crate | Layer | What | Starts from |
 |---|---|---|---|
-| `scan-device` | devices | The device model (devices, what each can do, settings, pages, errors) and backends behind features: `fake`, `sane`, `twain`, `wia` | M5 proposals 5, 7 to 10, 22; the model and `fake` built in S0 slice 3 (0.0.0, provisional, unpublished) |
+| `scan-device` | devices | The device model (devices, what each can do, settings, pages, errors) and backends behind features: `fake`, `sane`, `twain`, `wia` | M5 proposals 5, 7 to 10, 22; the model and `fake` built in S0 slice 3, `sane` in S0 slice 5, `twain` in S0 slice 9 (0.0.0, provisional, unpublished) |
 | `sane-dl` | devices | SANE loaded at run time: its own bindings from `sane.h`, a safe handle, cancel from another thread, frames assembled | M5 proposal 6; built in S0 slice 1 (0.1.0-alpha.1, unpublished) |
-| `twain-dsm` | devices | TWAIN through the Data Source Manager loaded at run time: bindings, the state machine, a hidden window and its messages, 32- and 64-bit | M5 proposal 7; unbuilt |
-| `scan-worker` | devices | Drivers out of process: the protocol, the worker's loop over any backend, the client with its watchdog | M5 proposal 4; built in S0 slice 4 (0.0.0, provisional, unpublished), on `scan-device` and `sane-dl` |
+| `twain-dsm` | devices | TWAIN through the Data Source Manager loaded at run time: bindings, the state machine, a hidden window and its messages, 32- and 64-bit | M5 proposal 7; built in S0 slice 8 and finished in S0 slice 9 (0.1.0-alpha.1, unpublished) |
+| `scan-worker` | devices | Drivers out of process: the protocol, the worker's loop over any backend, the client with its watchdog, stdout isolation, Windows Job Object, `StopHandle`, 32/64-bit TWAIN list merge | M5 proposal 4; built in S0 slices 4 and 9 (0.0.0, provisional, unpublished), on `scan-device` |
 | `scan-image` | pages | A scanned page's image held as compactly as it allows (a JPEG as its bytes, black and white as CCITT G4), read from and written to image files | `sheaf_image::{io, encode}` |
 | `scan-cleanup` | pages | Scans and photos of paper made clean pages: page finding, lighting, deskew, upright, Sauvola, despeckle, the Photo and Scanner profiles; and blank pages | `sheaf_image::{clean, blank}` |
 | `patch-codes` | pages | Kodak patch codes read along any edge of a page image, and drawn in Kodak's layout | `sheaf_image::codes::patch` |
@@ -97,7 +98,7 @@ backend where no scanner is at hand; then the pixel crates cut from sheaf; then 
 
 | # | Milestone | Crates | Needs | State |
 |---|---|---|---|---|
-| S0 | **Scan devices:** SANE, the device model (provisional) and the worker on Linux; then TWAIN and WIA on Windows; the model frozen | `sane-dl`, `scan-device` (`fake`, `sane`, `twain`, `wia`), `scan-worker`, `twain-dsm`; `fake-libsane` for tests | Nothing unbuilt; by hand, scanners; for Windows, a Windows machine | Slice 1 done on its branch, waiting on review |
+| S0 | **Scan devices:** SANE, the device model (provisional) and the worker on Linux; then TWAIN and WIA on Windows; the model frozen | `sane-dl`, `scan-device` (`fake`, `sane`, `twain`, `wia`), `scan-worker`, `twain-dsm`; `fake-libsane` for tests | Nothing unbuilt; by hand, scanners; for Windows, a Windows machine | Slices 1, 1a, 2, 3, 4, 5, 7, 8 merged; slice 9 built on `s0-9-twain-backend` |
 | S1 | **Pages:** the pixel crates cut from sheaf, sheaf's output held byte for byte | `scan-fixtures`, `scan-image`, `scan-cleanup`, `patch-codes` | Nothing unbuilt | Planned |
 | S2 | **PDF:** scanned pages to PDF and back, on the family | `pdf-images`, `pdf-scan` | S1's `scan-image`; the family (alphas; its writers built, unpublished) | Planned |
 | — | Later: macOS (`ica`), a second barcode engine, a faster cleanup if S0 slice 4's throughput asks for it | | | — |

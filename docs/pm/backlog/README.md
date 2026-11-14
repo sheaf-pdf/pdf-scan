@@ -11,12 +11,12 @@ settles, and its upstream contributions.
 | Kind | File | S0 | S1 | S2 | later | Open | Waiting on review |
 |---|---|---|---|---|---|---|---|
 | bug (BUG) | `bugs.md` | | 5 | 1 | 1 | 7 | |
-| feature (FEAT) | `features.md` | 5 | 2 | 2 | 8 | 17 | |
+| feature (FEAT) | `features.md` | 3 | 2 | 2 | 8 | 15 | |
 | docs (DOC) | `docs.md` | | 1 | | | 1 | |
-| test (TEST) | `tests.md` | 7 | 2 | 1 | 1 | 11 | |
+| test (TEST) | `tests.md` | 5 | 2 | 1 | 1 | 9 | |
 | question (Q) | `questions.md` | 5 | 1 | 2 | | 8 | 1 |
 | upstream (UP) | `upstream.md` | 8 | 4 | 1 | 1 | 14 | 13 |
-| **all** | | **25** | **15** | **7** | **11** | **58** | **14** |
+| **all** | | **21** | **15** | **7** | **11** | **54** | **14** |
 
 ## Where to start
 
@@ -25,7 +25,7 @@ settles, and its upstream contributions.
   run of its pull request: `archive/backlog-done.md`); TEST-15 (slice 1a's code on CI's three systems), closed
   by CI's run of its pull request, #7 (`archive/backlog-done.md`); Q-7 (whether `Sane::load` refuses an empty or relative entry of the loader's
   search path) and UP-14 (SANE's `dll` and the library path in a set-id process), slice 1a's code review's,
-  wait on review; TEST-14 (`twain-dsm`'s public API through the gate, on Windows) when a slice next touches `twain-dsm`'s CI; FEAT-5 (patch codes the driver reports) with the Windows
+  wait on review; TEST-14 (`twain-dsm`'s public API through the gate, on Windows) done by slice 9 (`archive/backlog-done.md`); FEAT-5 (patch codes the driver reports) with the Windows
   backends;
   UP-7 to UP-11, defects slice 1 found in SANE's own `test` backend, `scanimage` and several backends'
   `sane_set_io_mode`, wait on review. TEST-3 (TWAIN's sample source) was done by slice 7
@@ -34,11 +34,11 @@ settles, and its upstream contributions.
   stored-id worker's configuration, tested without the system's) and Q-4 (a device's strings as bytes) in slice
   5; TEST-9 (what only the fi-6130 shows of names and cancels) in slice 6's hand check; UP-12 and UP-13
   (`scanimage`, sane-dll(5)) wait on review. From slice 3: TEST-12 (`scan-device`'s layout tests on a 32-bit
-  `usize` again, in CI) by slice 9's 32-bit worker job, where slice 4 left it; TEST-13 (its code on CI's
+  `usize` again, in CI) done by slice 9 (`archive/backlog-done.md`); TEST-13 (its code on CI's
   Windows and macOS) closed by CI's run on `master` after #6 (`archive/backlog-done.md`); Q-5 (the packaged
   crate's tests without the fake) and Q-6 (what else of the model may grow) in slice 11. From slice 4: FEAT-14
   (the Windows Job object and a tree kill) and FEAT-17 (a stop handle, for a driver's window that never
-  closes) in slice 9; TEST-16 (its code on CI's Windows and macOS) closed by CI's run of its pull request;
+  closes) done by slice 9 (`archive/backlog-done.md`); TEST-16 (its code on CI's Windows and macOS) closed by CI's run of its pull request;
   FEAT-16 (a worker's end harmless whatever the app's `SIGPIPE` disposition) before slice 11; Q-8 (the serde
   form, fields added after data is stored, and what the protocol carries by name) and Q-5's question of
   `scan-worker` in slice 11; FEAT-15 (a spare worker kept warm) later. BUG-7 (`sane-dl`'s `Image` printing its bytes in

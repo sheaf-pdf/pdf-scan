@@ -27,14 +27,16 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
-    CreateSemaphoreW, GetCurrentProcessId, INFINITE, ReleaseSemaphore, WaitForSingleObject,
+    CreateSemaphoreW, GetCurrentProcessId, GetCurrentThreadId, INFINITE, ReleaseSemaphore,
+    WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, IsWindow, MSG,
-    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, PostMessageW,
-    QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_NULL, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetWindowThreadProcessId, IsWindow, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+    PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, RegisterClassExW, RegisterWindowMessageW,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SendMessageTimeoutW, TranslateMessage, WM_APP, WM_CLOSE, WM_NULL,
+    WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 
 use crate::error::{Error, RunError};
@@ -175,7 +177,7 @@ pub(crate) fn take_source_messages(mut each: impl FnMut(u32, u16)) {
     let mut read = RING_READ.load(Ordering::Relaxed);
     if written.wrapping_sub(read) > RING {
         // Wrapped: the oldest are gone.
-        read = written - RING;
+        read = written.wrapping_sub(RING);
     }
     while read != written {
         let entry = RING_SLOTS[read % RING].swap(0, Ordering::AcqRel);
@@ -431,26 +433,46 @@ pub(crate) struct OwnerGuard {
 impl OwnerGuard {
     /// Re-enables `hwnd` if it was enabled before the source opened its window
     /// and a modal driver left it disabled.
+    ///
+    /// When `hwnd` belongs to another thread, probes message-queue responsiveness
+    /// with a bounded `SendMessageTimeoutW` first so teardown cannot deadlock if
+    /// the UI thread stopped pumping messages while joining the scan thread.
     pub(crate) fn restore(self) {
-        // SAFETY: IsWindow, IsWindowEnabled and EnableWindow check `hwnd` in
-        // User32's handle table without dereferencing it; if the window was
-        // destroyed meanwhile, IsWindow is 0 and nothing is sent.
+        // SAFETY: IsWindow, IsWindowEnabled, GetWindowThreadProcessId,
+        // SendMessageTimeoutW, and EnableWindow check `hwnd` in User32's handle
+        // table without dereferencing it; if the window was destroyed meanwhile,
+        // IsWindow is 0 and nothing is sent.
         unsafe {
             if self.was_enabled && IsWindow(self.hwnd) != 0 && IsWindowEnabled(self.hwnd) == 0 {
+                let cross_thread =
+                    GetWindowThreadProcessId(self.hwnd, null_mut()) != GetCurrentThreadId();
+                if cross_thread {
+                    let mut result: usize = 0;
+                    if SendMessageTimeoutW(
+                        self.hwnd,
+                        WM_NULL,
+                        0,
+                        0,
+                        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                        250,
+                        &mut result,
+                    ) == 0
+                    {
+                        return;
+                    }
+                }
                 EnableWindow(self.hwnd, 1);
             }
         }
     }
 }
 
-/// Validates a caller's Win32 `HWND` integer: must be a canonical 32-bit
-/// handle (zero-extended `1..u32::MAX` or sign-extended `0xFFFF_FFFF_8000_0000..u64::MAX`)
-/// that `IsWindow` recognises as a live window.
-pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
+/// Resolves `raw` as a canonical 32-bit Win32 `HWND` recognized by `IsWindow`.
+fn resolve_hwnd(raw: u64) -> Option<HWND> {
     let canonical =
         (1..u64::from(u32::MAX)).contains(&raw) || (0xFFFF_FFFF_8000_0000..u64::MAX).contains(&raw);
     if !canonical {
-        return Err(Error::InvalidWindow { hwnd: raw });
+        return None;
     }
     let zero_ext = (raw as u32 as usize) as HWND;
     let sign_ext = (raw as u32 as i32 as isize) as HWND;
@@ -458,17 +480,43 @@ pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
     // no memory; 0, HWND_BROADCAST (0xFFFF) and INVALID_HANDLE_VALUE (-1) all
     // return 0. Both zero-extended and LongToHandle sign-extended forms are
     // checked for 32/64-bit interop.
-    let hwnd = if unsafe { IsWindow(zero_ext) } != 0 {
-        zero_ext
-    } else if unsafe { IsWindow(sign_ext) } != 0 {
-        sign_ext
+    if unsafe { IsWindow(zero_ext) } != 0 {
+        return Some(zero_ext);
+    }
+    // SAFETY: Same User32 handle-table lookup for the sign-extended form.
+    if unsafe { IsWindow(sign_ext) } != 0 {
+        Some(sign_ext)
     } else {
-        return Err(Error::InvalidWindow { hwnd: raw });
-    };
+        None
+    }
+}
+
+/// Validates a caller's Win32 `HWND` integer: must be a canonical 32-bit
+/// handle (zero-extended `1..u32::MAX` or sign-extended `0xFFFF_FFFF_8000_0000..u64::MAX`)
+/// that `IsWindow` recognises as a live window.
+pub(crate) fn check_owner(raw: u64) -> Result<OwnerGuard, Error> {
+    let hwnd = resolve_hwnd(raw).ok_or(Error::InvalidWindow { hwnd: raw })?;
     // SAFETY: `hwnd` was just checked with IsWindow; IsWindowEnabled touches no
     // memory.
     let was_enabled = unsafe { IsWindowEnabled(hwnd) } != 0;
     Ok(OwnerGuard { hwnd, was_enabled })
+}
+
+/// Whether `raw` is a live canonical 32-bit Win32 `HWND` owned by the calling
+/// thread.
+///
+/// A caller thread that blocks waiting on another thread (rather than pumping
+/// its own Win32 message queue) must refuse to pass one of its own windows as a
+/// modal owner: Win32 sends synchronous cross-thread messages (`WM_ENABLE`,
+/// `WM_PARENTNOTIFY`) to the owner's thread, which deadlocks if that thread is
+/// blocked waiting on a channel or pipe.
+pub fn window_belongs_to_current_thread(raw: u64) -> bool {
+    let Some(hwnd) = resolve_hwnd(raw) else {
+        return false;
+    };
+    // SAFETY: `hwnd` was checked with IsWindow, a null process-id pointer asks
+    // only for the owning thread id, and GetCurrentThreadId takes no arguments.
+    unsafe { GetWindowThreadProcessId(hwnd, null_mut()) == GetCurrentThreadId() }
 }
 
 #[cfg(test)]
@@ -538,5 +586,60 @@ mod tests {
         assert_eq!(unsafe { IsWindowEnabled(hwnd) }, 0);
 
         win.destroy();
+    }
+
+    #[test]
+    fn window_belongs_to_current_thread_distinguishes_same_other_and_bogus_threads() {
+        for bad in [0, 0xFFFF, u64::from(u32::MAX), u64::MAX] {
+            assert!(!window_belongs_to_current_thread(bad));
+        }
+        let mine = Window::create().expect("hidden window");
+        let raw_mine = mine.handle() as u64;
+        assert!(window_belongs_to_current_thread(raw_mine));
+
+        let other_sees = std::thread::spawn(move || window_belongs_to_current_thread(raw_mine))
+            .join()
+            .expect("thread");
+        assert!(!other_sees);
+
+        mine.destroy();
+        assert!(!window_belongs_to_current_thread(raw_mine));
+    }
+
+    #[test]
+    fn owner_guard_does_not_deadlock_when_cross_thread_owner_stops_pumping() {
+        let (raw_tx, raw_rx) = std::sync::mpsc::channel();
+        let (disable_tx, disable_rx) = std::sync::mpsc::channel();
+        let (disabled_tx, disabled_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let ui = std::thread::spawn(move || {
+            let win = Window::create().expect("hidden window");
+            let hwnd = win.hwnd();
+            let raw = win.handle() as u64;
+            raw_tx.send(raw).expect("send raw hwnd");
+            let _ = disable_rx.recv();
+            // Disable on the owning thread, then block without pumping messages
+            // (simulating a UI thread blocked joining teardown).
+            // SAFETY: `hwnd` is our live window on this thread.
+            unsafe { EnableWindow(hwnd, 0) };
+            disabled_tx.send(()).expect("signal disabled");
+            let _ = done_rx.recv();
+            win.destroy();
+        });
+
+        let raw = raw_rx.recv().expect("raw hwnd from UI thread");
+        let guard = check_owner(raw).expect("live cross-thread window");
+        disable_tx.send(()).expect("tell UI thread to disable");
+        disabled_rx.recv().expect("UI thread disabled window");
+
+        let start = std::time::Instant::now();
+        guard.restore();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "restore bounded on non-pumping owner thread"
+        );
+        let _ = done_tx.send(());
+        ui.join().expect("UI thread");
     }
 }

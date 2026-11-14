@@ -142,6 +142,9 @@ pub use states::{App, Delivery, ImageLayout, Load, Loaded, Opened, SetOutcome, S
 #[cfg(windows)]
 #[cfg_attr(docsrs, doc(cfg(windows)))]
 pub use thread::{Remote, RunReport, Twain, Wake, run};
+#[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
+pub use window::window_belongs_to_current_thread;
 
 /// The README's example, compiled as a doctest on Windows.
 #[cfg(all(doctest, windows))]

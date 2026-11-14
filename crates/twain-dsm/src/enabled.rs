@@ -13,7 +13,7 @@ use crate::dsm::{Dib, Dsm};
 use crate::error::{Error, Refused};
 use crate::ext_info::{self, ExtInfo};
 use crate::ffi;
-use crate::states::{Delivery, ImageLayout, Source, image_layout_read};
+use crate::states::{Delivery, ImageLayout, Opened, Source, image_layout_read};
 use crate::thread::{Level, Pumped, Twain, deadline};
 use crate::window;
 
@@ -246,6 +246,9 @@ impl<'t, T> Source<'t, T> {
         // TWRC_CHECKSTATUS: enabled, the UI shown though not asked for (a
         // source that can't hide it).
         if rc != ReturnCode::SUCCESS && rc != ReturnCode::CHECKSTATUS {
+            if let Some(g) = guard {
+                g.restore();
+            }
             let error = twain.source_failure(dsm, &twain.source, triplet, rc);
             return Err(Refused { state: self, error });
         }
@@ -315,6 +318,12 @@ impl<'t, T> Enabled<'t, T> {
 
     fn dsm(&self) -> &'static Dsm {
         self.source().dsm()
+    }
+
+    /// The connection beneath: to list the sources (`Opened::sources`) while
+    /// this source is enabled.
+    pub fn opened(&self) -> &Opened<'t, T> {
+        self.source().opened()
     }
 
     /// Whether this is [`Source::settings_ui`]'s, which no transfer follows.
@@ -510,6 +519,25 @@ impl<'t, T> Ready<'t, T> {
         twain.source_failure(self.dsm(), &twain.source, triplet, rc)
     }
 
+    /// The connection beneath: to list the sources (`Opened::sources`) between
+    /// pages while this source is ready.
+    pub fn opened(&self) -> &Opened<'t, T> {
+        self.enabled().opened()
+    }
+
+    /// Takes the next request a [`Remote`](crate::Remote) posted, without
+    /// waiting.
+    pub fn take_request(&self) -> Option<T> {
+        self.twain().take_request()
+    }
+
+    /// The source's current condition code (`DG_CONTROL/DAT_STATUS/MSG_GET`,
+    /// which clears it): `None` if it has none (`TWCC_SUCCESS`) or couldn't
+    /// answer.
+    pub fn status(&self) -> Option<ConditionCode> {
+        self.enabled().status()
+    }
+
     /// Whether the source has asked to be closed (`MSG_CLOSEDSREQ`: the user
     /// cancelled on its window, or it failed): then it's back in state 5, and
     /// a transfer is refused with [`Error::CloseRequested`].
@@ -671,6 +699,13 @@ impl<'t, T> Transferred<'t, T> {
         }
     }
 
+    /// The source's current condition code (`DG_CONTROL/DAT_STATUS/MSG_GET`,
+    /// which clears it): `None` if it has none (`TWCC_SUCCESS`) or couldn't
+    /// answer.
+    pub fn status(&self) -> Option<ConditionCode> {
+        self.ready().status()
+    }
+
     /// Whether the source has asked to be closed: see
     /// [`Ready::close_requested`].
     pub fn close_requested(&self) -> bool {
@@ -708,6 +743,20 @@ impl<'t, T> Transferred<'t, T> {
                 self.ready = Some(ready);
                 Err(Refused { state: self, error })
             }
+        }
+    }
+
+    /// Steps down to state 5 (`MSG_ENDXFER` and `MSG_RESET` as needed, or a
+    /// no-op when `MSG_CLOSEDSREQ` already moved the source to state 5),
+    /// returning the [`Enabled`] beneath.
+    pub fn reset(mut self) -> Result<Enabled<'t, T>, Refused<Self>> {
+        match self.ready().twain().step_down_to(5, Walk::Strict) {
+            Ok(()) => Ok(self
+                .ready
+                .take()
+                .expect("a Transferred has its Ready")
+                .into_enabled()),
+            Err(error) => Err(Refused { state: self, error }),
         }
     }
 }
@@ -904,6 +953,13 @@ impl<'t, T> MemoryTransfer<'t, T> {
         }))
     }
 
+    /// The source's current condition code (`DG_CONTROL/DAT_STATUS/MSG_GET`,
+    /// which clears it): `None` if it has none (`TWCC_SUCCESS`) or couldn't
+    /// answer.
+    pub fn status(&self) -> Option<ConditionCode> {
+        self.ready().status()
+    }
+
     /// Whether the source cancelled the transfer (`TWRC_CANCEL`).
     pub fn cancelled(&self) -> bool {
         self.ended == Some(ReturnCode::CANCEL)
@@ -949,6 +1005,20 @@ impl<'t, T> MemoryTransfer<'t, T> {
                 self.ready = Some(ready);
                 Err(Refused { state: self, error })
             }
+        }
+    }
+
+    /// Steps down to state 5 (`MSG_ENDXFER` and `MSG_RESET` as needed, or a
+    /// no-op when `MSG_CLOSEDSREQ` already moved the source to state 5),
+    /// returning the [`Enabled`] beneath.
+    pub fn reset(mut self) -> Result<Enabled<'t, T>, Refused<Self>> {
+        match self.ready().twain().step_down_to(5, Walk::Strict) {
+            Ok(()) => Ok(self
+                .ready
+                .take()
+                .expect("a MemoryTransfer has its Ready")
+                .into_enabled()),
+            Err(error) => Err(Refused { state: self, error }),
         }
     }
 }

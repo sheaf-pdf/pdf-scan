@@ -2,12 +2,13 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`, which has the design, its decisions and what each step
-checked): `/crates/scan-device/`, 0.0.0, provisional and unpublished (`publish = false`): the model, and the
-`fake` backend; no backend for a driver API yet (`sane` is slice 5's). MSRV 1.89 (`decisions.md`). No `unsafe`
-(`#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`). Changed by S0 slice 4
-for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fake's `Fault::AwaitCancel`
-("Slice 4's changes", below).
+**As built** in S0 slice 3 (`archive/slices/s0-3-scan-device.md`), S0 slice 5 (`sane` backend, PR #9), and S0
+slice 9 (`twain` backend, `slices/s0-9-twain-backend.md`): `/crates/scan-device/`, 0.0.0, provisional and
+unpublished (`publish = false`): the model, and the `fake`, `sane`, and `twain` backends (`wia` is slice 10's).
+MSRV 1.89 (`decisions.md`). No `unsafe` (`#![forbid(unsafe_code)]`), and every public item documented
+(`#![warn(missing_docs)]`). Changed by S0 slice 4 for `scan-worker` (`archive/slices/s0-4-scan-worker.md`): a
+`serde` feature, and the fake's `Fault::AwaitCancel` ("Slice 4's changes", below); S0 slice 9's `twain` backend
+required zero breaking changes to the model.
 
 - **What:** the device model of [M5 proposal 9](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p09-device-model.md), as `crates/scan-device-seam.md`'s "The model, for slice 3"
   writes its types and traits down (S0 slice 2, for review), built so in S0 slice 3, every name the note's; and
@@ -167,8 +168,31 @@ for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fak
       flight, isn't the model's cancel.
     - Every list of these quirks is in copyleft frontends (libinsane, NAPS2, simple-scan), so the facts go in
       our own table, a citation per row; nothing of their code.
-  - `twain` (Windows), on `twain-dsm`: sheaf's settings as capabilities, `ShowUI` off by default, the
-    driver's own window on request ("Scanner settings…"), condition codes as `ScanError`s.
+  - `twain` (Windows, **built in S0 slice 9**), on `twain-dsm` (`scan_device::twain::TwainBackend` behind
+    `feature = "twain"`, building on every OS and returning `NotInstalled` off Windows):
+    - **Process-wide lazy STA `Session`:** matches `twain-dsm`'s process-wide `RunLock` and `Loaded::path()`,
+      shut down when the last `TwainBackend` and `TwainDevice` drop; concurrent `open` returns `Busy` without
+      blocking, and concurrent `list` during a busy device routes via `Remote` so `Enabled::next_event` answers
+      `sources()` without poisoning an active device.
+    - **Ids and delivery:** `twain32:<ProductName>` and `twain64:<ProductName>` according to pointer width,
+      refused as `BadId` before loading `TWAINDSM.dll` on wrong prefix/bitness, empty name, NUL, or >32 bytes;
+      `open` lists first and matches `(ProductName, Manufacturer, ProductFamily)`. Auto-selects
+      `Delivery::Callback` when `SourceId::is_twain2()` (`DF_DS2`) and `Delivery::Events` otherwise
+      (`with_delivery` overrides).
+    - **Capabilities, sticky resets, and `Paper`:** negotiates `ICAP_UNITS` (converting lengths and
+      `DAT_IMAGEINFO` DPI across all `TWUN_*` units), probes `Flatbed`/`Feeder`, `CAP_DUPLEX`,
+      `ICAP_XRESOLUTION`, `ICAP_PIXELTYPE` + `ICAP_BITDEPTH` (omitting 16-bit on `TWSX_NATIVE`), physical size,
+      and auto-size/border-detect; resets sticky processing (`ICAP_AUTODISCARDBLANKPAGES = TWBP_DISABLE`,
+      `ICAP_AUTOMATICROTATE = false`, `CAP_INDICATORS = false`) per batch; mutually excludes `Paper::Auto`
+      border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005` mm readback tolerance).
+    - **Transfers, sides, cancel, and windows:** defaults to `TWSX_MEMORY` (falling back to `TWSX_NATIVE` or
+      forced via `with_native_transfer`), assembling strips, sub-row tiles (lazy `Vec<u64>` bitmap), undefined
+      `width`/`length == -1` transfers (cropping trailing overscan rows/columns to state 7), and 1/8/24/32-bit
+      DIBs (including luminance 1-bit palettes and 8-bit color palettes) into `RawImage` under a 512 MiB cap;
+      reads `TWEI_PAGESIDE` (`SideKnown::Reported` vs `Inferred`, advancing sheets cleanly across blank-back skips
+      and stuck `TWCS_TOP`); inspects `DAT_STATUS` and `CAP_FEEDERLOADED` on unexpected `Event::CloseRequest`;
+      pumps 100 ms intervals for sheet-granular cancel; opens `settings_window` with same-thread owner deadlock
+      refusal.
   - `wia` (Windows), on the `windows` crate's `Win32_Devices_ImageAcquisition` (0.62.2, entry 7): its own STA
     thread; the root's `Feeder` child; `WIA_IPS_PAGES = 0`.
     - **Duplex:** `WIA_IPS_DOCUMENT_HANDLING_SELECT` = `DUPLEX` or `FRONT_ONLY` (one, never both) written to
@@ -214,9 +238,11 @@ for `scan-worker` (`slices/s0-4-scan-worker.md`): a `serde` feature, and the fak
   each error's message, a push-shaped device that moves a child progress and a `SyncSender` clone into a thread
   of its own and sees a cancel from a third) and `fake_devices.rs`, `fake_batches.rs` and `fake_faults.rs`
   (every rule above and every script of proposal 22, the crash and the exit in child processes through
-  `rusty-fork`); doctests, among them the crate's example through the fake. The layout's units ran on a real
-  32-bit `usize`, under WASI: in step 1, and again in the code review's fixes on a copy of the crate without
-  `rusty-fork`, whose `wait-timeout` doesn't build there; running them there in CI is TEST-12.
+  `rusty-fork`); doctests, among them the crate's example through the fake. **S0 slice 5** added `sane` unit and
+  integration tests (`sane_fake.rs`, `sane_real.rs`), and **S0 slice 9** added `twain` unit tests (114 total
+  `scan-device --features twain --lib` unit tests running on both `x86_64-pc-windows-msvc` and
+  `i686-pc-windows-msvc` in CI, closing `TEST-12`) plus 8 live sample-source integration tests in
+  `/crates/scan-device/tests/twain.rs` in both bitnesses.
 - **Stability:** provisional (0.0.x, unpublished) through S0's Linux slices, with one real backend behind it;
   frozen at 0.1.0 in S0 slice 11, once the `twain` backend has been through it (`decisions.md`, "Made here").
   sheaf takes it no sooner (`sheaf/swaps.md`).

@@ -288,5 +288,7 @@ fn a_client_is_send_and_sync_and_an_open_device_send() {
     fn send<T: Send>() {}
     send_and_sync::<Client>();
     send::<RemoteDevice>();
+    send_and_sync::<scan_worker::StopHandle>();
+    send_and_sync::<scan_worker::TwainList>();
     send_and_sync::<Error>();
 }

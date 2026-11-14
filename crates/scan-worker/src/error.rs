@@ -82,6 +82,11 @@ pub enum Error {
          isn't finite, or a line past the protocol's 1 MiB"
     )]
     Unsendable,
+    /// The worker was stopped from another thread through its
+    /// [`StopHandle`](crate::StopHandle). Every later call on the device answers
+    /// [`Error::Ended`].
+    #[error("the worker was stopped through its stop handle")]
+    Aborted,
     /// An earlier failure ended the worker, so the device is closed.
     #[error("the worker ended at an earlier failure")]
     Ended,

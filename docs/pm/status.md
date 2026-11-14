@@ -1,21 +1,41 @@
 # Status
 
-As of 2026-11-09.
+As of 2026-11-13.
 
-**S0 slice 4, `scan-worker`, is done on its branch, `s0-4-scan-worker`** (from `master` at `5a4bff2`, `master`
-merged in after #7), its code review's findings fixed, pushed, in pull request #8, waiting on review and CI
-("Running", below). **S0 slices 1, 1a, 2, 3 and 8 are merged** (pull requests #2, #7, #3, #6 and #4, squashed;
-#5 recorded slice 8's close), as **S0 slice 7, the TWAIN spike,** is (#1); slices 7 and 8 from the Windows
-machine. It's a git repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
+**S0 slice 9 (`twain-dsm` 0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker` Windows
+hardening) is built and code-reviewed on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`). **S0 slices 1,
+1a, 2, 3, 4, 5, 7 and 8 are merged** (pull requests #2, #7, #3, #6, #8, #9, #1 and #4, squashed; #5 recorded
+slice 8's close); slices 7, 8 and 9 from the Windows machine. It's a git repository at
+github.com/sheaf-pdf/pdf-scan (public; `master`).
 
-- **Running: S0 slice 4, done on `s0-4-scan-worker`** (`slices/s0-4-scan-worker.md`; the code to `510d349`):
-  five steps, each checked, then its code review's 20 findings (5 major), 18 fixed whole and two in part, none
-  refuted: `scan-worker` 0.0.0, unpublished, MSRV 1.89 (the protocol, `serve`, the client and its watchdog,
-  through a test worker), and `scan-device`'s `serde` feature and `Fault::AwaitCancel`; the review's fixes
-  watch a worker's process while a call waits, keep its input open while it quits, and check more of the
-  model's rules. **Waits on:** the maintainer's review (55 decisions, 11 security items); CI's run of pull
-  request #8 on Ubuntu, Windows and macOS (TEST-16). Left: FEAT-14 and FEAT-17 (slice 9), FEAT-16 (before
-  slice 11), FEAT-15.
+- **Running: S0 slice 9, on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`; 5 steps + 4-agent adversarial
+  code review fixed):
+  - `twain-dsm` 0.1.0-alpha.1, ready to publish (`just twain-dsm-package`, Windows `just public-api` with 0 unsafe
+    failures, `TEST-14`): `DG_IMAGE / DAT_IMAGELAYOUT`, `DG_CONTROL / DAT_STATUS` across states 4 to 7, caller
+    parent windows (`Ui::ShownOwned`, `Source::settings_ui(Option<u64>)`) with canonical 32-bit `HWND` + `IsWindow`
+    checks, `window_belongs_to_current_thread`, and bounded `EnableWindow` restore, `#![warn(missing_docs)]`,
+    `docs.rs` Windows target metadata, `README.md`, and `CHANGELOG.md`.
+  - `scan-device`'s `twain` backend (`scan_device::twain::TwainBackend` behind `feature = "twain"`,
+    `#![forbid(unsafe_code)]` preserved): lazy process-wide STA `Session`, `twain32:`/`twain64:` ids and `BadId`
+    pre-checks, auto-selected TWAIN 2 callback vs 1.x event delivery, capabilities and sticky processing resets,
+    mutual exclusion of `Paper::Auto` border detection vs `Paper::Size` `DAT_IMAGELAYOUT` frames (`0.005` mm
+    tolerance), memory strip/tile/undefined-size and native DIB pixel assembly, `TWEI_PAGESIDE`, sheet-granular
+    cancel, `settings_window` (rejecting same-thread `HWND`s up front), 114 unit tests on both `x86_64` and `i686`
+    (`TEST-12`), and 8 sample-source integration tests scanning in both bitnesses.
+  - `scan-worker` Windows hardening and dual-bitness TWAIN: runtime `sane-dl`/`libloading` dependency dropped
+    (inlining `SANE_CONFIG_DIR` + `LC_ALL=C`), `serve` protocol output isolated from noisy driver `stdout` writes
+    (Win32 handle + UCRT fd 1 to `NUL`; Unix fd 1 to `/dev/null`), Windows `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+    containment (`FEAT-14`), cross-thread `StopHandle` + `Error::Aborted` (`FEAT-17`), client `WindowGuard`, and
+    concurrent `Client::list_twain` -> `TwainList` tested driving both 64-bit and `i686` sample workers.
+- **Done: S0 slice 5, `scan-device`'s `sane` backend** (merged 2026-11-11 as pull request #9, squashed `8de47ac`):
+  `scan_device::sane::SaneBackend` on `sane-dl` (`SaneString` preserving raw backend bytes), `sane:` Latin-1 ids
+  and `BadId` pre-checks, USB `libusb:` renumbering fallback, option tables with citations, asymmetric front-only
+  `StartInvalid` retry, raw-layout pixel assembly, and worker integration tests against `fake-libsane` and SANE's
+  `test` and `pnm` backends.
+- **Done: S0 slice 4, `scan-worker`** (merged as pull request #8, squashed `d22a2f4`;
+  `archive/slices/s0-4-scan-worker.md`): `scan-worker` 0.0.0, unpublished, MSRV 1.89 (the protocol, `serve`, the
+  client and its watchdog, through `scan-worker-fake`), and `scan-device`'s `serde` feature and
+  `Fault::AwaitCancel`; five steps and 20 code-review findings fixed.
 - **Done:**
   - The first plan (`plan.md`, `crates/`, `milestones/`, `sheaf/from-sheaf.md`), drawn from sheaf's M5 scan
     plan, its build-or-adopt entries 5 to 16 and 33 to 38, `plan/libraries.md`, and pdf-lint's family as of
@@ -81,11 +101,9 @@ machine. It's a git repository at github.com/sheaf-pdf/pdf-scan (public; `master
   `archive/slices/s0-2-seam-note.md`; docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns
   answered, the raw layout fixed, and the model written down for slice 3, then revised by its code review (25
   findings fixed, BUG-7 deferred).
-- **Waiting on review:** S0 slice 1 (its plan's "Decisions taken alone, for review", 72, and "For review
-  (security)", 10; CI's run green on every job, which closed TEST-2 and TEST-8); S0 slice 1a (40 and 11); S0
-  slice 2 (41 and 6); S0 slice 3 (50 and 6); S0 slice 4 (55 and 11); S0 slice 8 (11 and 3). Also: `asks.md`, ask
-  5; UP-7 to UP-13, upstream reports; PL-1 to PL-3, ready to hand off on the maintainer's OK; PL-4, which first
-  needs the maintainer's call on pdf-lint's "the interpreter stays out" line.
-- **Next:** S0 slice 5, `scan-device`'s `sane` backend, run in a worker the `scan-worker` client starts, once
-  slice 4 is merged (its TEST-10, FEAT-12 and Q-4). On Windows, slice 9 (the `twain` backend), once slices 3
-  and 4 are done.
+- **Waiting on review:** S0 slices 1, 1a, 2, 3, 4, 5, 8, and 9 (each plan's "Decisions taken alone, for review"
+  and security items). Also: `asks.md`, ask 5; UP-7 to UP-14, upstream reports; PL-1 to PL-3, ready to hand off
+  on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays
+  out" line.
+- **Next:** S0 slice 6 (Linux fi-6130 hand check when hardware is at hand) and S0 slice 10 (`scan-device`'s
+  `wia` backend on Windows), then slice 11 (freezing `scan-device` and `scan-worker` at 0.1.0).

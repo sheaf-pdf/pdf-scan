@@ -2,10 +2,11 @@
 # what CI checks, but for two variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
 # needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it. CI's Windows TWAIN job also runs the
-# twain-dsm recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
-# `twain-bindings --check`, `twain-dsm-doc-codes`), which need Windows,
-# MSVC, the sample source, twain.h or nightly, and sets
+# a local run that matches it. CI's Windows TWAIN job also runs the TWAIN
+# and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
+# `scan-device-twain-test`, `scan-device-clippy`, `scan-worker-twain-test`,
+# `scan-worker-clippy`, `twain-bindings --check`, `twain-dsm-doc-codes`),
+# which need Windows, MSVC, the sample source, twain.h or nightly, and sets
 # TWAIN_DSM_REQUIRE_SAMPLE=1 and TWAIN_DSM_REQUIRE_HEADER=1.
 
 # The oldest Rust each library supports, from its Cargo.toml.
@@ -227,6 +228,33 @@ twain-dsm-test target:
 # twain-dsm's lints for one Windows target, its tests included.
 twain-dsm-clippy target:
     cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
+
+# scan-device's unit tests (including RawImage's layout checks on a 32-bit
+# `usize`, TEST-12) and its live TWAIN sample-source integration tests for
+# `target` (x86_64-pc-windows-msvc or i686-pc-windows-msvc).
+# scan-device's unit and TWAIN sample tests for one Windows target.
+scan-device-twain-test target:
+    cargo test --locked -p scan-device --lib --target {{ target }}
+    cargo test --locked -p scan-device --features twain --test twain --target {{ target }}
+
+# scan-device's lints for `target` with every feature and target built.
+# scan-device's lints for one Windows target, its tests included.
+scan-device-clippy target:
+    cargo clippy --locked -p scan-device --all-targets --all-features --target {{ target }} -- -D warnings
+
+# scan-worker's 32-bit unit tests, Windows Job Object / StopHandle /
+# WindowGuard tests (64-bit and 32-bit), and dual-bitness (64-bit + i686)
+# TWAIN worker tests.
+# scan-worker's 32-bit unit tests and Windows TWAIN worker tests.
+scan-worker-twain-test:
+    cargo test --locked -p scan-worker --lib --target i686-pc-windows-msvc
+    cargo test --locked -p scan-worker --test stop_handle --target i686-pc-windows-msvc
+    cargo test --locked -p scan-worker --test stop_handle --test twain_worker
+
+# scan-worker's lints for `target` with every feature and target built.
+# scan-worker's lints for one Windows target, its tests included.
+scan-worker-clippy target:
+    cargo clippy --locked -p scan-worker --all-targets --all-features --target {{ target }} -- -D warnings
 
 # twain-dsm's doctests on nightly, whose rustdoc checks that each
 # `compile_fail` example fails with the error code it names (stable's checks

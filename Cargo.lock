@@ -179,12 +179,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "twain-dsm",
+ "windows-sys",
 ]
 
 [[package]]
 name = "scan-worker"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "sane-dl",
  "scan-device",
  "scan-worker",
@@ -192,6 +195,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "windows-sys",
 ]
 
 [[package]]

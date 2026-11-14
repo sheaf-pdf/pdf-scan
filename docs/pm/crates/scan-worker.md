@@ -2,10 +2,12 @@
 
 Layer: Devices (`crates/README.md`). Paths are from `docs/pm/`.
 
-**As built** in S0 slice 4 (`slices/s0-4-scan-worker.md`, which has the design, its decisions and what each step
-checked): `/crates/scan-worker/`, 0.0.0, provisional and unpublished (`publish = false`), on `scan-device`'s
-model and its `fake`; MSRV 1.89 (`decisions.md`). No `unsafe` (`#![forbid(unsafe_code)]`: spawning, pipes,
-killing and process groups are `std`'s safe API), and every public item documented (`#![warn(missing_docs)]`).
+**As built** in S0 slice 4 (`archive/slices/s0-4-scan-worker.md`) and hardened for Windows and 32/64-bit TWAIN in
+S0 slice 9 (`slices/s0-9-twain-backend.md`): `/crates/scan-worker/`, 0.0.0, provisional and unpublished
+(`publish = false`), on `scan-device`'s model (`sane` and `twain` features optional); MSRV 1.89 (`decisions.md`).
+`#![deny(unsafe_code)]` with `#[allow(unsafe_code)]` confined strictly to `src/sys.rs` (stdout isolation on Unix
+and Windows, and Windows Job Objects + `WindowGuard`), every block carrying its `// SAFETY:` invariant
+(`scan-worker-fake` keeps `#![forbid(unsafe_code)]`), and every public item documented (`#![warn(missing_docs)]`).
 
 - **What:** drivers in a process of their own
   ([M5 proposal 4](https://github.com/sheaf-pdf/sheaf/blob/3232a35/plan/m05-scan/proposals/p04-scanner-drivers-run-worker-process.md)).
@@ -48,21 +50,27 @@ killing and process groups are `std`'s safe API), and every public item document
     whose exit handlers and libraries' finalizers could hang on a lock the hung driver holds). A client keeps
     the input open after `quit` until the worker exits, so the abort is only ever a client gone. The binaries themselves
     (`sheaf-scan-worker`, `sheaf-scan-worker-x86.exe`) are the app's; an app may be its own worker, as the
-    crate docs' example is.
+    crate docs' example is. **S0 slice 9:** `serve` duplicates its initial standard output to a private,
+    non-inheritable handle/descriptor at startup and redirects standard output (`STD_OUTPUT_HANDLE` + UCRT fd 1
+    on Windows; fd 1 on Unix) to `NUL` / `/dev/null` before any backend loads a driver, so chatty drivers (such
+    as PaperStream IP) cannot corrupt the JSON-lines protocol stream.
   - **The client:** `Client` (`new`, `worker(driver, WorkerCommand)`, `limits`, `timeouts`, `work_dir`, `list`,
-    `open`), `Send` and `Sync`; `RemoteDevice` (`info`, `renamed_from`, `process_id`, `caps`, `scan` with a
-    `SyncSender<Event>` and a `&dyn Progress`, `settings_window`, `close`), `Send`. It mirrors the model's calls
+    `list_twain`, `open`), `Send` and `Sync`; `RemoteDevice` (`info`, `renamed_from`, `process_id`,
+    `stop_handle`, `caps`, `scan` with a `SyncSender<Event>` and a `&dyn Progress`, `settings_window`, `close`),
+    `Send`; `StopHandle` (`stop`), `Send + Sync + Clone`. It mirrors the model's calls
     with an error of its own, `Error` (`Scan` holding the device's `ScanError`, `NoWorker`, `Start` for the
     program, `WorkDir` for the work directory, `Stopped` with the `Timeout` that ran out and how long it waited,
-    `Crashed` with the exit status and whether a page was cut short, `Protocol` with a `ProtocolError`,
+    `Aborted` when ended via `StopHandle`, `Crashed` with the exit status and whether a page was cut short, `Protocol` with a `ProtocolError`,
     `Unsendable`, `Ended`; the struct variants `#[non_exhaustive]`), and doesn't implement `Backend` and
     `Device`, whose `ScanError` can't carry its failures. A worker for each listing (quit once it answers, so a slow probe never holds a scan) and for each
     open device, chosen by the device's `Driver`; its program and the work directory absolute paths, refused
     otherwise. Each starts in a private directory of its own (`tempfile`, under a random name, 0700 on Unix,
-    removed once the worker has exited); a SANE open's holds the stored id's one-backend `ConfigDir`
-    (`sane_dl::backend_of`, `Search::BeforeSystem`), given as `SANE_CONFIG_DIR`. On Unix a worker leads a
+    removed once the worker has exited); a SANE open's holds the stored id's one-backend `dll.conf` + empty
+    `dll.d` (inlined in `client/spawn.rs` in S0 slice 9, with `LC_ALL=C` defaulted on `Driver::Sane` workers
+    unless overridden by `WorkerCommand::env`), given as `SANE_CONFIG_DIR`. On Unix a worker leads a
     process group of its own, so a terminal's interrupt reaches the app; on Windows it starts with
-    `CREATE_NO_WINDOW`. Every line is capped (1 MiB) before it's read whole; every page capped (1 GiB) and
+    `CREATE_NO_WINDOW` inside a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object (`FEAT-14`, tolerating fast-exit
+    `ERROR_ACCESS_DENIED` races and terminated via `TerminateJobObject` on kill/timeout). Every line is capped (1 MiB) before it's read whole; every page capped (1 GiB) and
     checked against `RawImage::data_len` before anything is allocated, then made through `RawImage::new`; the
     model's rules checked (a `dpi` finite and above 0; caps with a source, each with a format, resolutions
     above 0, a list not empty, a range's `min` not past its `max`, a largest paper finite and above 0; a batch
@@ -77,8 +85,14 @@ killing and process groups are `std`'s safe API), and every public item document
     meanwhile, then kill; a worker that can't be reaped even then is handed, with its directory, to a thread
     that waits for it, so the caller waits at most twice the grace and a moment. A listing returns once its
     worker has exited. On Unix the app keeps `SIGPIPE` ignored, as Rust's runtime leaves it (the docs say so);
-    making a worker's end harmless whatever the app's disposition is FEAT-16. On Windows, the 64- and 32-bit workers' lists merged and each source used through
-    its own bitness: slice 9's (`Driver::Twain { bits }` picks the worker already).
+    making a worker's end harmless whatever the app's disposition is FEAT-16. **S0 slice 9:** `Client::list_twain`
+    queries registered 64- and 32-bit TWAIN workers concurrently (`std::thread::scope`), merges 64-bit before
+    32-bit deduplicating dual-installed sources by `(maker, model, name)` in favour of 64-bit while keeping
+    32-bit-only drivers, ignores single-side `NotInstalled`, and surfaces single-side failures in
+    `TwainList::other_failed`; `RemoteDevice::stop_handle` (`FEAT-17`) ends a hung call (including a full event
+    channel or an untimed `settings_window`) from another thread without PID-reuse hazards, and Windows
+    `WindowGuard` refuses same-thread `HWND` deadlocks and restores `EnableWindow(hwnd, 1)` on failed
+    `settings_window` calls.
   - **The watchdog:** silence is counted from the last line read, and only while the caller's thread waits on
     the worker, so time spent handing an event to the caller's full channel is the caller's, never a hang:
     `start` (10 s) for the `hello`; `silence` (60 s, configurable, a flatbed's warm-up included) in a batch and
@@ -93,11 +107,10 @@ killing and process groups are `std`'s safe API), and every public item document
     receiver gone is a cancel too, the rest of the batch read and dropped. A crash keeps the pages so far and
     says how the worker exited (on Unix an abort's `SIGABRT`, on Windows its `0xC0000409`), a page it cut
     short dropped and said.
-  - **Hygiene** (NAPS2's practice, study only): the worker's standard output and error always drained (built).
-    On Windows, workers in a Job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so none outlives the app,
-    and a tree kill: FEAT-14, slice 9. Meanwhile a worker exits at the end of its input and aborts 10 s later
-    if a driver's call hangs; a process a driver started is outside both. An optional spare worker kept warm:
-    FEAT-15.
+  - **Hygiene** (NAPS2's practice, study only): the worker's standard output and error always drained, `serve`'s
+    protocol output isolated from driver `stdout` writes, and Windows workers placed in a
+    `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object with `TerminateJobObject` tree kill (`FEAT-14`, built in S0
+    slice 9). An optional spare worker kept warm: FEAT-15.
 - **The test worker:** `scan-worker-fake`, a binary behind the `fake` feature (`required-features`, `test =
   false`, `doc = false`), built for the crate's own tests by a dev-dependency on the crate itself and found by
   `CARGO_BIN_EXE_scan-worker-fake`; a plain build leaves it out. Its first argument names a scenario: the
@@ -111,16 +124,12 @@ killing and process groups are `std`'s safe API), and every public item document
 - **Boundary:** no image codec, imageproc, PDF crate or GUI toolkit under it, and nothing links libsane (the
   client never loads it): the gates' devices loop reads its graph with every feature on (31 packages), and
   the libsane gate reads every `bin` target's executable since this slice, the test worker the first. Its
-  dependencies, vetted in the slice's plan: `scan-device` (path, with `serde`; public, re-exported), `sane-dl`
-  (path; `backend_of`, `ConfigDir`, `Search` and `CONFIG_DIR_VARIABLE` alone), `serde` and `serde_json` (the
-  workspace's), `tempfile` 3 and `thiserror` (each the workspace's). `sane-dl`'s and `serde_json`'s errors stay out
-  of its API. Weighed and not taken: `process-wrap` 10.0.1 (its `std` job object is made without
-  kill-on-close, and a group kill serves nothing yet), `win32job` (slice 9's, with FEAT-14), `shared_child`,
-  `wait-timeout` (a process-wide `SIGCHLD` handler), `command-group` (superseded), a binary format.
-- **MSRV:** 1.89, the family's floor (`decisions.md`): the highest `rust-version` in its own graph (normal,
-  build and dev, on every target; 31 packages) is `scan-device`'s and `sane-dl`'s 1.89, then `libloading`'s
-  1.88. It takes let chains (a language feature, 1.88), and from `std` `BufRead::skip_until` (1.83) and, in its
-  tests, `std::io::pipe` (1.87). CI tests it on 1.89 (`scan-worker-msrv`).
+  dependencies: `scan-device` (path, with `serde`; `sane` and `twain` optional; public, re-exported), `serde` and
+  `serde_json` (the workspace's), `tempfile` 3 and `thiserror` (the workspace's), `libc` 0.2 on Unix, and
+  `windows-sys` 0.61 on Windows (`sane-dl` is kept in `[dev-dependencies]` only, for `tests/sane_worker.rs`, so
+  runtime builds pull neither `sane-dl` nor `libloading` unless `sane` is enabled).
+- **MSRV:** 1.89, the family's floor (`decisions.md`); CI tests it on 1.89 on both Ubuntu and Windows
+  (`scan-worker-msrv`).
 - **Tested by** (S0 slice 4; 109 since its code review: 47 unit tests, 59 integration tests through the test
   worker, 3 doctests):
   every message on a literal line; `serve`'s core over pipes with the fake (batches, refusals, cancel, the
@@ -149,13 +158,7 @@ killing and process groups are `std`'s safe API), and every public item document
     protocol with no FFI at all (a pure-Rust client exists as printscan's open PR #20). Untested: it needs
     `sane-utils` beside `libsane1`, and whether an unprivileged per-scan saned works on Debian and Ubuntu is
     unchecked. An idea, not the plan; kept.
-  - The Job object, kill-on-close and a tree kill on Windows (FEAT-14), with the 32-bit worker
-    (`i686-pc-windows-msvc`) and the merge of TWAIN's two lists: slice 9.
   - A spare worker kept warm (FEAT-15): it can't serve a SANE open, whose configuration is the device's.
-  - Anything in a worker that writes to its standard output (a backend's `println!`, a driver's library)
-    breaks the stream, which the client says as a protocol error; moving the protocol off standard output
-    needs descriptors passed at the spawn. Slice 5 sees whether SANE's backends do.
   - How the packaged crate's tests get the test worker, once slice 11 makes it ready to publish (Q-5).
   - A worker's end harmless whatever the app's `SIGPIPE` disposition (FEAT-16): today the app keeps it ignored,
     as Rust's runtime leaves it.
-  - A stop handle, to end a worker, its settings window above all, from another thread (FEAT-17): slice 9.

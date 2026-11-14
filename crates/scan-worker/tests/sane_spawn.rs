@@ -234,3 +234,22 @@ fn a_command_s_sane_config_dir_is_a_listing_s_and_an_open_s_after_the_client_s()
     );
     device.close().expect("closed");
 }
+
+#[test]
+fn a_sane_worker_defaults_lc_all_to_c_unless_the_command_sets_it() {
+    let default_cmd = worker("env").arg("LC_ALL");
+    let (client, work) = env_client_of(default_cmd);
+    let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
+    assert_eq!(started(&listed[0]).given, json!("C"));
+    let (device, opened) = open_sane(&client, &work, "sane:test:0");
+    assert_eq!(opened.given, json!("C"));
+    device.close().expect("closed");
+
+    let custom_cmd = worker("env").arg("LC_ALL").env("LC_ALL", "POSIX");
+    let (client, work) = env_client_of(custom_cmd);
+    let listed = client.list(Driver::Sane, AT_MOST).expect("a listing");
+    assert_eq!(started(&listed[0]).given, json!("POSIX"));
+    let (device, opened) = open_sane(&client, &work, "sane:test:0");
+    assert_eq!(opened.given, json!("POSIX"));
+    device.close().expect("closed");
+}

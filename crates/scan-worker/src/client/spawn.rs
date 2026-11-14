@@ -1,20 +1,23 @@
 //! A worker's process started: its private directory, its command's variables, a SANE open's
 //! configuration in the directory, and the process itself, apart from the app's terminal or
-//! console.
+//! console (and on Windows inside a kill-on-close Job Object).
 
 use std::{
     env,
     ffi::{OsStr, OsString},
-    io,
+    fs, io,
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
 };
 
-use sane_dl::{CONFIG_DIR_VARIABLE, ConfigDir, Search, backend_of};
 use scan_device::{DeviceId, Driver};
 use tempfile::TempDir;
 
 use super::WorkerCommand;
+use super::worker::LiveProcess;
+
+/// The environment variable SANE reads its configuration directories from, once, in `sane_init`.
+const CONFIG_DIR_VARIABLE: &str = "SANE_CONFIG_DIR";
 
 /// Why a worker wasn't started.
 #[derive(Debug)]
@@ -33,7 +36,7 @@ pub(super) fn spawn(
     work_dir: &Path,
     driver: Driver,
     opens: Option<&DeviceId>,
-) -> Result<(Child, TempDir), NotStarted> {
+) -> Result<(LiveProcess, TempDir), NotStarted> {
     // A bare name would be searched for, on Windows from the current directory first.
     if !command.program.is_absolute() {
         return Err(NotStarted::Program(invalid(
@@ -48,9 +51,14 @@ pub(super) fn spawn(
     }
     let dir = private_dir(work_dir).map_err(NotStarted::WorkDir)?;
     let mut process = Command::new(&command.program);
+    if driver == Driver::Sane {
+        // SANE backends format decimal options and parse configuration under the C locale; set
+        // before `command.env` so `WorkerCommand::env("LC_ALL", ...)` still overrides it.
+        process.env("LC_ALL", "C");
+    }
     process
         .args(&command.args)
-        // After the app's own environment, which the worker inherits; in order, so the last
+        // After the app's own environment (and SANE's default `LC_ALL=C`), in order, so the last
         // given of a variable is its value.
         .envs(command.env.iter().map(|(key, value)| (key, value)))
         .current_dir(dir.path())
@@ -66,17 +74,98 @@ pub(super) fn spawn(
         // command gives.
         let name = sane_name(id);
         let backend = name.as_deref().and_then(backend_of);
-        let config = ConfigDir::write(dir.path(), backend, Search::BeforeSystem)
-            .map_err(|error| NotStarted::WorkDir(io::Error::other(error)))?;
+        write_sane_config(dir.path(), backend).map_err(NotStarted::WorkDir)?;
         let listing = listing_config(command, env::var_os(CONFIG_DIR_VARIABLE));
         process.env(
             CONFIG_DIR_VARIABLE,
-            open_config(&config, listing.as_deref()),
+            open_config(dir.path(), listing.as_deref()),
         );
     }
+    #[cfg(windows)]
+    let job = crate::sys::Job::new().map_err(NotStarted::Program)?;
     set_apart(&mut process);
+    #[cfg(windows)]
+    let mut child = process.spawn().map_err(NotStarted::Program)?;
+    #[cfg(not(windows))]
     let child = process.spawn().map_err(NotStarted::Program)?;
-    Ok((child, dir))
+    #[cfg(windows)]
+    if let Err(error) = job.assign(&mut child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(NotStarted::Program(error));
+    }
+    Ok((
+        LiveProcess {
+            child,
+            #[cfg(windows)]
+            job,
+        },
+        dir,
+    ))
+}
+
+/// Writes `dll.conf` (naming `backend`, or empty when `None`) and an empty `dll.d` into `dir`.
+fn write_sane_config(dir: &Path, backend: Option<&str>) -> io::Result<()> {
+    if !dir.is_absolute() {
+        return Err(invalid("the worker's directory isn't an absolute path"));
+    }
+    if cfg!(unix) && dir.as_os_str().as_encoded_bytes().contains(&b':') {
+        return Err(invalid(
+            "the worker's directory holds `:`, which separates SANE's directories",
+        ));
+    }
+    let mut conf = String::new();
+    if let Some(backend) = backend {
+        if !is_backend_name(backend) {
+            return Err(invalid("invalid SANE backend name"));
+        }
+        conf.push_str(backend);
+        conf.push('\n');
+    }
+    let snippets = dir.join("dll.d");
+    let snippets_there = check_dll_d(&snippets)?;
+    fs::write(dir.join("dll.conf"), conf)?;
+    if !snippets_there {
+        match fs::create_dir(&snippets) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                check_dll_d(&snippets)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Ensures `snippets` (`dll.d`) is either absent (`Ok(false)`) or an empty directory (`Ok(true)`).
+fn check_dll_d(snippets: &Path) -> io::Result<bool> {
+    match fs::metadata(snippets) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(invalid("dll.d is there already, and isn't a directory"));
+        }
+        Ok(_) => {}
+    }
+    match fs::read_dir(snippets)?.next() {
+        None => Ok(true),
+        Some(_) => Err(invalid("dll.d is there already, and isn't empty")),
+    }
+}
+
+/// The text before a SANE device name's first `:`, if it's a valid backend name (ASCII lowercase
+/// letters, digits, and `_`, at least one).
+fn backend_of(device_name: &[u8]) -> Option<&str> {
+    let end = device_name.iter().position(|&byte| byte == b':')?;
+    let backend = core::str::from_utf8(&device_name[..end]).ok()?;
+    is_backend_name(backend).then_some(backend)
+}
+
+fn is_backend_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 /// The `SANE_CONFIG_DIR` a listing's worker reads: the last the command gives, else the one the
@@ -91,16 +180,20 @@ fn listing_config(command: &WorkerCommand, inherited: Option<OsString>) -> Optio
         .or(inherited)
 }
 
-/// A SANE open's `SANE_CONFIG_DIR`: `config`'s directory, then the directories `listing` names,
-/// as a listing's worker reads them (an empty value naming none); where there's no `listing`,
-/// SANE's own list (its current directory, the worker's own, then the system's).
-fn open_config(config: &ConfigDir, listing: Option<&OsStr>) -> OsString {
+/// A SANE open's `SANE_CONFIG_DIR`: `dir`, then the directories `listing` names, as a listing's
+/// worker reads them (an empty value naming none); where there's no `listing`, SANE's own list
+/// (its current directory, the worker's own, then the system's).
+fn open_config(dir: &Path, listing: Option<&OsStr>) -> OsString {
     match listing {
         // The directory then `:`, which SANE reads as "then my own list".
-        None => config.value(),
-        Some(listing) if listing.is_empty() => config.path().as_os_str().to_owned(),
+        None => {
+            let mut value = dir.as_os_str().to_owned();
+            value.push(":");
+            value
+        }
+        Some(listing) if listing.is_empty() => dir.as_os_str().to_owned(),
         Some(listing) => {
-            let mut value = config.path().as_os_str().to_owned();
+            let mut value = dir.as_os_str().to_owned();
             value.push(":");
             value.push(listing);
             value
@@ -203,7 +296,12 @@ mod tests {
         );
         assert_eq!(listing_config(&none, None), None);
         let dir = tempfile::tempdir().unwrap();
-        let config = ConfigDir::write(dir.path(), Some("test"), Search::BeforeSystem).unwrap();
+        write_sane_config(dir.path(), Some("test")).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("dll.conf")).unwrap(),
+            "test\n"
+        );
+        assert!(dir.path().join("dll.d").is_dir());
         let path = dir.path().as_os_str().to_owned();
         let with = |after: &str| {
             let mut value = path.clone();
@@ -211,17 +309,17 @@ mod tests {
             value
         };
         assert_eq!(
-            open_config(&config, Some(OsStr::new("/etc/app/sane:"))),
+            open_config(dir.path(), Some(OsStr::new("/etc/app/sane:"))),
             with(":/etc/app/sane:")
         );
         assert_eq!(
-            open_config(&config, Some(OsStr::new("/a:/b"))),
+            open_config(dir.path(), Some(OsStr::new("/a:/b"))),
             with(":/a:/b")
         );
         // None given: SANE's own list after it.
-        assert_eq!(open_config(&config, None), with(":"));
+        assert_eq!(open_config(dir.path(), None), with(":"));
         // An empty value, which names no directory: the directory alone.
-        assert_eq!(open_config(&config, Some(OsStr::new(""))), path);
+        assert_eq!(open_config(dir.path(), Some(OsStr::new(""))), path);
     }
 
     #[test]
@@ -229,7 +327,18 @@ mod tests {
         let backend = |id: &str| name(id).as_deref().and_then(backend_of).map(str::to_owned);
         assert_eq!(backend("sane:test:0").as_deref(), Some("test"));
         assert_eq!(backend("sane:net:host:test:0").as_deref(), Some("net"));
+        assert_eq!(
+            backend("sane:canon_dr:libusb:001:002").as_deref(),
+            Some("canon_dr")
+        );
+        assert_eq!(
+            backend("sane:epson2:net:10.0.0.2").as_deref(),
+            Some("epson2")
+        );
         assert_eq!(backend("sane:Desk scanner"), None);
+        assert_eq!(backend("sane::0"), None);
+        assert_eq!(backend("sane:Test:0"), None);
+        assert_eq!(backend("sane:te-st:0"), None);
         assert_eq!(backend("sane:test:\u{2603}"), None);
         assert_eq!(backend("sane:t\u{e9}st:0"), None);
         assert_eq!(backend("fake:test:0"), None);

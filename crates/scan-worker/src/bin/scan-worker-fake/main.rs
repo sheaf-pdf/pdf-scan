@@ -18,19 +18,27 @@
 
 mod sane;
 mod scenarios;
+mod twain;
 
 use std::{
     env, fs,
     io::{self, BufRead, Write},
+    path::Path,
     process::{Command, ExitCode},
+    sync::mpsc::SyncSender,
     thread,
     time::Duration,
 };
 
-use sane_dl::CONFIG_DIR_VARIABLE;
 use scan_device::fake::{FakeBackend, FakeDevice};
-use scan_device::{Backend, DeviceId, DeviceInfo, Driver, Opened, ScanError};
+use scan_device::in_progress::Progress;
+use scan_device::{
+    Backend, Caps, Device, DeviceId, DeviceInfo, Done, Driver, Event, Opened, ScanError, Settings,
+    WindowClosed, WindowOwner,
+};
 use serde_json::{Value, json};
+
+const CONFIG_DIR_VARIABLE: &str = "SANE_CONFIG_DIR";
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -46,8 +54,29 @@ fn main() -> ExitCode {
         return scan_worker::serve(vec![backend]);
     }
     match name {
-        "env" => scan_worker::serve(vec![Box::new(Env)]),
+        "env" => {
+            let var = args.get(1).cloned().unwrap_or_else(|| GIVEN.to_owned());
+            scan_worker::serve(vec![Box::new(Env(var))])
+        }
         "sane" => sane::main(&args[1..]),
+        "twain" => twain::main(&args[1..]),
+        "twain-fake" => twain::fake_main(&args[1..]),
+        "noisy-stdout" => {
+            let inner = scenarios::backend("feeder", count).expect("feeder scenario");
+            scan_worker::serve(vec![Box::new(twain::NoisyBackend(inner))])
+        }
+        "hang-window" => scan_worker::serve(vec![Box::new(WindowScenario {
+            crash_after_go: false,
+            spawn_helper: false,
+        })]),
+        "crash-window" => scan_worker::serve(vec![Box::new(WindowScenario {
+            crash_after_go: true,
+            spawn_helper: false,
+        })]),
+        "helper-hang-window" => scan_worker::serve(vec![Box::new(WindowScenario {
+            crash_after_go: false,
+            spawn_helper: true,
+        })]),
         "slow-listing" => {
             let backend = FakeBackend::new()
                 .with(scenarios::desk())
@@ -72,14 +101,15 @@ fn main() -> ExitCode {
 /// JSON, what the directory holds and the value of [`GIVEN`] (`null` where it isn't set); SANE's,
 /// so a client starts it as it starts a SANE worker. Opened, a device is the scripted one, with
 /// an empty feeder.
-struct Env;
+struct Env(String);
 
-/// The variable the `env` backend's devices report, which a test sets on the worker's command.
+/// The default variable the `env` backend's devices report, which a test sets on the worker's
+/// command.
 const GIVEN: &str = "SCAN_WORKER_TEST_GIVEN";
 
 impl Backend for Env {
     fn list(&mut self, _deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
-        Ok(vec![started(DeviceId("sane:env".to_owned()))])
+        Ok(vec![started(DeviceId("sane:env".to_owned()), &self.0)])
     }
 
     fn open(&mut self, stored: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
@@ -88,14 +118,14 @@ impl Backend for Env {
         let opened = fake.open(&stand_in, deadline)?;
         Ok(Opened {
             device: opened.device,
-            info: started(stored.id.clone()),
+            info: started(stored.id.clone(), &self.0),
             renamed_from: None,
         })
     }
 }
 
-/// The device `id`, saying where its worker was started.
-fn started(id: DeviceId) -> DeviceInfo {
+/// The device `id`, saying where its worker was started and the value of `var`.
+fn started(id: DeviceId, var: &str) -> DeviceInfo {
     let here = env::current_dir();
     let name = match &here {
         Ok(dir) => dir.to_string_lossy().into_owned(),
@@ -118,7 +148,7 @@ fn started(id: DeviceId) -> DeviceInfo {
             Err(_) => Value::Null,
         }
     };
-    let given = env::var_os(GIVEN).map(|value| value.to_string_lossy().into_owned());
+    let given = env::var_os(var).map(|value| value.to_string_lossy().into_owned());
     let model = match &here {
         Ok(dir) => json!({
             "entries": entries(dir),
@@ -129,6 +159,76 @@ fn started(id: DeviceId) -> DeviceInfo {
         Err(_) => json!({ "given": given }),
     };
     DeviceInfo::new(id, name, maker, model.to_string(), Driver::Sane)
+}
+
+/// Scenario backend whose `settings_window` signals `SCAN_WORKER_TEST_SIGNAL_FILE`, optionally
+/// starts a `held` grandchild, and then either hangs forever (`crash_after_go == false`) or waits
+/// for `SCAN_WORKER_TEST_GO_FILE` before exiting with status 5 (`crash_after_go == true`).
+struct WindowScenario {
+    crash_after_go: bool,
+    spawn_helper: bool,
+}
+
+impl Backend for WindowScenario {
+    fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
+        let mut fake =
+            FakeBackend::new().with(scenarios::desk().settings_window(WindowClosed::Accepted));
+        fake.list(deadline)
+    }
+
+    fn open(&mut self, device: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
+        let mut fake =
+            FakeBackend::new().with(scenarios::desk().settings_window(WindowClosed::Accepted));
+        let mut opened = fake.open(device, deadline)?;
+        opened.device = Box::new(WindowScenarioDevice {
+            inner: opened.device,
+            crash_after_go: self.crash_after_go,
+            spawn_helper: self.spawn_helper,
+        });
+        Ok(opened)
+    }
+}
+
+struct WindowScenarioDevice {
+    inner: Box<dyn Device>,
+    crash_after_go: bool,
+    spawn_helper: bool,
+}
+
+impl Device for WindowScenarioDevice {
+    fn caps(&mut self) -> Result<Caps, ScanError> {
+        self.inner.caps()
+    }
+
+    fn scan(
+        &mut self,
+        settings: &Settings,
+        first_sheet: u32,
+        events: &SyncSender<Event>,
+        progress: &dyn Progress,
+    ) -> Result<Done, ScanError> {
+        self.inner.scan(settings, first_sheet, events, progress)
+    }
+
+    fn settings_window(&mut self, _owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError> {
+        if self.spawn_helper {
+            start_held();
+        }
+        if let Some(signal) = env::var_os("SCAN_WORKER_TEST_SIGNAL_FILE") {
+            let _ = fs::write(signal, b"entered");
+        }
+        if self.crash_after_go {
+            if let Some(go) = env::var_os("SCAN_WORKER_TEST_GO_FILE") {
+                while !Path::new(&go).exists() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            std::process::exit(5);
+        }
+        loop {
+            thread::sleep(MINUTE);
+        }
+    }
 }
 
 /// A minute.
@@ -166,7 +266,7 @@ fn held() -> ExitCode {
 }
 
 /// The worker's driver's process, a `held` one, started with the worker's own standard input,
-/// output and error.
+/// output and error, recording its PID to `SCAN_WORKER_TEST_PID_FILE` when asked.
 fn start_held() {
     let started = env::current_exe().and_then(|me| {
         Command::new(me)
@@ -175,8 +275,15 @@ fn start_held() {
             .current_dir(env::temp_dir())
             .spawn()
     });
-    if let Err(error) = started {
-        eprintln!("scan-worker-fake: couldn't start the held process: {error}");
+    match started {
+        Ok(child) => {
+            if let Some(pid_file) = env::var_os("SCAN_WORKER_TEST_PID_FILE") {
+                let _ = fs::write(pid_file, child.id().to_string());
+            }
+        }
+        Err(error) => {
+            eprintln!("scan-worker-fake: couldn't start the held process: {error}");
+        }
     }
 }
 
@@ -211,8 +318,8 @@ fn by_hand(name: &str) -> ExitCode {
         // Its hello, and never an answer.
         "deaf" => say(HELLO, &[]),
         "long-line" | "out-of-place" | "refuses" | "opened-another" | "renamed-elsewhere"
-        | "no-source" | "big-page" | "page-length" | "padding" | "zero-dpi" | "cut-short"
-        | "page-then-end" | "page-first" | "applied-late" | "sheet-out-of-turn"
+        | "exit-after-open" | "no-source" | "big-page" | "page-length" | "padding" | "zero-dpi"
+        | "cut-short" | "page-then-end" | "page-first" | "applied-late" | "sheet-out-of-turn"
         | "empty-after-page" | "encoded-unasked" | "huge-paper" | "helper-window"
         | "helper-batch" => {
             say(HELLO, &[]);
@@ -242,6 +349,10 @@ fn by_hand(name: &str) -> ExitCode {
                         &json!({"opened": {"info": device, "renamed_from": null}}).to_string(),
                         &[],
                     );
+                    if name == "exit-after-open" {
+                        eprintln!("scan-worker-fake: idle crash");
+                        std::process::exit(9);
+                    }
                     // `caps`, `scan` or `settings_window`, answered as one would be.
                     let Some(asked) = request(&mut input) else {
                         return ExitCode::SUCCESS;

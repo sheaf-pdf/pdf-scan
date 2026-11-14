@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
+windows-sys = "0.61"
 
 # The rules for unsafe code, which the members that call or export a C API
 # need. Each member takes them with `lints.workspace = true`.
