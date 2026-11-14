@@ -1,6 +1,6 @@
 # S0 slice 9: scan-device's twain backend, 32-bit worker, and Windows hardening
 
-Status: active, started 2026-11-11. Milestone: `milestones/s0-devices.md`, slice 9. Run on the Windows machine,
+Status: done, merged 2026-11-14 (pull request #11, squashed `9e1bf95`). Milestone: `milestones/s0-devices.md`, slice 9. Run on the Windows machine,
 the same way as slices 7 and 8 (`archive/slices/s0-8-twain-dsm.md`): this plan, an adversarial review (below),
 the steps (each committed and pushed on `s0-9-twain-backend`), parallel code reviews, a fix stage.
 

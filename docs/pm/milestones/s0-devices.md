@@ -279,7 +279,7 @@ merged first.
        (`MSG_OPENDSM` loads every installed driver: the seam note's section 1).
      - **Not tried:** a memory transfer, a cancel, a jam the driver reports (the jammed sheet scanned all the
        same), an empty feeder: slice 9's checks and slice 12's.
-   - **Built and code-reviewed 2026-11-11 to 13** (`slices/s0-9-twain-backend.md`, on branch `s0-9-twain-backend`):
+   - **Done and merged 2026-11-14** (pull request #11, squashed `9e1bf95`; `archive/slices/s0-9-twain-backend.md`):
      - **`twain-dsm` 0.1.0-alpha.1, ready to publish:** caller parent windows (`Ui::ShownOwned(u64)`,
        `Source::settings_ui(Option<u64>)`, `Error::InvalidWindow`) validated for canonical 32-bit `HWND` range and
        `IsWindow`, with `window_belongs_to_current_thread` for blocking cross-thread callers and an `EnableWindow`
