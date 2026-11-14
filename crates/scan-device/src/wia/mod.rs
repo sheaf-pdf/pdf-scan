@@ -69,6 +69,8 @@ use std::time::Duration;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
+#[cfg(any(windows, test, feature = "fake"))]
+mod caps;
 #[cfg(windows)]
 mod com;
 #[allow(dead_code)]
@@ -79,6 +81,9 @@ mod error;
 mod id;
 #[cfg(any(windows, test, feature = "fake"))]
 mod session;
+#[cfg(any(windows, test, feature = "fake"))]
+#[allow(dead_code)]
+mod settings;
 
 /// Windows Image Acquisition (WIA 2.0) scanner backend (`wia:<WIA_DIP_DEV_ID>`).
 ///
@@ -220,15 +225,39 @@ mod tests {
 
     #[test]
     fn fake_backed_wia_backend_lists_opens_and_shares_single_device_guard() {
+        use crate::wia::driver::{
+            FormatPair, ItemId, PropValue, TYMED_FILE, WIA_CATEGORY_FLATBED_GUID, WIA_DATA_COLOR,
+            WIA_IMG_FMT_BMP_GUID, WIA_IPA_DATATYPE, WIA_IPA_DEPTH, WIA_IPA_ITEM_CATEGORY,
+            WIA_IPS_XRES, WIA_ITEM_TYPE_IMAGE, WIA_ITEM_TYPE_TRANSFER, fake_wia::FakeItem,
+        };
+        use crate::{Format, Resolutions, Source};
+
         let fake = FakeWiaHandle::new();
-        fake.add_device(FakeDeviceSpec::new(RawDeviceProps {
+        let mut spec = FakeDeviceSpec::new(RawDeviceProps {
             dev_id: r"{6BDD1FC6}\0000".to_owned(),
             dev_type: Some(0x0001_0001),
             dev_name: Some("Desk Scanner".to_owned()),
             vend_desc: Some("Acme".to_owned()),
             dev_desc: Some("DS-500".to_owned()),
             ..RawDeviceProps::default()
-        }));
+        });
+        spec.add_child(
+            ItemId::ROOT,
+            FakeItem::new(WIA_ITEM_TYPE_IMAGE | WIA_ITEM_TYPE_TRANSFER)
+                .with_prop(
+                    WIA_IPA_ITEM_CATEGORY,
+                    PropValue::Guid(WIA_CATEGORY_FLATBED_GUID),
+                    None,
+                )
+                .with_prop(WIA_IPS_XRES, PropValue::I4(300), None)
+                .with_prop(WIA_IPA_DATATYPE, PropValue::I4(WIA_DATA_COLOR), None)
+                .with_prop(WIA_IPA_DEPTH, PropValue::I4(24), None)
+                .with_formats(vec![FormatPair {
+                    format: WIA_IMG_FMT_BMP_GUID,
+                    tymed: TYMED_FILE,
+                }]),
+        );
+        fake.add_device(spec);
 
         let mut backend1 = WiaBackend::from_fake(&fake).expect("fake backend");
         let session = backend1.session.clone().expect("session");
@@ -241,6 +270,12 @@ mod tests {
         let mut opened = backend1
             .open(&listed[0], Duration::from_secs(2))
             .expect("open on backend1");
+        let caps = opened.device.caps().expect("caps through session");
+        assert!(!caps.settings_window);
+        assert_eq!(caps.sources.len(), 1);
+        assert_eq!(caps.sources[0].source, Source::Flatbed);
+        assert_eq!(caps.sources[0].resolutions, Resolutions::List(vec![300]));
+        assert_eq!(caps.sources[0].formats, vec![Format::Rgb8]);
         assert_eq!(
             opened.device.settings_window(None),
             Err(ScanError::Unsupported)

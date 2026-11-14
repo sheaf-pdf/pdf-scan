@@ -297,10 +297,10 @@ pub(super) const WIA_CMD_STOP_FEEDER_GUID: GuidBytes = GuidBytes::new(
 /// Index of an item inside an open [`WiaDeviceTree`], where `ItemId::ROOT` (`0`) is always the
 /// root `IWiaItem2`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct ItemId(pub usize);
+pub(crate) struct ItemId(pub usize);
 
 impl ItemId {
-    pub(super) const ROOT: ItemId = ItemId(0);
+    pub(crate) const ROOT: ItemId = ItemId(0);
 }
 
 /// Decoded value of a WIA property (`PROPVARIANT`).
@@ -593,6 +593,19 @@ pub(crate) mod fake_wia {
             }
             self
         }
+
+        pub(crate) fn with_formats(mut self, formats: Vec<FormatPair>) -> Self {
+            self.formats = formats;
+            self
+        }
+
+        pub(crate) fn with_write_hook<F>(mut self, hook: F) -> Self
+        where
+            F: Fn(&mut FakeItem, PropId, &PropValue) -> Result<(), i32> + Send + Sync + 'static,
+        {
+            self.write_hook = Some(Arc::new(hook));
+            self
+        }
     }
 
     /// Scripted WIA device entry registered in [`FakeWiaConfig`].
@@ -627,6 +640,13 @@ pub(crate) mod fake_wia {
                 closed_count: Arc::new(AtomicUsize::new(0)),
                 command_log: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        pub(crate) fn add_child(&mut self, parent: ItemId, child: FakeItem) -> ItemId {
+            let idx = self.items.len();
+            self.items.push(child);
+            self.items[parent.0].children.push(idx);
+            ItemId(idx)
         }
     }
 
@@ -803,9 +823,6 @@ pub(crate) mod fake_wia {
             let Some(node) = self.items.get_mut(item.0) else {
                 return Err(E_INVALIDARG_HR);
             };
-            if let Some(hook) = node.write_hook.clone() {
-                return hook(node, id, val);
-            }
             if let Some(attr) = node.attrs.get(&id) {
                 if !attr.is_writable() {
                     return Err(E_INVALIDARG_HR);
@@ -838,6 +855,9 @@ pub(crate) mod fake_wia {
                 }
             } else if !node.props.contains_key(&id) {
                 return Err(E_INVALIDARG_HR);
+            }
+            if let Some(hook) = node.write_hook.clone() {
+                hook(node, id, val)?;
             }
             node.props.insert(id, val.clone());
             Ok(())

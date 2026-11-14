@@ -720,8 +720,8 @@ fn finish_sta_open(
     }
 }
 
-fn handle_caps(_tree: &mut dyn WiaDeviceTree) -> Result<Caps, ScanError> {
-    Err(ScanError::Unsupported)
+fn handle_caps(tree: &mut dyn WiaDeviceTree) -> Result<Caps, ScanError> {
+    super::caps::read(tree)
 }
 
 fn handle_scan(

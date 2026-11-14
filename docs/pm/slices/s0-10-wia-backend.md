@@ -374,3 +374,14 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
   `owner_thread` (`RPC_E_WRONG_THREAD`) and non-reentrant `RestoreSink` exclusivity before dereferencing `&mut dyn
   TransferSink`, and zeroes `*ppDestination` upfront on every `GetNextStream` call. All 64-bit, `i686`, single-
   feature clippy, `just doc`, and MSRV `1.89` gates are green.
+- **Step 2 complete:** Implemented `/crates/scan-device/src/wia/caps.rs` (item-tree source discovery with bounded
+  folder recursion, `[Flatbed, Feeder]` deduplication preferring `WIA_CATEGORY_FEEDER` over
+  `WIA_CATEGORY_FEEDER_FRONT` and skipping `FEEDER_BACK`/`FILM`/`FINISHED_FILE`, dynamic `DATATYPE` -> `DEPTH`
+  probing with 16-bit `WiaImgFmt_RAW` gating, authoritative `EnumWIA_FORMAT_INFO` transfer-pair lookup with
+  property fallback, zero-DPI/zero-step resolution sanitization, positive `max_area` in mm, `paper_auto`, and
+  `Err(ScanError::Unsupported)` on zero usable sources) and `/crates/scan-device/src/wia/settings.rs` (WDK
+  dependency-ordered sticky resets, WSD `WIA_IPS_PAGES` even-duplex fallback, `DATATYPE` -> `DEPTH` +
+  `PHOTOMETRIC_INTERP`, `TYMED` -> `FORMAT` with `TransferMode` and exact `Clamped::Encodings`, `XRES` -> `YRES`,
+  `Paper::Auto` vs `Paper::Size` `AUTO_CROP=0` + `WIA_PAGE_CUSTOM` + `XPOS`/`YPOS` + stepped `XEXTENT`/`YEXTENT` +
+  `0.005` mm tolerance readback, and `fallback_callback_to_file`), wired `Device::caps` in `wia/session.rs`, and
+  verified all 64-bit, `i686`, single-feature clippy, `just doc`, and MSRV `1.89` gates green.
