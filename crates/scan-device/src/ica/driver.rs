@@ -600,25 +600,22 @@ pub struct Bounds {
     pub answer: Duration,
     /// How long a device's close waits for its session's close.
     pub close: Duration,
-    /// How long a call posted to the main thread waits for the main thread to run it.
-    pub post: Duration,
 }
 
 impl Bounds {
-    /// The real framework's: 2 s, 30 s, 5 s and 5 s.
+    /// The real framework's: 2 s, 30 s and 5 s.
     pub const REAL: Bounds = Bounds {
         settle: Duration::from_secs(2),
         answer: Duration::from_secs(30),
         close: Duration::from_secs(5),
-        post: Duration::from_secs(5),
     };
 }
 
 /// One process's ImageCaptureCore, as the backend uses it: the browse, the session, the units,
 /// the scan, and the events its callbacks send.
 ///
-/// The real one makes every call on the main thread (inline there, posted there from elsewhere),
-/// and its callbacks feed its events; each system's browses and devices send to it alone. A call
+/// The real one makes every call on the main thread, where it's called (refusing every call made
+/// elsewhere, a drop's clean-up aside), and its callbacks feed its events; each system's browses and devices send to it alone. A call
 /// that fails answers a [`ScanError`]; a request's answer comes as an event.
 pub(super) trait IcaSystem: Send {
     /// The system's waits.

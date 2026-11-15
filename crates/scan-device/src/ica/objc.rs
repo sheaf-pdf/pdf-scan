@@ -24,9 +24,9 @@
 //!   its own from a check of the thread it's called on.
 //! - **The executor:** on the main thread a call runs at once, and a wait for a callback runs the
 //!   main run loop's default mode in slices, reading each slice's answer (the rules are
-//!   `main_thread`'s); elsewhere a call is posted to the main queue and its answer awaited, the
-//!   handshake letting the caller give up only on a call not yet begun, and its events come on
-//!   the callbacks' channel. Every call, slice, posted block and callback runs in an
+//!   `main_thread`'s); off it, every call and wait is refused at once, the framework not reached.
+//!   Only a drop's clean-up off the main thread (a session's close, a browse's end) is posted to
+//!   the main queue, not waited for. Every call, slice, posted block and callback runs in an
 //!   autorelease pool of its own, since nothing in a worker drains one: not the main queue, and
 //!   not a `main` that runs no application.
 //! - **The real system** (`MacSystem`): one per listing backend and per open device, with the
@@ -70,8 +70,8 @@ use super::driver::{
 use super::error::driver_msg;
 use super::id::{MAX_ID_BYTES, MAX_TEXT_BYTES, id_of_units, text_of_units};
 use super::main_thread::{
-    Handshake, MainWait, RUN_FINISHED, SLICE, Verdict, await_posted, contained, panic_message,
-    run_posted, unserved_in_block,
+    MainWait, RUN_FINISHED, SLICE, Verdict, contained, off_main_call, panic_message,
+    unserved_in_block,
 };
 use crate::ScanError;
 
@@ -946,21 +946,16 @@ impl MacSystem {
         }
     }
 
-    /// `body` run on the main thread, in an autorelease pool of its own: at once there, else
-    /// posted to the main queue and its answer awaited at most [`Bounds::post`], never run late
-    /// where it's given up on.
-    fn call<T: Send + 'static>(
+    /// `body` run at once on the main thread, in an autorelease pool of its own; off it, refused
+    /// at once, the framework not reached ([`off_main_call`]).
+    fn call<T>(
         &self,
-        body: impl FnOnce(MainThreadMarker) -> Result<T, ScanError> + Send + 'static,
+        body: impl FnOnce(MainThreadMarker) -> Result<T, ScanError>,
     ) -> Result<T, ScanError> {
-        if let Some(mtm) = MainThreadMarker::new() {
-            return autoreleasepool(|_| body(mtm));
+        match MainThreadMarker::new() {
+            Some(mtm) => autoreleasepool(|_| body(mtm)),
+            None => Err(off_main_call()),
         }
-        let handshake = Arc::new(Handshake::new());
-        let (answer, answered) = mpsc::sync_channel(1);
-        let posted = Arc::clone(&handshake);
-        post(move || run_posted(&posted, &answer, || on_main(body)));
-        await_posted(&handshake, &answered, self.bounds.post)
     }
 
     /// The browse ended, in an autorelease pool: at once on the main thread; posted and not
@@ -1051,7 +1046,7 @@ impl IcaSystem for MacSystem {
     fn next_event(&mut self, wait: Duration) -> Result<Option<IcaEvent>, ScanError> {
         match MainThreadMarker::new() {
             Some(mtm) => self.pumped(mtm, wait),
-            None => Ok(self.events.recv_timeout(wait).ok()),
+            None => Err(off_main_call()),
         }
     }
 

@@ -603,7 +603,6 @@ mod tests {
         settle: Duration::from_millis(50),
         answer: Duration::from_millis(200),
         close: Duration::from_millis(20),
-        post: Duration::from_millis(20),
     };
 
     #[test]
@@ -725,7 +724,6 @@ mod tests {
         assert_eq!(Bounds::REAL.settle, Duration::from_secs(2));
         assert_eq!(Bounds::REAL.answer, Duration::from_secs(30));
         assert_eq!(Bounds::REAL.close, Duration::from_secs(5));
-        assert_eq!(Bounds::REAL.post, Duration::from_secs(5));
     }
 
     #[test]

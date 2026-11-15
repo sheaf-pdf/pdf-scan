@@ -36,7 +36,6 @@ impl Bounds {
         settle: Duration::from_millis(20),
         answer: Duration::from_millis(200),
         close: Duration::from_millis(20),
-        post: Duration::from_millis(20),
     };
 }
 

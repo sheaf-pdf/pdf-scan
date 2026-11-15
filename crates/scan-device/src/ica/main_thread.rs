@@ -1,16 +1,13 @@
-//! The rules the glue's executor keeps to reach the main thread, in safe Rust, so they're tested
-//! on every system: a call posted to the main queue and the handshake that lets its caller give
-//! up on it only before it has begun; a posted body's panic caught as its answer; and when a wait
-//! on the main thread, which runs the main run loop in slices, is refused at once rather than
-//! spun.
+//! The rules the glue's executor keeps on the main thread, in safe Rust, so they're tested on
+//! every system: a call refused at once off the main thread; a panic caught where it would
+//! otherwise unwind into the framework or the main queue; and when a wait on the main thread,
+//! which runs the main run loop in slices, is refused at once rather than spun.
 //!
-//! The glue (`objc.rs`, macOS only) posts with Grand Central Dispatch and pumps with Core
-//! Foundation's run loop; what's decided about either is here.
+//! The glue (`objc.rs`, macOS only) pumps with Core Foundation's run loop, and posts a drop's
+//! clean-up with Grand Central Dispatch; what's decided about either is here.
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use super::error::driver_msg;
@@ -36,42 +33,6 @@ pub(super) const RUN_STOPPED: i32 = 2;
 pub(super) const RUN_TIMED_OUT: i32 = 3;
 /// A source was handled (the main queue among them).
 pub(super) const RUN_HANDLED_SOURCE: i32 = 4;
-
-/// A call posted to the main queue: its state, which the block and its caller move.
-///
-/// The block moves it from pending to running before it does anything, and does nothing where
-/// it finds it abandoned; the caller, giving up, moves it from pending to abandoned, and where it
-/// finds it running waits for the answer instead. So a call is either never run or waited for:
-/// nothing is made, opened or started with nobody to own it.
-#[derive(Debug, Default)]
-pub(super) struct Handshake(AtomicU8);
-
-const PENDING: u8 = 0;
-const RUNNING: u8 = 1;
-const ABANDONED: u8 = 2;
-
-impl Handshake {
-    /// A call not yet begun.
-    pub(super) fn new() -> Handshake {
-        Handshake(AtomicU8::new(PENDING))
-    }
-
-    /// The block's side: true where it may run the call, which it then answers; false where its
-    /// caller has given up on it.
-    pub(super) fn begin(&self) -> bool {
-        self.0
-            .compare_exchange(PENDING, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    }
-
-    /// The caller's side, past its wait: true where the call hadn't begun and never will; false
-    /// where it has begun, so its answer comes.
-    pub(super) fn abandon(&self) -> bool {
-        self.0
-            .compare_exchange(PENDING, ABANDONED, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    }
-}
 
 /// A panic's message, its payload dropped where a panic in that drop can't escape.
 pub(super) fn panic_message(payload: Box<dyn Any + Send>) -> String {
@@ -102,56 +63,15 @@ pub(super) fn contained(work: impl FnOnce()) {
     }
 }
 
-/// The posted block's side of a call: `body` run where `handshake` lets it begin, its answer, or
-/// its panic as [`ScanError::Driver`], sent to the caller.
-pub(super) fn run_posted<T>(
-    handshake: &Handshake,
-    answer: &SyncSender<Result<T, ScanError>>,
-    body: impl FnOnce() -> Result<T, ScanError>,
-) {
-    if !handshake.begin() {
-        return;
-    }
-    let result = catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|payload| {
-        Err(driver_msg(format!(
-            "the backend's call to ImageCaptureCore on the main thread panicked: {}",
-            panic_message(payload)
-        )))
-    });
-    let _ = answer.send(result);
-}
-
-/// The caller's side of a posted call: its answer, waited for at most `post`; past it, where the
-/// call hasn't begun, given up on and refused (the main thread not serving its queue), and where
-/// it has, its answer waited for, since a posted call is a request or a read and ends at once.
-pub(super) fn await_posted<T>(
-    handshake: &Handshake,
-    answered: &Receiver<Result<T, ScanError>>,
-    post: Duration,
-) -> Result<T, ScanError> {
-    match answered.recv_timeout(post) {
-        Ok(result) => result,
-        Err(RecvTimeoutError::Timeout) => {
-            if handshake.abandon() {
-                return Err(unserved_off_main(post));
-            }
-            answered.recv().unwrap_or_else(|_| Err(lost()))
-        }
-        Err(RecvTimeoutError::Disconnected) => Err(lost()),
-    }
-}
-
-fn lost() -> ScanError {
-    driver_msg("the backend's call to ImageCaptureCore on the main thread ended with no answer")
-}
-
-/// The answer where the main thread didn't run a posted call within `post`.
-pub(super) fn unserved_off_main(post: Duration) -> ScanError {
-    driver_msg(format!(
-        "ImageCaptureCore delivers to the main thread, which didn't run the backend's call within \
-         {} s: call the backend on the main thread, or while the main thread runs its run loop",
-        post.as_secs_f32()
-    ))
+/// The answer where the backend is called off the main thread. ImageCaptureCore delivers to the
+/// main thread, and a browser started there for a call made on another thread, the main thread
+/// running its run loop, was seen to get no callbacks (CI's macOS runner, 2026-11-15), so the
+/// backend makes no call to the framework but on the main thread.
+pub(super) fn off_main_call() -> ScanError {
+    driver_msg(
+        "ImageCaptureCore delivers to the main thread, and the backend is called there only: call \
+         it on the main thread (a worker's `main`), outside the main queue's blocks",
+    )
 }
 
 /// The answer where the backend is called on the main thread from inside a block of the main
@@ -160,7 +80,7 @@ pub(super) fn unserved_in_block() -> ScanError {
     driver_msg(
         "ImageCaptureCore delivers to the main thread's queue, which can't run while the backend \
          is called from a block on it: call the backend on the main thread outside the main \
-         queue's blocks, or from another thread while the main thread runs its run loop",
+         queue's blocks",
     )
 }
 
@@ -240,87 +160,7 @@ impl MainWait {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::mpsc::sync_channel;
-    use std::thread;
-    use std::time::Instant;
-
     use super::*;
-
-    #[test]
-    fn a_call_never_begun_is_given_up_on_and_never_runs_after() {
-        let handshake = Handshake::new();
-        assert!(handshake.abandon());
-        // The block, run late, finds it abandoned and does nothing.
-        assert!(!handshake.begin());
-        let (answer, answered) = sync_channel::<Result<u32, ScanError>>(1);
-        let mut ran = false;
-        run_posted(&handshake, &answer, || {
-            ran = true;
-            Ok(1)
-        });
-        assert!(!ran);
-        assert!(answered.try_recv().is_err());
-    }
-
-    #[test]
-    fn a_call_begun_is_never_given_up_on() {
-        let handshake = Handshake::new();
-        assert!(handshake.begin());
-        assert!(!handshake.abandon());
-        // Begun once only.
-        assert!(!handshake.begin());
-    }
-
-    #[test]
-    fn a_wait_past_its_bound_for_a_block_never_run_is_refused_naming_the_main_thread() {
-        let handshake = Handshake::new();
-        let (_answer, answered) = sync_channel::<Result<u32, ScanError>>(1);
-        let start = Instant::now();
-        let err = await_posted(&handshake, &answered, Duration::from_millis(30)).unwrap_err();
-        assert!(start.elapsed() >= Duration::from_millis(30));
-        let ScanError::Driver { message, shown } = err else {
-            panic!("a Driver error: {err:?}");
-        };
-        assert!(!shown);
-        assert!(message.contains("main thread"), "{message}");
-        assert!(!handshake.begin(), "the late block must not run");
-    }
-
-    #[test]
-    fn a_block_begun_as_its_caller_gives_up_is_waited_for() {
-        let handshake = Arc::new(Handshake::new());
-        let (answer, answered) = sync_channel::<Result<u32, ScanError>>(1);
-        let (began, has_begun) = sync_channel(1);
-        let block = {
-            let handshake = Arc::clone(&handshake);
-            thread::spawn(move || {
-                run_posted(&handshake, &answer, || {
-                    began.send(()).expect("the test waits");
-                    // Past the caller's bound, as a call begun just before it would be.
-                    thread::sleep(Duration::from_millis(80));
-                    Ok(7)
-                });
-            })
-        };
-        has_begun.recv().expect("the block began");
-        let result = await_posted(&handshake, &answered, Duration::from_millis(10));
-        assert_eq!(result, Ok(7));
-        block.join().expect("the block's thread");
-    }
-
-    #[test]
-    fn a_posted_body_s_panic_is_its_answer() {
-        let handshake = Handshake::new();
-        let (answer, answered) = sync_channel::<Result<u32, ScanError>>(1);
-        run_posted(&handshake, &answer, || panic!("a selector mistyped"));
-        let err = await_posted(&handshake, &answered, Duration::from_secs(5)).unwrap_err();
-        let ScanError::Driver { message, .. } = err else {
-            panic!("a Driver error: {err:?}");
-        };
-        assert!(message.contains("panicked"), "{message}");
-        assert!(message.contains("a selector mistyped"), "{message}");
-    }
 
     #[test]
     fn contained_work_never_unwinds() {
@@ -457,20 +297,17 @@ mod tests {
 
     #[test]
     fn the_refusals_name_the_main_thread_and_what_to_do() {
-        for err in [
-            unserved_off_main(Duration::from_secs(5)),
-            unserved_in_block(),
-        ] {
+        for err in [off_main_call(), unserved_in_block()] {
             let ScanError::Driver { message, shown } = err else {
                 panic!("a Driver error");
             };
             assert!(!shown);
             assert!(message.starts_with("ImageCaptureCore delivers to the main thread"));
-            assert!(message.contains("run loop"), "{message}");
+            assert!(
+                message.contains("on the main thread")
+                    && message.contains("outside the main queue's blocks"),
+                "{message}"
+            );
         }
-        let ScanError::Driver { message, .. } = unserved_off_main(Duration::from_secs(5)) else {
-            unreachable!()
-        };
-        assert!(message.contains("within 5 s"), "{message}");
     }
 }

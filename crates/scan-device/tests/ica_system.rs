@@ -1,8 +1,8 @@
 //! The ImageCaptureCore backend through the real framework, on macOS: a listing on the main
 //! thread; a stored id that isn't there, `Gone` once the framework's local enumeration ends; and
-//! a listing from another thread, once with the main thread blocked in a `join` (refused within
-//! the backend's bound for a call posted to the main thread) and once with the main thread
-//! running its run loop (answering as on the main thread). Off macOS each case says it skipped.
+//! a listing from another thread, refused at once whatever the main thread does: once with the
+//! main thread blocked in a `join`, and once with it running its run loop (where a browser started
+//! for such a call was seen to get no callbacks). Off macOS each case says it skipped.
 //!
 //! A harness of its own (`harness = false`), so `main` is the process's main thread, as a
 //! worker's is, and the cases run on it in turn. It answers `--list` as libtest does (`<name>:
@@ -43,11 +43,11 @@ const CASES: &[Case] = &[
         run: system::a_stored_id_not_there,
     },
     Case {
-        name: "a_listing_off_the_main_thread_while_main_waits_in_a_join_is_refused_in_time",
+        name: "a_listing_off_the_main_thread_while_main_waits_in_a_join_is_refused_at_once",
         run: system::off_the_main_thread_joined,
     },
     Case {
-        name: "a_listing_off_the_main_thread_while_main_runs_its_run_loop_answers",
+        name: "a_listing_off_the_main_thread_while_main_runs_its_run_loop_is_refused_at_once",
         run: system::off_the_main_thread_serving,
     },
 ];
@@ -238,10 +238,8 @@ mod system {
     const DEADLINE: Duration = Duration::from_secs(30);
     /// How soon one must answer where [`REQUIRE`] is `1`.
     const REQUIRED_WITHIN: Duration = Duration::from_secs(20);
-    /// The backend's bound for a call posted to the main thread, and the slack past it a
-    /// refusal is allowed.
-    const POST: Duration = Duration::from_secs(5);
-    const POST_SLACK: Duration = Duration::from_secs(5);
+    /// How soon a call off the main thread must be refused: at once, the framework not reached.
+    const REFUSED_WITHIN: Duration = Duration::from_secs(1);
 
     const REQUIRE: &str = "SCAN_DEVICE_REQUIRE_ICA";
 
@@ -325,22 +323,19 @@ mod system {
         }
     }
 
-    pub fn off_the_main_thread_joined() -> Outcome {
-        let start = Instant::now();
-        let listing = thread::spawn(|| IcaBackend::new().list(DEADLINE));
-        // The main thread waits here, its queue unserved.
-        let listed = listing.join().expect("the listing's thread");
-        let took = start.elapsed();
+    /// A listing off the main thread's answer: refused at once, naming the main thread.
+    fn judge_refusal(
+        listed: Result<Vec<DeviceInfo>, ScanError>,
+        took: Duration,
+        how: &str,
+    ) -> Outcome {
         match listed {
             Err(ScanError::Driver { message, shown }) => {
                 assert!(!shown);
                 assert!(message.contains("main thread"), "{message}");
-                assert!(
-                    took >= POST && took < POST + POST_SLACK,
-                    "refused after {took:?}, not at the {POST:?} bound"
-                );
+                assert!(took < REFUSED_WITHIN, "refused after {took:?}, not at once");
                 eprintln!(
-                    "a listing off the main thread, joined: refused in {:.2} s ({message})",
+                    "a listing off the main thread, {how}: refused in {:.3} s ({message})",
                     took.as_secs_f32()
                 );
                 Outcome::Passed
@@ -349,12 +344,23 @@ mod system {
         }
     }
 
+    pub fn off_the_main_thread_joined() -> Outcome {
+        let listing = thread::spawn(|| {
+            let start = Instant::now();
+            let listed = IcaBackend::new().list(DEADLINE);
+            (listed, start.elapsed())
+        });
+        // The main thread waits here, its queue unserved.
+        let (listed, took) = listing.join().expect("the listing's thread");
+        judge_refusal(listed, took, "joined")
+    }
+
     pub fn off_the_main_thread_serving() -> Outcome {
         let (answer, answered) = mpsc::channel();
-        let start = Instant::now();
         let listing = thread::spawn(move || {
+            let start = Instant::now();
             let listed = catch_unwind(AssertUnwindSafe(|| IcaBackend::new().list(DEADLINE)));
-            let _ = answer.send(listed);
+            let _ = answer.send((listed, start.elapsed()));
             // The main run loop stopped from a block on the main queue, which runs only once the
             // loop serves it: the stop can't come before the loop runs.
             DispatchQueue::main().exec_async(|| {
@@ -364,16 +370,12 @@ mod system {
             });
         });
         CFRunLoop::run();
-        let took = start.elapsed();
         listing.join().expect("the listing's thread");
-        let listed = match answered.recv().expect("the listing's answer") {
+        let (listed, took) = answered.recv().expect("the listing's answer");
+        let listed = match listed {
             Ok(listed) => listed,
             Err(panic) => std::panic::resume_unwind(panic),
         };
-        judge_listing(
-            listed,
-            took,
-            "off the main thread while it runs its run loop",
-        )
+        judge_refusal(listed, took, "while main runs its run loop")
     }
 }

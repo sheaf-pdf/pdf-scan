@@ -149,8 +149,8 @@
 //! the device browser's delegate is taken as the same, its header saying nothing of a thread, and
 //! each callback checks it: one that comes elsewhere reads nothing it's handed, and the call
 //! waiting on it is [`ScanError::Driver`] saying so. So the backend can't start a thread of its
-//! own for the framework, as other backends do for their driver's: whoever calls it, every call
-//! it makes to the framework is made on the main thread.
+//! own for the framework, as other backends do for their driver's: every call it makes to the
+//! framework is made on the main thread, where it's called.
 //!
 //! - **Called on the main thread** (a worker's `main`), it runs the main run loop's default mode
 //!   while it waits for a callback, in slices of at most 50 ms, taking each callback's event
@@ -160,13 +160,11 @@
 //!   the backend's wait ends, so the run around the call sees it; one made while a slice ends
 //!   otherwise is kept by Core Foundation for that slice alone, as for any run of a run loop
 //!   inside another.
-//! - **Called on another thread,** it posts each call to the main queue and waits at most 5 s for
-//!   the main thread to run it, and takes the callbacks' events as they come. So the main thread
-//!   must be running its run loop meanwhile (an app's, or `CFRunLoopRun`); where it isn't (blocked
-//!   in a `join`, say), the call is [`ScanError::Driver`] saying so. A call given up on is never
-//!   run late: the call posted and its caller agree which of them has it, so nothing is opened or
-//!   started with nobody to take it. A call posted to a main thread that never serves its queue
-//!   is never run, and what it holds is leaked.
+//! - **Called on another thread,** every call is [`ScanError::Driver`] at once, saying so, and the
+//!   framework isn't reached, whatever the main thread is doing. A device browser started on the
+//!   main thread for a call made on another, the main thread running its run loop
+//!   (`CFRunLoopRun`), was seen to get no callbacks at all (CI's macOS runner, with no scanner), so
+//!   the backend doesn't offer that path.
 //! - **Called on the main thread from inside a block of the main queue** (work queued to the main
 //!   queue, or on Swift's main actor), the main queue can't be served until the block returns, so
 //!   no callback could come: the backend finds so at once (the main queue left unserved, or the
@@ -174,12 +172,11 @@
 //!   deadline.
 //!
 //! So an app calls this backend from a worker process's `main`, as `scan-worker`'s `serve` does,
-//! or, in its own process, on the main thread outside the main queue's blocks, or from another
-//! thread while the main thread runs its run loop; never from a block on the main queue. Between
-//! calls nothing runs the main run loop for the backend: a callback that comes then (a device
-//! removed, its session closed by its module) waits in the main queue for the next call, which
-//! takes it first. Unverified on a device: that a session survives the main thread idle between
-//! calls.
+//! or, in its own process, on the main thread outside the main queue's blocks; never from another
+//! thread or from a block on the main queue. Between calls nothing runs the main run loop for the
+//! backend: a callback that comes then (a device removed, its session closed by its module) waits
+//! in the main queue for the next call, which takes it first. Unverified on a device: that a
+//! session survives the main thread idle between calls.
 //!
 //! A device dropped on the main thread closes its session there, waiting at most 5 s for the
 //! framework's word, then stops the browse that found it; dropped on another thread, its close is
@@ -294,11 +291,10 @@ pub mod fake_ica {
 
 /// The ImageCaptureCore scanner backend (`ica:` ids).
 ///
-/// On macOS it reaches the framework on the main thread, whichever thread calls it: it's called
-/// on the main thread (outside the main queue's blocks), as a worker's `main` does, or from
-/// another thread while the main thread runs its run loop ([the module
-/// documentation](self#the-main-thread)). Off macOS, listing and opening report
-/// [`ScanError::NotInstalled`], after refusing an id it doesn't form.
+/// On macOS it reaches the framework on the main thread alone: it's called there (outside the
+/// main queue's blocks), as a worker's `main` does, and called on another thread it answers
+/// [`ScanError::Driver`] at once ([the module documentation](self#the-main-thread)). Off macOS,
+/// listing and opening report [`ScanError::NotInstalled`], after refusing an id it doesn't form.
 #[derive(Default)]
 pub struct IcaBackend {
     /// The scripted framework this backend runs over, where it was made from one.

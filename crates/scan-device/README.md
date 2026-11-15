@@ -81,11 +81,9 @@ None is on by default.
   as `Pixels::Encoded`), pairs `FRONT_FIRST` and `BACK_FIRST` duplex sides, cancels between sheets (`S_FALSE`
   plus `WIA_CMD_STOP_FEEDER`), and maps both the Windows SDK and Microsoft Learn `HRESULT` error tables.
 - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore, part of the system,
-  through objc2's bindings. The framework delivers to the main thread, so the backend makes every call to it
-  there, whoever calls it: on the main thread (a worker's `main`) it runs the main run loop while it waits for a
-  callback; on another thread it posts its calls to the main queue, so the main thread must be running its run
-  loop, and says so as `ScanError::Driver` within 5 s where it isn't; from a block on the main queue, which
-  can't then be served, it says so at once. Off macOS, listing and opening report `ScanError::NotInstalled`
+  through objc2's bindings. The framework delivers to the main thread, so the backend is called there alone: on
+  the main thread (a worker's `main`) it runs the main run loop while it waits for a callback; on another thread,
+  or from a block on the main queue, which can't then be served, it says so at once as `ScanError::Driver`. Off macOS, listing and opening report `ScanError::NotInstalled`
   after refusing an id it doesn't form (`ScanError::BadId`). On macOS it needs 10.15 or later, whose framework
   has the error domain the backend reads. Tested on every system over a scripted ImageCaptureCore, and on macOS
   through the real framework with no scanner; unverified on a device: ids of `ica:` and the framework's

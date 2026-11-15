@@ -147,9 +147,8 @@
 //!
 //! - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore,
 //!   part of the system, through objc2's bindings. ImageCaptureCore delivers to the main thread,
-//!   so the backend makes every call to it there, whoever calls the backend: called on the main
-//!   thread (a worker's `main`) it runs the main run loop while it waits, and called on another
-//!   it posts its calls to the main queue, so the main thread must be running its run loop. Its
+//!   so the backend is called there alone: called on the main thread (a worker's `main`) it runs
+//!   the main run loop while it waits, and called on another thread it refuses at once. Its
 //!   devices' ids are `ica:` and the framework's persistent id for each (its UUID where it gives
 //!   none), with a name, and a maker and model the framework doesn't give left empty; a listing
 //!   is taken as a snapshot, since the framework's never ends, and a stored device found again by
