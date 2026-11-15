@@ -391,6 +391,29 @@ fn an_open_whose_local_enumeration_never_ends_times_out() {
 }
 
 #[test]
+fn an_open_whose_deadline_comes_before_the_settle_times_out_and_one_after_finds_the_device() {
+    // The local enumeration ends at once; the network scanner is found 300 ms into the settle.
+    let fake = FakeIcaHandle::new();
+    fake.set_bounds(Bounds {
+        settle: Duration::from_secs(2),
+        ..Bounds::FAKE
+    });
+    let mut network = FakeIcaDevice::new(network_props("net-1", "Network scanner"));
+    network.found_after = Duration::from_millis(300);
+    fake.add_device(network);
+    // By the listing's rule the open isn't done before the settle, whether or not the device
+    // comes: past its deadline then, `TimedOut`, never `Gone`.
+    let start = Instant::now();
+    let early = IcaBackend::from_fake(&fake).open(&stored("net-1"), Duration::from_millis(100));
+    assert_eq!(early.err(), Some(ScanError::TimedOut));
+    assert!(start.elapsed() < Duration::from_secs(1));
+    let opened = IcaBackend::from_fake(&fake)
+        .open(&stored("net-1"), LONG)
+        .expect("found within the settle");
+    assert_eq!(opened.info.id.0, "ica:net-1");
+}
+
+#[test]
 fn a_busy_or_refused_session_is_said() {
     for (code, expected) in [
         (RETURN_SCANNER_IN_USE_BY_LOCAL_USER, ScanError::Busy),

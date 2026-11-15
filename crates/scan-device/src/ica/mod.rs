@@ -29,19 +29,20 @@
 //! USB vendor or product id). Which of the two ids survives a replugging, a restart or a network
 //! scanner's new address is unverified on a device.
 //!
-//! [`open`](crate::Backend::open) refuses as [`ScanError::BadId`], before the framework is
-//! reached (and, where it isn't there, before [`ScanError::NotInstalled`]): another
+//! [`open`](crate::Backend::open) refuses as [`ScanError::BadId`], before the framework is reached
+//! (and, where it isn't there, before [`ScanError::NotInstalled`]): another
 //! [`Driver`](crate::Driver)'s device, an id without `ica:`, and a native id that's empty, holds a
 //! `NUL` or is past 4,096 bytes. Then it browses until it finds the stored id, by the listing's
-//! rule: where the listing's snapshot would be taken without it, it's [`ScanError::Gone`], in
-//! seconds rather than at the deadline; where the deadline comes first, [`ScanError::TimedOut`]
-//! if the attached devices weren't all found by then, [`ScanError::Gone`] if they were. The id
-//! alone is matched, there being no maker or model to check, and
-//! [`Opened::renamed_from`](crate::Opened::renamed_from) is never said: the persistent id is the
-//! device's identity. Then its session is opened and the device waited for until it's ready,
-//! within the same deadline; past it, [`ScanError::TimedOut`], the session closed. The browse is
-//! kept while the device is open, since the browser keeps its devices alive, and stopped as the
-//! device is dropped, after its session is closed.
+//! rule: where the listing's snapshot would be taken without it (the callbacks queued by then taken
+//! too, as the snapshot takes them), it's [`ScanError::Gone`], in seconds rather than at the
+//! deadline; where the deadline comes first, [`ScanError::TimedOut`], since a scanner on the
+//! network may yet be found until then. The id alone is matched, there being no maker or model to
+//! check, and [`Opened::renamed_from`](crate::Opened::renamed_from) is never said: the persistent
+//! id is the device's identity. Then its session is opened and the device waited for until it's
+//! ready, within the same deadline; past it, [`ScanError::TimedOut`], the session closed without
+//! waiting past the deadline for the framework's word. The browse is kept while the device is open,
+//! since the browser keeps its devices alive, and stopped as the device is dropped, after its
+//! session is closed.
 //!
 //! # What a source can do
 //!
