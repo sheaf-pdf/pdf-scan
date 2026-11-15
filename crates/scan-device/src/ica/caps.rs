@@ -1,16 +1,28 @@
 //! What a functional unit can do, from what the framework says of it: its resolutions from an
 //! index set, its formats from its bit depths, its lengths in millimetres from its measurement
-//! unit, and a feeder's document types with the sizes the backend states for them.
+//! unit, and a feeder's document types with the sizes the backend states for them; and a
+//! device's caps, each of its units selected in turn and read.
+//!
+//! A select's answer is matched by the unit type asked for, as scanline's is: the framework
+//! selects a unit unasked as the device is instantiated, so an answer of another type (that one,
+//! or a late answer of a select given up on) is never read as the answer. An answer with an error
+//! is the answer, whatever unit it carries. One with no unit and no error (which the framework's
+//! header says never comes, and scanline saw) can't be matched by its type, so the selected unit
+//! is read then, and taken where it's of the type asked; otherwise the wait goes on.
 
 use std::num::NonZeroU32;
+use std::time::Instant;
 
 use super::driver::{
     DEPTH_1, DEPTH_8, DEPTH_16, DOCUMENT_A3, DOCUMENT_A4, DOCUMENT_A5, DOCUMENT_A6,
     DOCUMENT_US_EXECUTIVE, DOCUMENT_US_LEDGER, DOCUMENT_US_LEGAL, DOCUMENT_US_LETTER,
-    DOCUMENT_US_STATEMENT, IndexSet, MEASURE_CENTIMETERS, MEASURE_INCHES, MEASURE_PICAS,
-    MEASURE_PIXELS, MEASURE_POINTS, MEASURE_TWIPS, UnitSize,
+    DOCUMENT_US_STATEMENT, IcaEvent, IndexSet, MEASURE_CENTIMETERS, MEASURE_INCHES, MEASURE_PICAS,
+    MEASURE_PIXELS, MEASURE_POINTS, MEASURE_TWIPS, UNIT_DOCUMENT_FEEDER, UNIT_FLATBED, UnitProps,
+    UnitSize,
 };
-use crate::{Format, Resolutions, SizeMm};
+use super::error::{driver_msg, scan_error};
+use super::session::IcaDevice;
+use crate::{Caps, Format, Resolutions, ScanError, SizeMm, Source, SourceCaps};
 
 /// Millimetres an inch.
 const MM_PER_INCH: f64 = 25.4;
@@ -215,6 +227,144 @@ pub(super) fn document_for(types: &IndexSet, asked: SizeMm) -> Option<(u64, Size
             }
         })
         .or_else(|| largest_document(types))
+}
+
+/// The model's source for a unit type: the flatbed and the document feeder; `None` for the
+/// transparency units, which the model has no source for, and any type the backend doesn't know.
+pub(super) fn source_of(unit_type: u64) -> Option<Source> {
+    match unit_type {
+        UNIT_FLATBED => Some(Source::Flatbed),
+        UNIT_DOCUMENT_FEEDER => Some(Source::Feeder),
+        _ => None,
+    }
+}
+
+/// The unit type of a source.
+pub(super) fn unit_type_of(source: Source) -> u64 {
+    match source {
+        Source::Flatbed => UNIT_FLATBED,
+        Source::Feeder => UNIT_DOCUMENT_FEEDER,
+    }
+}
+
+/// A unit's name, for a message.
+pub(super) fn unit_name(unit_type: u64) -> String {
+    match unit_type {
+        UNIT_FLATBED => "flatbed".to_owned(),
+        UNIT_DOCUMENT_FEEDER => "document feeder".to_owned(),
+        other => format!("functional unit of type {other}"),
+    }
+}
+
+/// What the unit `unit` read can do, as a source: `None` where the model has no source for it,
+/// or it lists no resolution or no format the model has.
+///
+/// A feeder's duplex is its `supportsDuplexScanning`, and its largest area its largest document
+/// type's size of those the backend states, since its paper is set by type (its `physicalSize`
+/// where it supports none of them); a flatbed's largest area is its `physicalSize`. Neither finds
+/// the paper's size itself, as far as the framework's API says, and both give raw pages alone.
+pub(super) fn source_caps(unit: &UnitProps) -> Option<SourceCaps> {
+    let source = source_of(unit.unit_type)?;
+    let resolutions = resolutions(&unit.resolutions, unit.resolution)?;
+    let formats = formats(&unit.bit_depths, unit.bit_depth);
+    if formats.is_empty() {
+        return None;
+    }
+    let physical = || max_area(unit.physical_size, unit.measurement_unit, unit.resolution);
+    let mut caps = SourceCaps::new(source, resolutions, formats);
+    caps.max_area = match source {
+        Source::Feeder => largest_document(&unit.document_types)
+            .map(|(_, size)| size)
+            .or_else(physical),
+        Source::Flatbed => physical(),
+    };
+    caps.duplex = source == Source::Feeder && unit.duplex_supported;
+    Some(caps)
+}
+
+/// The unit of `unit_type` selected and read whole: its answer waited for at most
+/// [`Bounds::answer`](super::driver::Bounds::answer) and matched by the type asked, as the
+/// module's docs say. A select answered with an error is that error's [`ScanError`]; one never
+/// answered, [`ScanError::Driver`].
+pub(super) fn select(device: &mut IcaDevice, unit_type: u64) -> Result<UnitProps, ScanError> {
+    device.request_select(unit_type)?;
+    let bound = device.bounds.answer;
+    let end = Instant::now().checked_add(bound);
+    loop {
+        let left = end.map_or(bound, |end| end.saturating_duration_since(Instant::now()));
+        if left.is_zero() {
+            return Err(driver_msg(format!(
+                "the scanner didn't answer the select of its {} within {} s",
+                unit_name(unit_type),
+                bound.as_secs_f32()
+            )));
+        }
+        match device.next(left)? {
+            Some(IcaEvent::UnitSelected { unit, error, .. }) => {
+                if let Some(error) = error {
+                    return Err(scan_error(&error));
+                }
+                match unit {
+                    Some(unit) if unit.unit_type == unit_type => return Ok(*unit),
+                    // Another unit's: the one the framework selected unasked, or a late answer.
+                    Some(_) => {}
+                    None => {
+                        if let Some(unit) = device.selected_unit()?
+                            && unit.unit_type == unit_type
+                        {
+                            return Ok(unit);
+                        }
+                    }
+                }
+            }
+            Some(IcaEvent::DeviceError { error, .. }) => return Err(scan_error(&error)),
+            _ => {}
+        }
+    }
+}
+
+/// The unit of `unit_type` read whole: the selected one where it's of that type, else selected.
+pub(super) fn unit(device: &mut IcaDevice, unit_type: u64) -> Result<UnitProps, ScanError> {
+    match device.selected_unit()? {
+        Some(unit) if unit.unit_type == unit_type => Ok(unit),
+        _ => select(device, unit_type),
+    }
+}
+
+/// What `device` can do: its flatbed and its document feeder, each selected in turn (the one
+/// selected already read as it is) and read, then the one first selected selected again.
+/// [`ScanError::Unsupported`] where it has neither, or neither lists what the model needs.
+pub(super) fn read(device: &mut IcaDevice) -> Result<Caps, ScanError> {
+    let first = device.selected_unit()?;
+    let mut wanted = Vec::new();
+    for unit_type in device.unit_types()? {
+        if source_of(unit_type).is_some() && !wanted.contains(&unit_type) {
+            wanted.push(unit_type);
+        }
+    }
+    let first_type = first.as_ref().map(|unit| unit.unit_type);
+    let mut selected = first_type;
+    let mut sources = Vec::new();
+    for unit_type in wanted {
+        let unit = match &first {
+            Some(first) if first.unit_type == unit_type => first.clone(),
+            _ => {
+                let unit = select(device, unit_type)?;
+                selected = Some(unit_type);
+                unit
+            }
+        };
+        sources.extend(source_caps(&unit));
+    }
+    if let Some(first_type) = first_type
+        && selected != Some(first_type)
+    {
+        select(device, first_type)?;
+    }
+    if sources.is_empty() {
+        return Err(ScanError::Unsupported);
+    }
+    Ok(Caps::new(sources))
 }
 
 #[cfg(test)]
@@ -458,6 +608,89 @@ mod tests {
                     .all(|&(other, _)| other != document_type)
             );
         }
+    }
+
+    #[test]
+    fn a_unit_is_a_source_where_the_model_has_one_and_it_lists_enough() {
+        let flatbed = UnitProps {
+            unit_type: UNIT_FLATBED,
+            bit_depth: DEPTH_8,
+            bit_depths: set_of(&[1, 8]),
+            measurement_unit: MEASURE_INCHES,
+            resolution: 300,
+            resolutions: set_of(&[75, 150, 300, 600]),
+            physical_size: UnitSize {
+                width: 8.5,
+                height: 11.7,
+            },
+            ..UnitProps::default()
+        };
+        let caps = source_caps(&flatbed).expect("a source");
+        assert_eq!(caps.source, Source::Flatbed);
+        assert!(!caps.duplex && !caps.paper_auto && caps.encodings.is_empty());
+        assert_eq!(caps.resolutions, Resolutions::List(vec![75, 150, 300, 600]));
+        assert_eq!(caps.formats, [Format::Bw1, Format::Gray8, Format::Rgb8]);
+        let area = caps.max_area.expect("an area");
+        assert!((area.width - 215.9).abs() < 1e-3 && (area.height - 297.18).abs() < 1e-3);
+
+        // A feeder's largest area is its largest document type's, and its duplex its own.
+        let feeder = UnitProps {
+            unit_type: UNIT_DOCUMENT_FEEDER,
+            document_types: set_of(&[DOCUMENT_A4, DOCUMENT_US_LETTER]),
+            duplex_supported: true,
+            ..flatbed.clone()
+        };
+        let caps = source_caps(&feeder).expect("a source");
+        assert_eq!(caps.source, Source::Feeder);
+        assert!(caps.duplex);
+        assert_eq!(caps.max_area, Some(SizeMm::A4));
+        // Supporting no type the backend states, its physical size.
+        let untyped = UnitProps {
+            document_types: set_of(&[]),
+            ..feeder.clone()
+        };
+        assert_eq!(
+            source_caps(&untyped).and_then(|caps| caps.max_area),
+            source_caps(&flatbed).and_then(|caps| caps.max_area)
+        );
+
+        // A flatbed's duplex is never said, whatever it reads.
+        let odd = UnitProps {
+            duplex_supported: true,
+            ..flatbed.clone()
+        };
+        assert!(!source_caps(&odd).expect("a source").duplex);
+
+        // A transparency unit, no resolution, or no format the model has: no source.
+        for unit in [
+            UnitProps {
+                unit_type: 1,
+                ..flatbed.clone()
+            },
+            UnitProps {
+                resolution: 0,
+                resolutions: set_of(&[]),
+                ..flatbed.clone()
+            },
+            UnitProps {
+                bit_depth: 4,
+                bit_depths: set_of(&[4]),
+                ..flatbed.clone()
+            },
+        ] {
+            assert_eq!(source_caps(&unit), None, "{unit:?}");
+        }
+    }
+
+    #[test]
+    fn each_source_is_its_unit_type_and_back() {
+        for source in [Source::Flatbed, Source::Feeder] {
+            assert_eq!(source_of(unit_type_of(source)), Some(source));
+        }
+        assert_eq!(source_of(1), None);
+        assert_eq!(source_of(2), None);
+        assert_eq!(source_of(99), None);
+        assert_eq!(unit_name(99), "functional unit of type 99");
     }
 
     #[test]

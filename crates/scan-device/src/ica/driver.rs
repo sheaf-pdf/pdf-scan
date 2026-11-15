@@ -1,11 +1,18 @@
-//! ImageCaptureCore's numbers the `ica` backend reads, in constants of its own, and the plain data
-//! the Objective-C glue hands the rest of the backend.
+//! ImageCaptureCore's numbers the `ica` backend reads, in constants of its own; the plain data
+//! the Objective-C glue hands the rest of the backend, and the events its callbacks send; the
+//! internal trait the session, caps, settings and batch logic call (`IcaSystem`); and, behind the
+//! `fake` feature, a scripted ImageCaptureCore (`fake_ica`) that answers it as the framework's
+//! documentation reads.
 //!
 //! Pure safe Rust, compiled on every system: nothing here names an objc2 type, so the logic over
 //! it runs and is tested where ImageCaptureCore isn't. The numbers stay integers as the framework
 //! gives them (`NSUInteger` and `NSInteger`, 64 bits on every Mac this builds for): none becomes a
 //! Rust enum without a check, and a value the backend doesn't know is said, never assumed. On
 //! macOS a unit test holds each constant against the bindings' own.
+
+use std::time::Duration;
+
+use crate::ScanError;
 
 // The framework's functional unit types (`ICScannerFunctionalUnitType`).
 
@@ -317,6 +324,275 @@ pub struct IcaError {
     /// Its localized description, capped.
     pub description: String,
 }
+
+/// A browse the system started (an `ICDeviceBrowser` and its delegate), as the backend holds it:
+/// a number, never the object, so what holds it can be sent to any thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BrowseRef(pub u64);
+
+/// A device a browse found (an `ICScannerDevice`), as the backend holds it: a number, never the
+/// object. A device found again by another browse has another number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DeviceRef(pub u64);
+
+/// Whose delegate a callback came to: a browse's or a device's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A browse's (`ICDeviceBrowserDelegate`).
+    Browse(BrowseRef),
+    /// A device's (`ICDeviceDelegate` and `ICScannerDeviceDelegate`).
+    Device(DeviceRef),
+}
+
+/// A device's status, as `device:didReceiveStatusInformation:` names it
+/// (`ICStatusNotificationKey`'s value): the two the backend reads, and anything else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceStatus {
+    /// `ICScannerStatusWarmingUp`: the scanner is warming up.
+    WarmingUp,
+    /// `ICScannerStatusWarmUpDone`: it has warmed up.
+    WarmedUp,
+    /// Any other, unread.
+    Other,
+}
+
+/// What one of the framework's callbacks said, as owned plain data, tagged with the browse or
+/// device it came for, so a late event of an earlier request is told apart and dropped.
+///
+/// The glue only reads what a callback is handed into one of these; the numbers stay as the
+/// framework gave them, every one checked by whoever reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum IcaEvent {
+    /// `deviceBrowser:didAddDevice:moreComing:`: a browse found a device.
+    DeviceAdded {
+        /// The browse.
+        browse: BrowseRef,
+        /// The device, as the backend holds it from now.
+        device: DeviceRef,
+        /// The device as the glue read it.
+        props: DeviceProps,
+    },
+    /// `deviceBrowser:didRemoveDevice:moreGoing:`: a browse lost a device.
+    DeviceRemoved {
+        /// The browse.
+        browse: BrowseRef,
+        /// The device.
+        device: DeviceRef,
+    },
+    /// `deviceBrowserDidEnumerateLocalDevices:`: a browse has found every device attached to
+    /// this Mac; network scanners may still come.
+    LocalEnumerated {
+        /// The browse.
+        browse: BrowseRef,
+    },
+    /// `device:didOpenSessionWithError:`.
+    SessionOpened {
+        /// The device.
+        device: DeviceRef,
+        /// The error, where the session didn't open.
+        error: Option<IcaError>,
+    },
+    /// `device:didCloseSessionWithError:`, asked for or not.
+    SessionClosed {
+        /// The device.
+        device: DeviceRef,
+        /// The error, where there was one.
+        error: Option<IcaError>,
+    },
+    /// `deviceDidBecomeReady:`: the device's session is open and it takes requests.
+    Ready {
+        /// The device.
+        device: DeviceRef,
+    },
+    /// `didRemoveDevice:`, to the device's own delegate: the device is gone.
+    Removed {
+        /// The device.
+        device: DeviceRef,
+    },
+    /// `scannerDevice:didSelectFunctionalUnit:error:`: a unit was selected, asked for or not (the
+    /// framework selects one as the device is instantiated), or a select failed.
+    UnitSelected {
+        /// The device.
+        device: DeviceRef,
+        /// The unit selected, read whole as the callback came (boxed, a unit being the largest
+        /// thing an event carries but a band's bytes); `None` where the framework handed none,
+        /// though its header says it never does.
+        unit: Option<Box<UnitProps>>,
+        /// The error, where the select failed.
+        error: Option<IcaError>,
+    },
+    /// `scannerDevice:didScanToBandData:`: a band of a memory-based transfer.
+    Band {
+        /// The device.
+        device: DeviceRef,
+        /// The band's numbers, as given.
+        header: BandHeader,
+        /// The band's buffer, copied once its length was found within [`MAX_BAND_BYTES`].
+        bytes: Vec<u8>,
+    },
+    /// A band whose buffer was past [`MAX_BAND_BYTES`], refused uncopied.
+    OversizedBand {
+        /// The device.
+        device: DeviceRef,
+        /// The buffer's length.
+        len: u64,
+    },
+    /// `scannerDevice:didCompleteScanWithError:`: the scan ended.
+    ScanCompleted {
+        /// The device.
+        device: DeviceRef,
+        /// The error, where it ended in one (a cancel among them).
+        error: Option<IcaError>,
+    },
+    /// `device:didEncounterError:`.
+    DeviceError {
+        /// The device.
+        device: DeviceRef,
+        /// The error.
+        error: IcaError,
+    },
+    /// `device:didReceiveStatusInformation:`.
+    Status {
+        /// The device.
+        device: DeviceRef,
+        /// The status.
+        status: DeviceStatus,
+    },
+    /// A callback panicked: caught at the boundary, never unwound into the framework.
+    Panicked {
+        /// The delegate it came to.
+        origin: Origin,
+        /// The panic's message.
+        message: String,
+    },
+}
+
+impl IcaEvent {
+    /// The browse or device the event came for.
+    pub fn origin(&self) -> Origin {
+        match self {
+            IcaEvent::DeviceAdded { browse, .. }
+            | IcaEvent::DeviceRemoved { browse, .. }
+            | IcaEvent::LocalEnumerated { browse } => Origin::Browse(*browse),
+            IcaEvent::SessionOpened { device, .. }
+            | IcaEvent::SessionClosed { device, .. }
+            | IcaEvent::Ready { device }
+            | IcaEvent::Removed { device }
+            | IcaEvent::UnitSelected { device, .. }
+            | IcaEvent::Band { device, .. }
+            | IcaEvent::OversizedBand { device, .. }
+            | IcaEvent::ScanCompleted { device, .. }
+            | IcaEvent::DeviceError { device, .. }
+            | IcaEvent::Status { device, .. } => Origin::Device(*device),
+            IcaEvent::Panicked { origin, .. } => *origin,
+        }
+    }
+}
+
+/// What a batch sets on the selected unit, in the order the glue sets it: a feeder's duplex, the
+/// pixel type then the bit depth, the resolution, the paper (a flatbed's area or a feeder's
+/// document type), a feeder's odd and even pages' orientation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UnitWrite {
+    /// A feeder's `duplexScanningEnabled`; `None` for a flatbed.
+    pub duplex: Option<bool>,
+    /// `pixelDataType`.
+    pub pixel_type: u64,
+    /// `bitDepth`.
+    pub bit_depth: u64,
+    /// `resolution`, in dots per inch.
+    pub resolution: u64,
+    /// A flatbed's `scanArea`, in its measurement unit; `None` for a feeder.
+    pub scan_area: Option<UnitRect>,
+    /// A feeder's `documentType`; `None` for a flatbed, and for a feeder supporting no type whose
+    /// size the backend states.
+    pub document_type: Option<u64>,
+    /// A feeder's `oddPageOrientation` and `evenPageOrientation`; `None` for a flatbed.
+    pub orientation: Option<u64>,
+}
+
+/// The most bytes a band may have, as the backend asks it of the device (`maxMemoryBandSize`).
+pub const BAND_BYTES: u32 = 1 << 20;
+
+/// How long the session waits for the framework, outside a caller's deadline.
+///
+/// Data, so the scripted framework's are milliseconds and its tests never wait out a real
+/// bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    /// How long a listing, and an open looking for its device, goes on after the browse's local
+    /// enumeration, for network scanners.
+    pub settle: Duration,
+    /// How long a request outside `open` waits for its callback (a select's answer), and a
+    /// cancelled scan for its end.
+    pub answer: Duration,
+    /// How long a device's close waits for its session's close.
+    pub close: Duration,
+    /// How long a call posted to the main thread waits for the main thread to run it.
+    pub post: Duration,
+}
+
+impl Bounds {
+    /// The real framework's: 2 s, 30 s, 5 s and 5 s.
+    pub const REAL: Bounds = Bounds {
+        settle: Duration::from_secs(2),
+        answer: Duration::from_secs(30),
+        close: Duration::from_secs(5),
+        post: Duration::from_secs(5),
+    };
+}
+
+/// One process's ImageCaptureCore, as the backend uses it: the browse, the session, the units,
+/// the scan, and the events its callbacks send.
+///
+/// The real one makes every call on the main thread (inline there, posted there from elsewhere),
+/// and its callbacks feed its events; each system's browses and devices send to it alone. A call
+/// that fails answers a [`ScanError`]; a request's answer comes as an event.
+pub(super) trait IcaSystem: Send {
+    /// The system's waits.
+    fn bounds(&self) -> Bounds;
+
+    /// A browse for scanners ([`BROWSE_MASK`]), its delegate set, started.
+    fn browse(&mut self) -> Result<BrowseRef, ScanError>;
+
+    /// The browse stopped, its delegate unset, the devices it found and nobody opened let go.
+    fn stop_browse(&mut self, browse: BrowseRef);
+
+    /// The next callback's event, waiting at most `wait` (the main run loop run meanwhile, on the
+    /// main thread); `None` once that has passed with none.
+    fn next_event(&mut self, wait: Duration) -> Option<IcaEvent>;
+
+    /// The device's delegate set and its session asked for (`requestOpenSession`), answered by
+    /// [`IcaEvent::SessionOpened`] then [`IcaEvent::Ready`].
+    fn open_session(&mut self, device: DeviceRef) -> Result<(), ScanError>;
+
+    /// The device's session closed (`requestCloseSession`), answered by
+    /// [`IcaEvent::SessionClosed`].
+    fn close_session(&mut self, device: DeviceRef);
+
+    /// The device's unit types (`availableFunctionalUnitTypes`), at most [`MAX_UNITS`].
+    fn unit_types(&mut self, device: DeviceRef) -> Result<Vec<u64>, ScanError>;
+
+    /// The selected unit (`selectedFunctionalUnit`) read whole, or `None` where there's none.
+    fn selected_unit(&mut self, device: DeviceRef) -> Result<Option<UnitProps>, ScanError>;
+
+    /// The unit of `unit_type` asked for (`requestSelectFunctionalUnit:`), answered by
+    /// [`IcaEvent::UnitSelected`].
+    fn select_unit(&mut self, device: DeviceRef, unit_type: u64) -> Result<(), ScanError>;
+
+    /// `write` set on the selected unit, in [`UnitWrite`]'s order.
+    fn write_unit(&mut self, device: DeviceRef, write: &UnitWrite) -> Result<(), ScanError>;
+
+    /// A memory-based scan asked for (`transferMode`, `maxMemoryBandSize` of `band_bytes`, then
+    /// `requestScan`), answered by [`IcaEvent::Band`]s and [`IcaEvent::ScanCompleted`].
+    fn request_scan(&mut self, device: DeviceRef, band_bytes: u32) -> Result<(), ScanError>;
+
+    /// The scan cancelled (`cancelScan`), answered by [`IcaEvent::ScanCompleted`].
+    fn cancel_scan(&mut self, device: DeviceRef);
+}
+
+#[cfg(feature = "fake")]
+pub(crate) mod fake_ica;
 
 #[cfg(all(test, target_os = "macos"))]
 mod against_the_bindings {

@@ -164,11 +164,6 @@ impl PageAssembler {
         })
     }
 
-    /// The page's format.
-    pub(super) fn format(&self) -> Format {
-        self.format
-    }
-
     /// The page's bytes once whole, for progress.
     pub(super) fn len(&self) -> usize {
         self.data.len()
@@ -596,7 +591,7 @@ mod tests {
         page.place(&first, &[0; 4]).expect("placed");
         assert!(!page.is_complete());
         assert_eq!((page.placed_bytes(), page.len()), (4, 6));
-        assert_eq!(page.format(), Format::Gray8);
+        assert_eq!(page.format, Format::Gray8);
         let err = page.finish().unwrap_err();
         assert_eq!(
             err,

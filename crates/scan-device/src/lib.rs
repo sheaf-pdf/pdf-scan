@@ -15,8 +15,8 @@
 //!
 //! # Devices and their ids
 //!
-//! A listing gives each device's [`DeviceInfo`]: its [`DeviceId`], its name, maker and model, and
-//! the [`Driver`] API it's reached through. An id is the driver's name and the driver's own id for
+//! A listing gives each device's [`DeviceInfo`]: its [`DeviceId`], its name, maker and model (each
+//! empty where the driver gives none), and the [`Driver`] API it's reached through. An id is the driver's name and the driver's own id for
 //! the device, `<driver>:<native id>`, compared whole and read by no one but the backend that
 //! made it. An app stores the `DeviceInfo` and gives it back to [`Backend::open`], which checks it
 //! against what the driver finds now: where it knowingly opens another device in the stored one's
@@ -42,8 +42,10 @@
 //! pages, an empty feeder is [`Done::FeederEmpty`]. The pages sent before an error are kept.
 //!
 //! A `send` waits while the channel is full, so a backend whose events nobody takes holds there,
-//! starting no next sheet, and its driver waits with it: pages never pile up past the bound, `n`
-//! events waiting untaken at most. A `send` that fails, the receiver gone, ends the batch at once
+//! starting no next sheet, and its driver waits with it where the driver waits for the backend:
+//! pages never pile up in the channel past the bound, `n` events waiting untaken at most. A
+//! driver that sends its pages without waiting for the backend isn't held so, and its backend's
+//! docs say what it does meanwhile. A `send` that fails, the receiver gone, ends the batch at once
 //! as [`Done::Cancelled`], with no sheet started after it.
 //!
 //! # Cancel and progress
@@ -52,7 +54,8 @@
 //! [`in_progress`], so an app names the version the trait does. The caller passes a
 //! [`Tracker`](in_progress::Tracker) and cancels the batch through a clone of it, from any thread.
 //! A backend checks it between sheets and never within one, so a cancel finishes the sheet in
-//! flight, front and back, feeds no more, and the batch ends as [`Done::Cancelled`]. The sheet in
+//! flight, front and back, feeds no more where the driver can stop its feeder between sheets (a
+//! backend whose driver can't says so in its docs), and the batch ends as [`Done::Cancelled`]. The sheet in
 //! flight's events still come after the cancel, and a backend held at a full channel never reaches
 //! its check, so the caller keeps taking events until the batch returns, or drops the receiver to
 //! end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes a tracker of
@@ -144,13 +147,17 @@
 //! - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore,
 //!   part of the system. Not yet wired to the framework: in this version listing and opening say
 //!   ImageCaptureCore isn't installed on every system, macOS included, once an id the backend
-//!   doesn't form has been refused, while its platform-independent parts are built and tested on
-//!   every system: its devices' ids (`ica:` and the framework's persistent id for each, its UUID
-//!   where it gives none; a name, and a maker and model the framework doesn't give left empty),
-//!   what a source can do from a functional unit's properties (a feeder's paper by document type),
-//!   pages assembled from a memory-based transfer's bands into the raw layout, every number in a
-//!   band checked first, and the framework's errors mapped. Builds on every system, its
-//!   dependencies macOS's alone.
+//!   doesn't form has been refused. The rest of the backend is built and tested on every system,
+//!   over a scripted framework: its devices' ids (`ica:` and the framework's persistent id for
+//!   each, its UUID where it gives none; a name, and a maker and model the framework doesn't give
+//!   left empty); a listing taken as a snapshot, since the framework's never ends, and a stored
+//!   device found again by its id; what each source can do, each functional unit selected and
+//!   read in turn (a feeder's paper by document type); a batch's settings set and read back for
+//!   [`Event::Applied`], pages assembled from a memory-based transfer's bands into the raw layout
+//!   (every number in a band checked first), sides inferred from the order, a cancel between
+//!   sheets, and the framework's errors mapped. ImageCaptureCore can't stop a feeder between
+//!   sheets, and as far as its documentation says doesn't wait for a held backend: the backend's
+//!   docs say what then. Builds on every system, its dependencies macOS's alone.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
@@ -235,7 +242,12 @@ mod image;
 mod page;
 #[cfg(any(feature = "twain", feature = "wia", feature = "ica"))]
 #[cfg_attr(
-    not(any(windows, test, all(feature = "wia", feature = "fake"))),
+    not(any(
+        windows,
+        test,
+        all(feature = "wia", feature = "fake"),
+        all(feature = "ica", feature = "fake")
+    )),
     allow(dead_code)
 )]
 mod page_caps;
