@@ -1,8 +1,10 @@
 # Development tasks. CI runs these same recipes, so a local `just ci` checks
-# what CI checks, but for two variables: CI's Ubuntu job sets
+# what CI checks, but for three variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
-# needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it. CI's Windows TWAIN job also runs the TWAIN,
+# needs libsane or sane.h fails where it would skip, and its macOS job sets
+# SCAN_DEVICE_REQUIRE_ICA=1, so a listing through ImageCaptureCore that
+# times out fails where it would say so. On Linux or macOS, set them for a
+# local run that matches it. CI's Windows TWAIN job also runs the TWAIN,
 # WIA, and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
 # `scan-device-twain-test`, `scan-device-wia-test`, `scan-device-clippy`,
 # `scan-worker-twain-test`, `scan-worker-wia-test`, `scan-worker-clippy`,

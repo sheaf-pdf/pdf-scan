@@ -135,5 +135,22 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# `tests/ica_system.rs` runs the main thread's run loop while another thread
+# lists through the `ica` backend, and stops it from a block posted to the
+# main queue, through these crates' safe calls: packages the `ica` feature
+# has in the graph already.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFRunLoop",
+] }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+
+# The real ImageCaptureCore, through a harness of its own, so its `main` is the
+# process's main thread, where the framework delivers, as a worker's is.
+[[test]]
+name = "ica_system"
+harness = false
+
 [lints]
 workspace = true

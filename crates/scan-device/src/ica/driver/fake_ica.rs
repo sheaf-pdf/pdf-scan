@@ -258,6 +258,9 @@ pub struct FakeIcaDevice {
     pub selected: Option<u64>,
     /// When the unasked select's answer comes.
     pub unasked: Unasked,
+    /// Whether the unasked select's answer comes with no unit and no error (the nil the header
+    /// says never comes, and scanline saw), the unit selected all the same.
+    pub unasked_nil: bool,
     /// How its session is answered.
     pub session: FakeSession,
     /// How a select of each unit type is answered, where not [`FakeSelect::Answers`].
@@ -298,6 +301,7 @@ impl FakeIcaDevice {
             units: Vec::new(),
             selected: None,
             unasked: Unasked::BeforeReady,
+            unasked_nil: false,
             session: FakeSession::Opens,
             selects: Vec::new(),
             sheets: VecDeque::new(),
@@ -1042,19 +1046,19 @@ impl IcaSystem for FakeIcaSystem {
             .retain(|device, (found_by, _)| *found_by != browse || sessions.contains(device));
     }
 
-    fn next_event(&mut self, wait: Duration) -> Option<IcaEvent> {
+    fn next_event(&mut self, wait: Duration) -> Result<Option<IcaEvent>, ScanError> {
         let start = Instant::now();
         let end = start.checked_add(wait);
         loop {
             let now = Instant::now();
             if let Some(event) = self.take_due(now) {
-                return Some(event);
+                return Ok(Some(event));
             }
             if self.feed() {
                 continue;
             }
             if end.is_some_and(|end| now >= end) {
-                return None;
+                return Ok(None);
             }
             let next_due = self.queue.first().map(|queued| queued.due);
             let until = match (next_due, end) {
@@ -1070,20 +1074,26 @@ impl IcaSystem for FakeIcaSystem {
     fn open_session(&mut self, device: DeviceRef) -> Result<(), ScanError> {
         self.record(FakeCall::OpenSession(device));
         let index = self.index(device)?;
-        let (session, unasked, selected) = {
+        let (session, unasked, unasked_nil, selected) = {
             let mut state = lock(&self.state);
             let scripted = &mut state.devices[index];
             scripted.reset();
             (
                 scripted.script.session.clone(),
                 scripted.script.unasked,
+                scripted.script.unasked_nil,
                 scripted.selected,
             )
         };
         self.sessions.insert(device);
         let unasked_select = |system: &mut FakeIcaSystem| {
             if let Some(unit_type) = selected {
-                system.answer_select(device, index, unit_type, FakeSelect::Answers);
+                let answer = if unasked_nil {
+                    FakeSelect::Nil
+                } else {
+                    FakeSelect::Answers
+                };
+                system.answer_select(device, index, unit_type, answer);
             }
         };
         match session {
@@ -1116,14 +1126,16 @@ impl IcaSystem for FakeIcaSystem {
         Ok(())
     }
 
-    fn close_session(&mut self, device: DeviceRef) {
+    fn close_session(&mut self, device: DeviceRef) -> bool {
         self.record(FakeCall::CloseSession(device));
-        if self.sessions.remove(&device) {
-            self.now(IcaEvent::SessionClosed {
-                device,
-                error: None,
-            });
+        if !self.sessions.remove(&device) {
+            return false;
         }
+        self.now(IcaEvent::SessionClosed {
+            device,
+            error: None,
+        });
+        true
     }
 
     fn unit_types(&mut self, device: DeviceRef) -> Result<Vec<u64>, ScanError> {

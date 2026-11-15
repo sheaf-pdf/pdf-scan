@@ -146,12 +146,12 @@ fn snapshot(
             }
             break;
         }
-        if let Some(event) = system.next_event(until(now, &[settled, end])) {
+        if let Some(event) = system.next_event(until(now, &[settled, end]))? {
             browsing.take(event)?;
         }
     }
     for _ in 0..MAX_DRAIN {
-        let Some(event) = system.next_event(Duration::ZERO) else {
+        let Some(event) = system.next_event(Duration::ZERO)? else {
             break;
         };
         browsing.take(event)?;
@@ -237,7 +237,7 @@ fn find(
                 ScanError::TimedOut
             });
         }
-        let Some(event) = system.next_event(until(now, &[settled, end])) else {
+        let Some(event) = system.next_event(until(now, &[settled, end]))? else {
             continue;
         };
         if let Some(index) = browsing.take(event)? {
@@ -274,13 +274,14 @@ impl IcaDevice {
     /// The device's next event, waiting at most `wait`, the others' dropped: `None` once that
     /// has passed with none. [`ScanError::Gone`] where the device was removed (by its own
     /// delegate's word or its browse's) or its session closed unasked; [`ScanError::Driver`]
-    /// where one of its callbacks, or its browse's, panicked.
+    /// where one of its callbacks, or its browse's, panicked, or where the wait can't be served
+    /// (on the main thread, from inside a block of the main queue).
     pub(super) fn next(&mut self, wait: Duration) -> Result<Option<IcaEvent>, ScanError> {
         self.live()?;
         let end = end_of(Instant::now(), wait);
         loop {
             let left = until(Instant::now(), &[end]);
-            let Some(event) = self.system.next_event(left) else {
+            let Some(event) = self.system.next_event(left)? else {
                 return Ok(None);
             };
             let origin = event.origin();
@@ -356,30 +357,37 @@ impl IcaDevice {
         }
     }
 
-    /// The session closed, waiting at most [`Bounds::close`] for the framework's word, and the
-    /// browse stopped, which lets the device go.
+    /// The session closed, waiting at most [`Bounds::close`] for the framework's word where the
+    /// system says it comes (not where the close was posted off the main thread, so a drop never
+    /// blocks), and the browse stopped, which lets the device go.
     fn close(&mut self) {
         if self.session && !self.gone {
             self.session = false;
-            self.system.close_session(self.device);
-            let end = end_of(Instant::now(), self.bounds.close);
-            loop {
-                let left = until(Instant::now(), &[end]);
-                if left.is_zero() {
-                    break;
-                }
-                match self.system.next_event(left) {
-                    Some(IcaEvent::SessionClosed { device, .. } | IcaEvent::Removed { device })
-                        if device == self.device =>
-                    {
-                        break;
-                    }
-                    Some(_) => {}
-                    None => break,
-                }
+            if self.system.close_session(self.device) {
+                self.closed();
             }
         }
         self.system.stop_browse(self.browse);
+    }
+
+    /// The session's close waited for, at most [`Bounds::close`].
+    fn closed(&mut self) {
+        let end = end_of(Instant::now(), self.bounds.close);
+        loop {
+            let left = until(Instant::now(), &[end]);
+            if left.is_zero() {
+                return;
+            }
+            match self.system.next_event(left) {
+                Ok(Some(IcaEvent::SessionClosed { device, .. } | IcaEvent::Removed { device }))
+                    if device == self.device =>
+                {
+                    return;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return,
+            }
+        }
     }
 }
 

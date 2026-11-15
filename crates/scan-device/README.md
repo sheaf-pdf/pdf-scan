@@ -15,12 +15,13 @@ drivers, encoded through the `serde` feature.
 
 Each driver API (SANE, TWAIN, WIA, ImageCaptureCore, ...) is a backend behind the same two traits, each behind
 a feature of its own. This version has the model, a scripted backend for tests, SANE's scanners on Unix-like
-systems, TWAIN's and WIA 2.0's scanners on Windows, and an ImageCaptureCore backend for macOS, tested over a
-scripted framework and not yet wired to the real one.
+systems, TWAIN's and WIA 2.0's scanners on Windows, and ImageCaptureCore's scanners on macOS, tested over a
+scripted framework and through the real one with no scanner, and not yet on a device.
 
 Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
 once the Windows backends are complete. `#![deny(unsafe_code)]`, with `unsafe` confined strictly to `wia/com.rs`
-on Windows for `IWiaDevMgr2` / `IWiaTransferCallback` / `IStream` COM vtables.
+on Windows for `IWiaDevMgr2` / `IWiaTransferCallback` / `IStream` COM vtables, and to `ica/objc.rs` on macOS for
+ImageCaptureCore's classes and delegates through objc2.
 
 ## Features
 
@@ -78,10 +79,14 @@ None is on by default.
   8/16-bit `WIA_RAW_HEADER` transfers into the checked raw layout (or passes `Png`/`Jpeg`/`Tiff`/`Bmp` through
   as `Pixels::Encoded`), pairs `FRONT_FIRST` and `BACK_FIRST` duplex sides, cancels between sheets (`S_FALSE`
   plus `WIA_CMD_STOP_FEEDER`), and maps both the Windows SDK and Microsoft Learn `HRESULT` error tables.
-- `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore, part of the system.
-  Not yet wired to the framework: in this version listing and opening report `ScanError::NotInstalled` on every
-  system, macOS included, after refusing an id it doesn't form (`ScanError::BadId`). The rest of the backend is
-  built and tested on every system over a scripted ImageCaptureCore: ids of `ica:` and the framework's
+- `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore, part of the system,
+  through objc2's bindings. The framework delivers to the main thread, so the backend makes every call to it
+  there, whoever calls it: on the main thread (a worker's `main`) it runs the main run loop while it waits for a
+  callback; on another thread it posts its calls to the main queue, so the main thread must be running its run
+  loop, and says so as `ScanError::Driver` within 5 s where it isn't; from a block on the main queue, which can't
+  then be served, it says so at once. Off macOS, listing and opening report `ScanError::NotInstalled` after
+  refusing an id it doesn't form (`ScanError::BadId`). Tested on every system over a scripted ImageCaptureCore,
+  and on macOS through the real framework with no scanner; unverified on a device: ids of `ica:` and the framework's
   persistent id (its UUID where it gives none), names as the framework gives them and maker and model empty,
   since it gives neither; a listing taken as a snapshot, 2 s after the attached devices are all found (the
   framework's listing never ends), and a stored device found again by its id, `Gone` by the same rule; each

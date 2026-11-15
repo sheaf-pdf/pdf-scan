@@ -1,12 +1,14 @@
 //! The ImageCaptureCore backend: scanners on macOS, through Apple's ImageCaptureCore framework,
 //! which is part of the system.
 //!
-//! **Not yet wired to the framework.** In this version [`IcaBackend::new`]'s listing and opening
-//! report [`ScanError::NotInstalled`] on every system, macOS included, once an id it doesn't form
-//! has been refused as [`ScanError::BadId`]; off macOS, where there's no ImageCaptureCore, that
-//! stays its answer. Everything below the Objective-C side is built, and tested on every system
-//! over a scripted ImageCaptureCore (behind the `fake` feature, hidden): the listing and the open,
-//! what a source can do, the settings, the batch and its pages, the errors.
+//! On macOS [`IcaBackend::new`] lists and opens through the framework, every call and callback on
+//! the main thread ([The main thread](#the-main-thread), below). Off macOS, where there's no
+//! ImageCaptureCore, listing and opening report [`ScanError::NotInstalled`], once an id the
+//! backend doesn't form has been refused as [`ScanError::BadId`]. Everything above the
+//! Objective-C side is tested on every system over a scripted ImageCaptureCore (behind the `fake`
+//! feature, hidden): the listing and the open, what a source can do, the settings, the batch and
+//! its pages, the errors. **Unverified on a device:** nothing here has met a scanner yet, so what
+//! the framework's documentation leaves open is said below where the backend meets it.
 //!
 //! # Devices and their ids
 //!
@@ -136,33 +138,114 @@
 //! the code. The framework has no code for a jam, a double feed or an open cover, so those come as
 //! [`ScanError::Driver`] too.
 //!
+//! # The main thread
+//!
+//! ImageCaptureCore delivers the callbacks the backend uses on the main thread, through its run
+//! loop: Apple's documentation says so of a session's and a device's readiness
+//! (<https://developer.apple.com/documentation/imagecapturecore/icdevice/requestopensession()>),
+//! and the SDK's header of the device's delegate, "unless otherwise noted"
+//! (<https://docs.rs/objc2-image-capture-core/0.3.2/objc2_image_capture_core/trait.ICDeviceDelegate.html>);
+//! the device browser's delegate is taken as the same, its header saying nothing of a thread.
+//! So the backend can't start a thread of its own for the framework, as other backends do for
+//! their driver's: whoever calls it, every call it makes to the framework is made on the main
+//! thread.
+//!
+//! - **Called on the main thread** (a worker's `main`), it runs the main run loop's default mode
+//!   while it waits for a callback, in slices of at most 50 ms, taking each callback's event
+//!   between them. Other sources in that mode (an app's windows) run inside the call then too.
+//! - **Called on another thread,** it posts each call to the main queue and waits at most 5 s for
+//!   the main thread to run it, and takes the callbacks' events as they come. So the main thread
+//!   must be running its run loop meanwhile (an app's, or `CFRunLoopRun`); where it isn't (blocked
+//!   in a `join`, say), the call is [`ScanError::Driver`] saying so. A call given up on is never
+//!   run late: the call posted and its caller agree which of them has it, so nothing is opened or
+//!   started with nobody to take it. A call posted to a main thread that never serves its queue
+//!   is never run, and what it holds is leaked.
+//! - **Called on the main thread from inside a block of the main queue** (work queued to the main
+//!   queue, or on Swift's main actor), the main queue can't be served until the block returns, so
+//!   no callback could come: the backend finds so at once (the main queue left unserved, or the
+//!   run loop having nothing to run) and answers [`ScanError::Driver`] rather than wait out its
+//!   deadline.
+//!
+//! So an app calls this backend from a worker process's `main`, as `scan-worker`'s `serve` does,
+//! or, in its own process, on the main thread outside the main queue's blocks, or from another
+//! thread while the main thread runs its run loop; never from a block on the main queue. Between
+//! calls nothing runs the main run loop for the backend: a callback that comes then (a device
+//! removed, its session closed by its module) waits in the main queue for the next call, which
+//! takes it first. Unverified on a device: that a session survives the main thread idle between
+//! calls.
+//!
+//! A device dropped on the main thread closes its session there, waiting at most 5 s for the
+//! framework's word, then stops the browse that found it; dropped on another thread, its close is
+//! posted to the main queue and not waited for, so a drop never blocks, and its browse is stopped
+//! once the close has had those 5 s.
+//!
+//! Every framework object the backend uses (a device browser, a scanner device, and the delegate
+//! set on each, which the framework doesn't retain) is made, used and let go on the main thread,
+//! kept there beside the numbers the rest of the backend holds, so the backend and its devices are
+//! `Send` with nothing of the framework's in them. A callback only reads what it's handed into
+//! plain data: a nil where the framework's header promises an object is taken as absent, a band's
+//! buffer past 64 MiB isn't copied, and a panic in a callback is caught there and reported as
+//! [`ScanError::Driver`], never unwound into the framework. An Objective-C exception the
+//! framework throws isn't caught: it ends the process (in a worker, a crash its client reports),
+//! and every value the backend sets is one the unit listed.
+//!
 //! # Sources
 //!
 //! The framework's facts here are from Apple's documentation
 //! (<https://developer.apple.com/documentation/imagecapturecore>) and the SDK's headers as
 //! `objc2-image-capture-core` gives them (<https://docs.rs/objc2-image-capture-core/0.3.2/>).
 //! A session's order, and a select's answer matched by its unit's type, follow scanline's (MIT,
-//! Copyright (c) 2025 by Scott J. Kleper, <https://github.com/klep/scanline>), in our own words.
+//! Copyright (c) 2025 by Scott J. Kleper, <https://github.com/klep/scanline>), in our own words;
+//! so does the main thread's part, its calls all made on the main thread while it runs its run
+//! loop. When Core Foundation's run loop serves the main queue is read from its open source
+//! (`CFRunLoop.c`, <https://github.com/swiftlang/swift-corelibs-foundation>), and objc2's and
+//! dispatch2's behaviour from their docs (<https://docs.rs/objc2/0.6.5/>,
+//! <https://docs.rs/dispatch2/0.3.1/>).
 
 use std::time::Duration;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod batch;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod caps;
 #[allow(dead_code)]
 mod driver;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod error;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod id;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+mod main_thread;
+#[cfg(target_os = "macos")]
+mod objc;
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod pixels;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod session;
-#[cfg_attr(not(any(test, feature = "fake")), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod settings;
 
 /// The scripted ImageCaptureCore, for this crate's integration tests and the test worker:
@@ -191,9 +274,11 @@ pub mod fake_ica {
 
 /// The ImageCaptureCore scanner backend (`ica:` ids).
 ///
-/// Not yet wired to the framework: [`IcaBackend::new`]'s listing and opening report
-/// [`ScanError::NotInstalled`] on every system for now, after refusing an id it doesn't form; see
-/// [the module documentation](self).
+/// On macOS it reaches the framework on the main thread, whichever thread calls it: it's called
+/// on the main thread (outside the main queue's blocks), as a worker's `main` does, or from
+/// another thread while the main thread runs its run loop ([the module
+/// documentation](self#the-main-thread)). Off macOS, listing and opening report
+/// [`ScanError::NotInstalled`], after refusing an id it doesn't form.
 #[derive(Default)]
 pub struct IcaBackend {
     /// The scripted framework this backend runs over, where it was made from one.
@@ -201,7 +286,7 @@ pub struct IcaBackend {
     fake: Option<driver::fake_ica::FakeIcaHandle>,
     /// The system its listings browse on, made at the first and kept, so a late event of one
     /// listing meets the next and is dropped there.
-    #[cfg(feature = "fake")]
+    #[cfg(any(target_os = "macos", feature = "fake"))]
     listing: Option<Box<dyn driver::IcaSystem>>,
 }
 
@@ -228,6 +313,8 @@ impl IcaBackend {
     }
 }
 
+/// What listing and opening answer where there's no ImageCaptureCore.
+#[cfg(not(target_os = "macos"))]
 fn not_installed() -> ScanError {
     ScanError::NotInstalled {
         what: error::ICA.to_owned(),
@@ -241,8 +328,19 @@ impl Backend for IcaBackend {
             let system = self.listing.get_or_insert_with(|| Box::new(fake.system()));
             return session::list(system.as_mut(), deadline);
         }
-        let _ = deadline;
-        Err(not_installed())
+        #[cfg(target_os = "macos")]
+        let listed = {
+            let system = self
+                .listing
+                .get_or_insert_with(|| Box::new(objc::MacSystem::new()));
+            session::list(system.as_mut(), deadline)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let listed = {
+            let _ = deadline;
+            Err(not_installed())
+        };
+        listed
     }
 
     fn open(&mut self, stored: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
@@ -252,8 +350,15 @@ impl Backend for IcaBackend {
             // A system of the device's own, which it keeps.
             return session::open(Box::new(fake.system()), stored, deadline);
         }
-        let _ = deadline;
-        Err(not_installed())
+        // A system of the device's own, which it keeps.
+        #[cfg(target_os = "macos")]
+        let opened = session::open(Box::new(objc::MacSystem::new()), stored, deadline);
+        #[cfg(not(target_os = "macos"))]
+        let opened = {
+            let _ = deadline;
+            Err(not_installed())
+        };
+        opened
     }
 }
 
@@ -296,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn listing_and_opening_say_imagecapturecore_is_not_installed() {
         let mut backend = IcaBackend::default();
         let not_installed = ScanError::NotInstalled {

@@ -145,19 +145,23 @@
 //!   system; off Windows, listing and opening say WIA isn't installed.
 //!
 //! - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore,
-//!   part of the system. Not yet wired to the framework: in this version listing and opening say
-//!   ImageCaptureCore isn't installed on every system, macOS included, once an id the backend
-//!   doesn't form has been refused. The rest of the backend is built and tested on every system,
-//!   over a scripted framework: its devices' ids (`ica:` and the framework's persistent id for
-//!   each, its UUID where it gives none; a name, and a maker and model the framework doesn't give
-//!   left empty); a listing taken as a snapshot, since the framework's never ends, and a stored
-//!   device found again by its id; what each source can do, each functional unit selected and
-//!   read in turn (a feeder's paper by document type); a batch's settings set and read back for
+//!   part of the system, through objc2's bindings. ImageCaptureCore delivers to the main thread,
+//!   so the backend makes every call to it there, whoever calls the backend: called on the main
+//!   thread (a worker's `main`) it runs the main run loop while it waits, and called on another
+//!   it posts its calls to the main queue, so the main thread must be running its run loop. Its
+//!   devices' ids are `ica:` and the framework's persistent id for each (its UUID where it gives
+//!   none), with a name, and a maker and model the framework doesn't give left empty; a listing
+//!   is taken as a snapshot, since the framework's never ends, and a stored device found again by
+//!   its id. What each source can do is read by selecting each functional unit in turn (a
+//!   feeder's paper by document type); a batch's settings are set and read back for
 //!   [`Event::Applied`], pages assembled from a memory-based transfer's bands into the raw layout
-//!   (every number in a band checked first), sides inferred from the order, a cancel between
+//!   (every number in a band checked first), sides inferred from the order, a cancel made between
 //!   sheets, and the framework's errors mapped. ImageCaptureCore can't stop a feeder between
 //!   sheets, and as far as its documentation says doesn't wait for a held backend: the backend's
-//!   docs say what then. Builds on every system, its dependencies macOS's alone.
+//!   docs say what then. Tested on every system over a scripted framework, and on macOS through
+//!   the real one with no scanner; unverified on a device. Builds on every system, its
+//!   dependencies macOS's alone; off macOS, listing and opening say ImageCaptureCore isn't
+//!   installed.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
@@ -246,7 +250,8 @@ mod page;
         windows,
         test,
         all(feature = "wia", feature = "fake"),
-        all(feature = "ica", feature = "fake")
+        all(feature = "ica", feature = "fake"),
+        all(feature = "ica", target_os = "macos")
     )),
     allow(dead_code)
 )]

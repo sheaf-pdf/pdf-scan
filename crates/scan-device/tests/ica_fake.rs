@@ -3,7 +3,8 @@
 //! `TimedOut` where the local enumeration never ends, duplicates, a late event of an earlier
 //! listing), opens (found, `Gone` at the settle, `TimedOut`, a busy or refused session, a session
 //! never ready), caps (a flatbed and a duplex feeder, the unit selected back, the unasked select
-//! and an answer of another type never taken, a nil answer, a select never answered), and
+//! and an answer of another type never taken, a nil answer, a nil unasked answer of another
+//! unit never taken, a select never answered), and
 //! batches (a flatbed's page, a feeder's simplex and duplex sheets, each format with padded rows
 //! and either byte order, every page `pattern`'s byte for byte, sheets numbered from
 //! `first_sheet`, a cancel on a rendezvous channel, a cancel finding the next sheet feeding, the
@@ -514,6 +515,34 @@ fn the_unasked_select_and_an_answer_of_another_type_are_never_taken_as_the_answe
                 FakeCall::SelectUnit(UNIT_DOCUMENT_FEEDER),
                 FakeCall::SelectUnit(UNIT_POSITIVE_TRANSPARENCY)
             ]
+        );
+    }
+}
+
+#[test]
+fn a_nil_unasked_answer_of_another_unit_is_never_taken_for_the_unit_asked() {
+    for unasked in [Unasked::BeforeReady, Unasked::AfterReady] {
+        let fake = FakeIcaHandle::new();
+        // A transparency unit selected as the device is instantiated, its answer nil (no unit,
+        // no error), after the device is ready coming while the flatbed's select waits: the
+        // selected unit read then is the transparency unit's, not the flatbed asked for.
+        let mut transparency = flatbed(&[1200], DEPTHS, 1.0, 1.0);
+        transparency.unit_type = UNIT_POSITIVE_TRANSPARENCY;
+        let mut device = FakeIcaDevice::new(scanner_props(OFFICE, "Office scanner"))
+            .with_unit(transparency)
+            .with_unit(flatbed(RESOLUTIONS, DEPTHS, 1.1, 0.9))
+            .with_unit(feeder(&[300], &[8], &[DOCUMENT_A4], true, 8.5, 14.0));
+        device.unasked = unasked;
+        device.unasked_nil = true;
+        fake.add_device(device);
+        let mut device = opened(&fake);
+        let caps = device.caps().expect("caps");
+        let sources: Vec<_> = caps.sources.iter().map(|source| source.source).collect();
+        assert_eq!(sources, [Source::Flatbed, Source::Feeder], "{unasked:?}");
+        assert_eq!(
+            caps.sources[0].resolutions,
+            scan_device::Resolutions::List(vec![50, 75, 100, 150, 300]),
+            "{unasked:?}"
         );
     }
 }

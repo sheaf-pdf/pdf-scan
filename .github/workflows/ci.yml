@@ -15,7 +15,8 @@ env:
 
 # Each step runs a recipe from the justfile, so `just ci` locally checks the
 # same things; the Ubuntu job also sets the two SANE_DL_REQUIRE_* variables
-# (below), which a local run on Linux sets to match it.
+# and the macOS job SCAN_DEVICE_REQUIRE_ICA (below), which a local run on
+# Linux or macOS sets to match it.
 jobs:
   check:
     name: Rust checks (${{ matrix.os }})
@@ -49,6 +50,13 @@ jobs:
           done
           echo "SANE_DL_REQUIRE_LIBSANE=1" >> "$GITHUB_ENV"
           echo "SANE_DL_REQUIRE_HEADER=1" >> "$GITHUB_ENV"
+      # On macOS, ImageCaptureCore is part of the system: the ica backend's
+      # listings through it, with no scanner on the runner, must answer before
+      # their deadline (the framework's callbacks coming through the backend's
+      # run of the main run loop), rather than say they timed out.
+      - name: Require ImageCaptureCore (macOS)
+        if: runner.os == 'macOS'
+        run: echo "SCAN_DEVICE_REQUIRE_ICA=1" >> "$GITHUB_ENV"
       - name: Check formatting
         run: just fmt
       - name: Clippy
@@ -203,16 +211,17 @@ jobs:
       - name: Test
         run: just twain-dsm-msrv
 
-  # Both Unix (the SANE backend) and Windows (the TWAIN and WIA backends)
-  # branches of scan-device build and run their pure and fake tests on its
-  # minimum Rust; tests that need libsane or TWAIN's sample source say they
-  # skipped.
+  # The Unix (the SANE backend), Windows (the TWAIN and WIA backends) and
+  # macOS (the ImageCaptureCore backend's glue, whose only build on this Rust
+  # is here) branches of scan-device build and run their pure and fake tests
+  # on its minimum Rust, and on macOS its listings through the real framework;
+  # tests that need libsane or TWAIN's sample source say they skipped.
   scan-device-msrv:
     name: scan-device on its minimum Rust (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

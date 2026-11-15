@@ -559,16 +559,19 @@ pub(super) trait IcaSystem: Send {
     fn stop_browse(&mut self, browse: BrowseRef);
 
     /// The next callback's event, waiting at most `wait` (the main run loop run meanwhile, on the
-    /// main thread); `None` once that has passed with none.
-    fn next_event(&mut self, wait: Duration) -> Option<IcaEvent>;
+    /// main thread); `None` once that has passed with none. [`ScanError::Driver`] where the wait
+    /// can't be served: on the main thread, from inside a block of the main queue.
+    fn next_event(&mut self, wait: Duration) -> Result<Option<IcaEvent>, ScanError>;
 
     /// The device's delegate set and its session asked for (`requestOpenSession`), answered by
     /// [`IcaEvent::SessionOpened`] then [`IcaEvent::Ready`].
     fn open_session(&mut self, device: DeviceRef) -> Result<(), ScanError>;
 
     /// The device's session closed (`requestCloseSession`), answered by
-    /// [`IcaEvent::SessionClosed`].
-    fn close_session(&mut self, device: DeviceRef);
+    /// [`IcaEvent::SessionClosed`]: true where that answer is to be waited for; false where
+    /// nothing is (off the main thread the close is posted and not waited for, so a device's drop
+    /// never blocks; or the device has no session).
+    fn close_session(&mut self, device: DeviceRef) -> bool;
 
     /// The device's unit types (`availableFunctionalUnitTypes`), at most [`MAX_UNITS`].
     fn unit_types(&mut self, device: DeviceRef) -> Result<Vec<u64>, ScanError>;
