@@ -19,6 +19,7 @@
 mod sane;
 mod scenarios;
 mod twain;
+mod wia;
 
 use std::{
     env, fs,
@@ -61,6 +62,8 @@ fn main() -> ExitCode {
         "sane" => sane::main(&args[1..]),
         "twain" => twain::main(&args[1..]),
         "twain-fake" => twain::fake_main(&args[1..]),
+        "wia" => wia::main(&args[1..]),
+        "wia-fake" => wia::fake_main(&args[1..]),
         "noisy-stdout" => {
             let inner = scenarios::backend("feeder", count).expect("feeder scenario");
             scan_worker::serve(vec![Box::new(twain::NoisyBackend(inner))])

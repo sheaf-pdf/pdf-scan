@@ -20,5 +20,8 @@ Done: S0 slice 7, the TWAIN spike, on the Windows machine, merged (pull request 
 Done: S0 slice 8, `twain-dsm`, on the Windows machine, merged (pull request #4); its plan is in
 [`archive/slices/s0-8-twain-dsm.md`](../archive/slices/s0-8-twain-dsm.md).
 
-Running on `s0-9-twain-backend`: [`s0-9-twain-backend.md`](s0-9-twain-backend.md), S0 slice 9 (`twain-dsm`
-0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker` Windows hardening).
+Done: S0 slice 9, `scan-device`'s `twain` backend, 32-bit worker, and Windows hardening, merged (pull request
+#11); its plan is in [`archive/slices/s0-9-twain-backend.md`](../archive/slices/s0-9-twain-backend.md).
+
+Running on `s0-10-wia-backend`: [`s0-10-wia-backend.md`](s0-10-wia-backend.md), S0 slice 10 (`scan-device`'s
+`wia` backend and `scan-worker`'s `wia` feature).

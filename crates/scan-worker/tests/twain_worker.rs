@@ -161,6 +161,22 @@ mod windows_live {
         std::env::var("TWAIN_DSM_REQUIRE_SAMPLE").is_ok_and(|v| v == "1")
     }
 
+    fn rustc_has_i686_target() -> bool {
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let Ok(out) = Command::new(rustc).args(["--print", "sysroot"]).output() else {
+            return true;
+        };
+        if !out.status.success() {
+            return true;
+        }
+        let sysroot = String::from_utf8_lossy(&out.stdout);
+        Path::new(sysroot.trim())
+            .join("lib")
+            .join("rustlib")
+            .join("i686-pc-windows-msvc")
+            .is_dir()
+    }
+
     /// Builds (or uses `SCAN_WORKER_I686_EXE`) the 32-bit `i686-pc-windows-msvc` test worker
     /// binary so a 64-bit `Client` can drive both 64-bit and 32-bit TWAIN workers in one test.
     ///
@@ -179,6 +195,9 @@ mod windows_live {
                         path.display()
                     );
                     return Ok(path);
+                }
+                if !rustc_has_i686_target() {
+                    return Err("i686-pc-windows-msvc target is not installed".to_owned());
                 }
                 let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
                 let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("i686-scan-worker");

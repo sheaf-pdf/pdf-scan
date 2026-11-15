@@ -131,6 +131,16 @@
 //!   in a 32-bit process, so an app runs a 64-bit and a 32-bit worker process for them. Builds on
 //!   every system; off Windows, listing and opening say TWAIN isn't installed.
 //!
+//! - `wia`: `scan_device::wia::WiaBackend`, Windows Image Acquisition (WIA 2.0) scanners on
+//!   Windows, through `IWiaDevMgr2` over COM on a single-threaded apartment, reporting
+//!   [`ScanError::NotInstalled`] when the WIA service isn't available or off Windows. Its devices'
+//!   ids are `wia:` and WIA's `WIA_DIP_DEV_ID` strings, a stored one opened after checking its
+//!   maker and model on the root item, with at most one device open per process so WSD drivers
+//!   never fault. A batch resets sticky driver processing, negotiates WIA properties in dependency
+//!   order and reads them back for [`Event::Applied`], transfers pages via `IWiaTransfer` into the
+//!   raw layout (or [`Pixels::Encoded`] when asked), and cancels between sheets. Builds on every
+//!   system; off Windows, listing and opening say WIA isn't installed.
+//!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
 //! # Example
@@ -192,13 +202,19 @@
 //! # Stability
 //!
 //! Provisional: 0.0.x and unpublished, while the model is tried against each driver API. It's
-//! frozen at 0.1.0 once a second one has been through it.
+//! frozen at 0.1.0 once the Linux and Windows ones have been through it.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 mod caps;
 mod device;
+#[cfg(any(feature = "twain", feature = "wia"))]
+#[cfg_attr(
+    not(any(windows, test, all(feature = "wia", feature = "fake"))),
+    allow(dead_code)
+)]
+mod dib;
 mod error;
 #[cfg(feature = "fake")]
 pub mod fake;
@@ -210,6 +226,8 @@ mod round_trip;
 pub mod sane;
 #[cfg(feature = "twain")]
 pub mod twain;
+#[cfg(feature = "wia")]
+pub mod wia;
 
 pub use caps::{Applied, Caps, Clamped, Paper, Resolutions, Settings, SizeMm, Source, SourceCaps};
 pub use device::{

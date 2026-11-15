@@ -41,11 +41,14 @@ app keeps `SIGPIPE` ignored, as Rust's runtime leaves it.
 - `twain`: `scan-device`'s TWAIN backend, `scan_worker::scan_device::twain::TwainBackend`, for an app's 64-bit
   and 32-bit TWAIN workers to serve. It turns on `scan-device`'s own `twain`; the rest of the library is the
   same with it or without.
-- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE and TWAIN
+- `wia`: `scan-device`'s WIA 2.0 backend, `scan_worker::scan_device::wia::WiaBackend`, for an app's Windows
+  WIA worker to serve (alone or beside `TwainBackend` in one worker binary). It turns on `scan-device`'s own
+  `wia`; the rest of the library is the same with it or without.
+- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE, TWAIN and WIA
   backends, and workers that break the protocol on purpose, for this crate's tests. Never for a shipped build:
-  its scenarios hang, crash and exit by design. It turns on `scan-device`'s own `fake`, `sane` and `twain`,
-  which then appear through the re-exported `scan_worker::scan_device`; the rest of the library is the same with
-  it or without.
+  its scenarios hang, crash and exit by design. It turns on `scan-device`'s own `fake`, `sane`, `twain` and
+  `wia`, which then appear through the re-exported `scan_worker::scan_device`; the rest of the library is the
+  same with it or without.
 
 Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
 together. `#![deny(unsafe_code)]`, with `unsafe` confined to `sys.rs` for OS descriptor/handle isolation,

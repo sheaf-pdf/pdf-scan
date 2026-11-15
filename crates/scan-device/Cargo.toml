@@ -6,8 +6,8 @@ rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "A device model for document scanners, one shape whatever driver API reaches them: devices listed and opened, what each can do, batches of pages in a checked raw layout, cancel and progress"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
-# Provisional: the model may change until a second driver API has been
-# through it, and then it's made ready to publish (keywords, categories,
+# Provisional: SANE, TWAIN, and WIA 2.0 are built against the model, and the
+# next slice freezes and prepares the package to publish (keywords, categories,
 # the package's contents, a changelog, and docs.rs metadata building every
 # feature, since none is on by default, come then).
 publish = false
@@ -39,13 +39,28 @@ sane = ["dep:sane-dl"]
 # The TWAIN backend, `scan_device::twain`: TWAIN's scanners on Windows,
 # TWAINDSM.dll loaded at run time, never linked.
 twain = ["dep:twain-dsm"]
+# The WIA backend, `scan_device::wia`: WIA 2.0 scanners on Windows, through COM
+# (`IWiaDevMgr2`).
+wia = ["dep:windows", "dep:windows-core"]
+
+[target.'cfg(windows)'.dependencies]
+# The `wia` backend's way to WIA 2.0 COM interfaces on Windows; private, so none
+# of their types is in this crate's API.
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Devices_ImageAcquisition",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }
+windows-core = { version = "0.62", optional = true }
 
 [dev-dependencies]
 # The crate's own tests, doctests included, take the fake backend, the serde
-# form and the SANE and TWAIN backends: a dev-dependency on the crate itself
+# form and the SANE, TWAIN and WIA backends: a dev-dependency on the crate itself
 # turns the features on for them alone, so a plain `cargo test` runs them,
 # while a build without the features has none of them in it.
-scan-device = { path = ".", features = ["fake", "serde", "sane", "twain"] }
+scan-device = { path = ".", features = ["fake", "serde", "sane", "twain", "wia"] }
 # A child process for each test of a fault that ends the process it runs in.
 rusty-fork.workspace = true
 # The serde form's tests write and read it as JSON.

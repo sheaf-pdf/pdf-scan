@@ -1,15 +1,36 @@
 # Status
 
-As of 2026-11-13.
+As of 2026-11-14.
 
-**S0 slice 9 (`twain-dsm` 0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker` Windows
-hardening) is built and code-reviewed on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`). **S0 slices 1,
-1a, 2, 3, 4, 5, 7 and 8 are merged** (pull requests #2, #7, #3, #6, #8, #9, #1 and #4, squashed; #5 recorded
-slice 8's close); slices 7, 8 and 9 from the Windows machine. It's a git repository at
-github.com/sheaf-pdf/pdf-scan (public; `master`).
+**S0 slice 10 (`scan-device`'s `wia` backend and `scan-worker`'s `wia` feature) is built on `s0-10-wia-backend`**
+(`slices/s0-10-wia-backend.md`). **S0 slices 1, 1a, 2, 3, 4, 5, 7, 8 and 9 are merged** (pull requests #2, #7, #3,
+#6, #8, #9, #1, #4 and #11, squashed; #5 recorded slice 8's close); slices 7, 8, 9 and 10 from the Windows machine.
+It's a git repository at github.com/sheaf-pdf/pdf-scan (public; `master`).
 
-- **Running: S0 slice 9, on `s0-9-twain-backend`** (`slices/s0-9-twain-backend.md`; 5 steps + 4-agent adversarial
-  code review fixed):
+- **Running: S0 slice 10, on `s0-10-wia-backend`** (`slices/s0-10-wia-backend.md`; 4 steps):
+  - `scan-device`'s `wia` backend (`scan_device::wia::WiaBackend` behind `feature = "wia"`, `windows = "0.62"` /
+    `windows-core = "0.62"` on Windows, `#![deny(unsafe_code)]` with `unsafe` confined strictly to `src/wia/com.rs`,
+    zero breaking changes to the model): dedicated STA thread (`CoInitializeEx(COINIT_APARTMENTTHREADED)`) with
+    `ComGuard` drop-last hygiene and per-session `OpenGate` (`Busy` on second open); `wia:<WIA_DIP_DEV_ID>` ids,
+    pre-COM `BadId` validation, `StiDeviceTypeScanner` filtering, `WIA_WSD_*` metadata fallbacks, and root-item
+    `(maker, model)` re-verification; bounded `IWiaItem2` tree discovery deduplicating `[Flatbed, Feeder]`, dynamic
+    `DATATYPE` -> `DEPTH` probing (16-bit gated on `WiaImgFmt_RAW`), and `EnumWIA_FORMAT_INFO` lookup with property
+    fallback; WDK dependency-ordered property negotiation, sticky processing resets, WSD non-zero `WIA_IPS_PAGES`
+    even-duplex multi-`Download` continuation, and 0-page `TYMED_CALLBACK` -> `TYMED_FILE` fallback; manual
+    `#[repr(C)]` `TransferCallbackCom` (rejecting `IAgileObject`, checking `owner_thread` and non-reentrant
+    `RestoreSink` / `SinkLease`, zeroing `*ppDestination` on `S_FALSE`) + `BoundedStream` (`512 MiB + 64 KiB`
+    checked `u64` cap); shared safe `dib.rs` (`BITMAPFILEHEADER` `bfOffBits`, `BI_RGB`, `16`/`32`-bit
+    `BI_BITFIELDS`) + 80-byte `WIA_RAW_HEADER` decoder across all five `Format`s + magic-checked `Pixels::Encoded`;
+    `FRONT_FIRST`/`BACK_FIRST` duplex pairing, mid-sheet-safe cancel + `WIA_CMD_STOP_FEEDER`, and dual SDK/Learn
+    `HRESULT` mapping (`0x80210015` disambiguated by operation context).
+  - `scan-worker` `wia` feature (`wia = ["scan-device/wia"]`), `scan-worker-fake` `wia` and `wia-fake` scenarios,
+    process-isolated `wia_worker.rs` tests (noisy `stdout` isolation, WSD duplex, mid-sheet cancel +
+    `WIA_CMD_STOP_FEEDER`, mid-batch jam page preservation, multi-backend `TwainBackend` + `WiaBackend` open routing,
+    and live OS 64-bit/`i686` workers), and `scan-device-wia-test` / `scan-worker-wia-test` wired into `justfile`
+    and `.github/workflows/ci.yml`.
+- **Done: S0 slice 9, `twain-dsm` 0.1.0-alpha.1, `scan-device`'s `twain` backend, 32-bit worker, and `scan-worker`
+  Windows hardening** (merged 2026-11-14 as pull request #11, squashed `9e1bf95`;
+  `archive/slices/s0-9-twain-backend.md`):
   - `twain-dsm` 0.1.0-alpha.1, ready to publish (`just twain-dsm-package`, Windows `just public-api` with 0 unsafe
     failures, `TEST-14`): `DG_IMAGE / DAT_IMAGELAYOUT`, `DG_CONTROL / DAT_STATUS` across states 4 to 7, caller
     parent windows (`Ui::ShownOwned`, `Source::settings_ui(Option<u64>)`) with canonical 32-bit `HWND` + `IsWindow`
@@ -101,9 +122,9 @@ github.com/sheaf-pdf/pdf-scan (public; `master`).
   `archive/slices/s0-2-seam-note.md`; docs only): SANE's rows from slice 1 and its probes, the two SANE unknowns
   answered, the raw layout fixed, and the model written down for slice 3, then revised by its code review (25
   findings fixed, BUG-7 deferred).
-- **Waiting on review:** S0 slices 1, 1a, 2, 3, 4, 5, 8, and 9 (each plan's "Decisions taken alone, for review"
+- **Waiting on review:** S0 slices 1, 1a, 2, 3, 4, 5, 8, 9, and 10 (each plan's "Decisions taken alone, for review"
   and security items). Also: `asks.md`, ask 5; UP-7 to UP-14, upstream reports; PL-1 to PL-3, ready to hand off
   on the maintainer's OK; PL-4, which first needs the maintainer's call on pdf-lint's "the interpreter stays
   out" line.
-- **Next:** S0 slice 6 (Linux fi-6130 hand check when hardware is at hand) and S0 slice 10 (`scan-device`'s
-  `wia` backend on Windows), then slice 11 (freezing `scan-device` and `scan-worker` at 0.1.0).
+- **Next:** S0 slice 11 (freezing `scan-device` and `scan-worker` at 0.1.0), plus S0 slice 6 (Linux fi-6130 hand
+  check) and S0 slice 12 (Windows hardware hand check) when hardware is at hand.

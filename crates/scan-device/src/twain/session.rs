@@ -46,11 +46,11 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Process-wide active session, shared by all live `TwainBackend`s and any open `TwainDevice`.
 static LOADED: Mutex<Weak<Session>> = Mutex::new(Weak::new());
 
-/// Holds the STA thread of a dropped `Session` that was still mid-DSM-call (`in_flight > 0`) at
-/// drop time. While `exited` is `false`, `twain_dsm`'s singleton `RunLock` is still held by that
-/// stuck call, so `shared()` returns `ScanError::TimedOut`; if the slow driver call eventually
-/// returns and exits `twain_dsm::run`, `shared()` joins the finished handle and spawns fresh.
-static DETACHED: Mutex<Option<(Arc<StaActivity>, JoinHandle<()>)>> = Mutex::new(None);
+/// Holds the STA threads of dropped `Session`s that were still mid-DSM-call (`in_flight > 0`) at
+/// drop time. While any detached STA thread has `exited == false`, `twain_dsm`'s singleton
+/// `RunLock` is still held by that call, so `shared(deadline)` waits up to `deadline` for it to
+/// exit (returning `ScanError::TimedOut` if still hung) before joining and spawning fresh.
+static DETACHED: Mutex<Vec<(Arc<StaActivity>, JoinHandle<()>)>> = Mutex::new(Vec::new());
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -63,6 +63,8 @@ struct StaActivity {
     in_flight: AtomicUsize,
     /// Set to `true` once `twain_dsm::run` returns on the STA thread (releasing `RunLock`).
     exited: AtomicBool,
+    exit_lock: Mutex<()>,
+    exit_cv: Condvar,
 }
 
 impl StaActivity {
@@ -70,6 +72,8 @@ impl StaActivity {
         StaActivity {
             in_flight: AtomicUsize::new(0),
             exited: AtomicBool::new(false),
+            exit_lock: Mutex::new(()),
+            exit_cv: Condvar::new(),
         }
     }
 
@@ -81,6 +85,35 @@ impl StaActivity {
     fn is_busy(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) > 0 && !self.exited.load(Ordering::Acquire)
     }
+
+    fn mark_exited(&self) {
+        let _guard = lock(&self.exit_lock);
+        self.exited.store(true, Ordering::Release);
+        self.exit_cv.notify_all();
+    }
+
+    fn wait_exited(&self, timeout: Duration) -> bool {
+        if self.exited.load(Ordering::Acquire) {
+            return true;
+        }
+        let start = Instant::now();
+        let mut guard = lock(&self.exit_lock);
+        while !self.exited.load(Ordering::Acquire) {
+            let rem = timeout.saturating_sub(start.elapsed());
+            if rem.is_zero() {
+                return false;
+            }
+            let (next, res) = self
+                .exit_cv
+                .wait_timeout(guard, rem)
+                .unwrap_or_else(PoisonError::into_inner);
+            guard = next;
+            if res.timed_out() {
+                return self.exited.load(Ordering::Acquire);
+            }
+        }
+        true
+    }
 }
 
 struct InFlightGuard<'a>(&'a StaActivity);
@@ -88,6 +121,18 @@ struct InFlightGuard<'a>(&'a StaActivity);
 impl Drop for InFlightGuard<'_> {
     fn drop(&mut self) {
         self.0.in_flight.fetch_sub(1, Ordering::Release);
+    }
+}
+
+struct StaExitGuard {
+    gate: Arc<GateSlot>,
+    activity: Arc<StaActivity>,
+}
+
+impl Drop for StaExitGuard {
+    fn drop(&mut self) {
+        self.gate.set(Gate::Dead);
+        self.activity.mark_exited();
     }
 }
 
@@ -158,49 +203,78 @@ impl core::fmt::Debug for Session {
     }
 }
 
-/// Returns the process-wide `Session`, spawning its STA thread lazily if none is running.
-pub(super) fn shared() -> Result<Arc<Session>, ScanError> {
-    let mut slot = lock(&LOADED);
-    if let Some(existing) = slot.upgrade()
-        && *lock(&existing.gate.state) != Gate::Dead
-    {
-        return Ok(existing);
-    }
+/// Returns the process-wide `Session`, spawning its STA thread lazily if none is running (and
+/// waiting up to `deadline` if a detached STA thread from a prior timed-out call is still winding
+/// down).
+pub(super) fn shared(deadline: Duration) -> Result<Arc<Session>, ScanError> {
+    let start = Instant::now();
+    loop {
+        let mut wait_for = Vec::new();
+        {
+            let mut slot = lock(&LOADED);
+            if let Some(existing) = slot.upgrade() {
+                if !existing.is_dead() {
+                    return Ok(existing);
+                }
+                if !existing.activity.exited.load(Ordering::Acquire) {
+                    wait_for.push(Arc::clone(&existing.activity));
+                }
+            }
 
-    {
-        let mut detached = lock(&DETACHED);
-        if let Some((act, handle)) = detached.take() {
-            if act.exited.load(Ordering::Acquire) {
-                let _ = handle.join();
-            } else {
-                *detached = Some((act, handle));
+            let mut detached = lock(&DETACHED);
+            let mut still_running = Vec::new();
+            for (act, handle) in detached.drain(..) {
+                if act.exited.load(Ordering::Acquire) {
+                    let _ = handle.join();
+                } else {
+                    wait_for.push(Arc::clone(&act));
+                    still_running.push((act, handle));
+                }
+            }
+            *detached = still_running;
+
+            if wait_for.is_empty() {
+                let session = Session::spawn()?;
+                *slot = Arc::downgrade(&session);
+                return Ok(session);
+            }
+        }
+
+        for act in wait_for {
+            let rem = deadline.saturating_sub(start.elapsed());
+            if !act.wait_exited(rem) {
                 return Err(ScanError::TimedOut);
             }
         }
     }
-
-    let session = Session::spawn()?;
-    *slot = Arc::downgrade(&session);
-    Ok(session)
 }
 
 impl Session {
+    pub(super) fn is_dead(&self) -> bool {
+        *lock(&self.gate.state) == Gate::Dead
+    }
+
     fn spawn() -> Result<Arc<Session>, ScanError> {
         let (startup_tx, startup_rx) =
             mpsc::sync_channel::<Result<twain_dsm::Remote<Request>, ScanError>>(1);
+        let gate = Arc::new(GateSlot::new());
         let activity = Arc::new(StaActivity::new());
+        let thread_gate = Arc::clone(&gate);
         let thread_activity = Arc::clone(&activity);
 
         let handle = thread::Builder::new()
             .name("scan-device-twain".to_owned())
             .spawn(move || {
+                let exit = StaExitGuard {
+                    gate: thread_gate,
+                    activity: thread_activity,
+                };
                 let run_res = twain_dsm::run::<Request, _>(|twain| {
                     if startup_tx.send(Ok(twain.remote())).is_err() {
                         return;
                     }
-                    sta_loop(twain, &thread_activity);
+                    sta_loop(twain, &exit.activity);
                 });
-                thread_activity.exited.store(true, Ordering::Release);
                 if let Err(run_err) = run_res {
                     let _ = startup_tx.send(Err(error::run(&run_err)));
                 }
@@ -210,7 +284,7 @@ impl Session {
         match startup_rx.recv() {
             Ok(Ok(remote)) => Ok(Arc::new(Session {
                 remote,
-                gate: Arc::new(GateSlot::new()),
+                gate,
                 activity,
                 thread: Mutex::new(Some(handle)),
             })),
@@ -393,10 +467,23 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Check `is_busy()` *before* posting `Request::Shutdown` so the STA thread's post-loop
+        // `drop(held)` (`CloseDSM`) isn't mistaken for a hung pre-shutdown request!
+        let busy = self.activity.is_busy();
         let _ = self.remote.post(Request::Shutdown);
         if let Some(handle) = lock(&self.thread).take() {
-            if self.activity.is_busy() {
-                *lock(&DETACHED) = Some((Arc::clone(&self.activity), handle));
+            if busy {
+                let mut detached = lock(&DETACHED);
+                let mut still_running = Vec::with_capacity(detached.len() + 1);
+                for (act, old_handle) in detached.drain(..) {
+                    if act.exited.load(Ordering::Acquire) {
+                        let _ = old_handle.join();
+                    } else {
+                        still_running.push((act, old_handle));
+                    }
+                }
+                still_running.push((Arc::clone(&self.activity), handle));
+                *detached = still_running;
             } else {
                 let _ = handle.join();
             }
@@ -663,23 +750,26 @@ fn sta_loop(twain: &twain_dsm::Twain<Request>, activity: &StaActivity) {
 }
 
 /// Processes one `Request` on the STA thread; returns `true` on `Request::Shutdown`.
+///
+/// `_in_flight` is dropped strictly *before* sending each request's completion reply (`reply`,
+/// `steps`, or `done`) so a caller that immediately drops `Session` upon receiving its reply never
+/// observes a stale `in_flight > 0` from the request that just completed.
 fn handle_request<'t>(
     twain: &'t twain_dsm::Twain<Request>,
     held: &mut Held<'t>,
     req: Request,
     activity: &StaActivity,
 ) -> bool {
-    if matches!(req, Request::Shutdown) {
-        return true;
-    }
-    let _in_flight = activity.enter();
     match req {
         Request::List { load, state, reply } => {
-            if state
-                .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let res = handle_list(twain, held, load);
+            let to_send = {
+                let _in_flight = activity.enter();
+                state
+                    .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
+                    .ok()
+                    .map(|_| handle_list(twain, held, load))
+            };
+            if let Some(res) = to_send {
                 let _ = reply.send(res);
             }
             false
@@ -693,12 +783,20 @@ fn handle_request<'t>(
             gate,
             reply,
         } => {
-            if state
-                .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let res = handle_open(twain, held, load, &stored, &expected_name, delivery);
-                finish_sta_open(held, res, &state, &gate, &reply);
+            let to_send = {
+                let _in_flight = activity.enter();
+                if state
+                    .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    let res = handle_open(twain, held, load, &stored, &expected_name, delivery);
+                    commit_sta_open(held, res, &state, &gate)
+                } else {
+                    None
+                }
+            };
+            if let Some(res) = to_send {
+                let _ = reply.send(res);
             }
             false
         }
@@ -706,10 +804,13 @@ fn handle_request<'t>(
             native_transfer,
             reply,
         } => {
-            let res = with_open_source(twain, held, |source| {
-                let res = caps::read(&mut LiveSource(&source), native_transfer);
-                (Some(source), res)
-            });
+            let res = {
+                let _in_flight = activity.enter();
+                with_open_source(twain, held, |source| {
+                    let res = caps::read(&mut LiveSource(&source), native_transfer);
+                    (Some(source), res)
+                })
+            };
             let _ = reply.send(res);
             false
         }
@@ -720,33 +821,42 @@ fn handle_request<'t>(
             events,
             steps,
         } => {
-            let relay = RelayProgress {
-                steps: steps.clone(),
+            let res = {
+                let _in_flight = activity.enter();
+                let relay = RelayProgress {
+                    steps: steps.clone(),
+                };
+                with_open_source(twain, held, |source| {
+                    batch::scan(
+                        source,
+                        native_transfer,
+                        &settings,
+                        first_sheet,
+                        &events,
+                        &relay,
+                        handle_nested_request,
+                    )
+                })
             };
-            let res = with_open_source(twain, held, |source| {
-                batch::scan(
-                    source,
-                    native_transfer,
-                    &settings,
-                    first_sheet,
-                    &events,
-                    &relay,
-                    handle_nested_request,
-                )
-            });
             let _ = steps.send(ScanStep::Finished(res));
             false
         }
         Request::SettingsWindow { owner, reply } => {
-            let res = with_open_source(twain, held, |source| {
-                run_settings_window(source, owner, handle_nested_request)
-            });
+            let res = {
+                let _in_flight = activity.enter();
+                with_open_source(twain, held, |source| {
+                    run_settings_window(source, owner, handle_nested_request)
+                })
+            };
             let _ = reply.send(res);
             false
         }
         Request::CloseDevice { gate, done } => {
-            handle_close_device(held);
-            gate.finish_cleanup(Gate::Closing);
+            {
+                let _in_flight = activity.enter();
+                handle_close_device(held);
+                gate.finish_cleanup(Gate::Closing);
+            }
             let _ = done.send(());
             false
         }
@@ -755,21 +865,20 @@ fn handle_request<'t>(
 }
 
 /// Commits `handle_open` on the STA thread: if the caller is still waiting (`RUNNING ->
-/// COMPLETED`), delivers `res`; if the caller already timed out (`ABANDONED`), immediately closes
-/// any opened source and resets `Gate::Opening | Gate::AbandonedOpen -> Gate::Idle`.
-fn finish_sta_open(
+/// COMPLETED`), returns `Some(res)` to send after `_in_flight` drops; if the caller already timed
+/// out (`ABANDONED`), immediately closes any opened source, resets `Gate::Opening |
+/// Gate::AbandonedOpen -> Gate::Idle`, and returns `None`.
+fn commit_sta_open(
     held: &mut Held<'_>,
     res: Result<DeviceInfo, ScanError>,
     state: &AtomicU8,
     gate: &GateSlot,
-    reply: &SyncSender<Result<DeviceInfo, ScanError>>,
-) {
+) -> Option<Result<DeviceInfo, ScanError>> {
     if state
         .compare_exchange(RUNNING, COMPLETED, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        let _ = reply.send(res);
-        return;
+        return Some(res);
     }
     if res.is_ok() {
         handle_close_device(held);
@@ -779,6 +888,7 @@ fn finish_sta_open(
         *guard = Gate::Idle;
         gate.changed.notify_all();
     }
+    None
 }
 
 /// Handles a request posted while a source is enabled in state 5/6 (`scan` or `settings_window`).
@@ -1118,8 +1228,9 @@ mod tests {
 
         let _g = act.enter();
         assert!(act.is_busy());
-        act.exited.store(true, Ordering::Release);
+        act.mark_exited();
         assert!(!act.is_busy());
+        assert!(act.wait_exited(Duration::from_millis(10)));
     }
 
     #[test]
@@ -1132,24 +1243,22 @@ mod tests {
             Driver::Twain { bits: 64 },
         );
 
-        // 1) Normal `RUNNING -> COMPLETED`: sends `Ok(info)` on `reply`.
+        // 1) Normal `RUNNING -> COMPLETED`: returns `Some(Ok(info))`.
         let mut held = Held::Disconnected;
         let state = AtomicU8::new(RUNNING);
         let gate = GateSlot::new();
         gate.set(Gate::Opening);
-        let (tx, rx) = mpsc::sync_channel(1);
-        finish_sta_open(&mut held, Ok(dummy.clone()), &state, &gate, &tx);
+        let out = commit_sta_open(&mut held, Ok(dummy.clone()), &state, &gate);
         assert_eq!(state.load(Ordering::Acquire), COMPLETED);
-        assert_eq!(rx.try_recv().unwrap(), Ok(dummy.clone()));
+        assert_eq!(out, Some(Ok(dummy.clone())));
 
-        // 2) Timed-out `ABANDONED`: resets `Gate::AbandonedOpen` -> `Gate::Idle` and drops reply.
+        // 2) Timed-out `ABANDONED`: resets `Gate::AbandonedOpen` -> `Gate::Idle` and returns `None`.
         let mut held2 = Held::Disconnected;
         let state2 = AtomicU8::new(ABANDONED);
         let gate2 = GateSlot::new();
         gate2.set(Gate::AbandonedOpen);
-        let (tx2, rx2) = mpsc::sync_channel(1);
-        finish_sta_open(&mut held2, Ok(dummy), &state2, &gate2, &tx2);
+        let out2 = commit_sta_open(&mut held2, Ok(dummy), &state2, &gate2);
         assert_eq!(*lock(&gate2.state), Gate::Idle);
-        assert!(rx2.try_recv().is_err());
+        assert!(out2.is_none());
     }
 }

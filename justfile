@@ -2,12 +2,13 @@
 # what CI checks, but for two variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
 # needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it. CI's Windows TWAIN job also runs the TWAIN
-# and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
-# `scan-device-twain-test`, `scan-device-clippy`, `scan-worker-twain-test`,
-# `scan-worker-clippy`, `twain-bindings --check`, `twain-dsm-doc-codes`),
-# which need Windows, MSVC, the sample source, twain.h or nightly, and sets
-# TWAIN_DSM_REQUIRE_SAMPLE=1 and TWAIN_DSM_REQUIRE_HEADER=1.
+# a local run that matches it. CI's Windows TWAIN job also runs the TWAIN,
+# WIA, and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
+# `scan-device-twain-test`, `scan-device-wia-test`, `scan-device-clippy`,
+# `scan-worker-twain-test`, `scan-worker-wia-test`, `scan-worker-clippy`,
+# `twain-bindings --check`, `twain-dsm-doc-codes`), which need Windows, MSVC,
+# the sample source, twain.h or nightly, and sets TWAIN_DSM_REQUIRE_SAMPLE=1
+# and TWAIN_DSM_REQUIRE_HEADER=1.
 
 # The oldest Rust each library supports, from its Cargo.toml.
 sane_dl_msrv := `grep -m1 '^rust-version' crates/sane-dl/Cargo.toml | cut -d'"' -f2`
@@ -52,6 +53,8 @@ libraries := "sane-dl twain-dsm scan-device scan-worker fake-libsane"
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     for crate in {{ libraries }}; do cargo clippy --locked -p "$crate" --lib -- -D warnings || exit 1; done
+    cargo clippy --locked -p scan-device --lib --no-default-features --features sane,twain,wia,serde -- -D warnings
+    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
@@ -237,6 +240,13 @@ scan-device-twain-test target:
     cargo test --locked -p scan-device --lib --target {{ target }}
     cargo test --locked -p scan-device --features twain --test twain --target {{ target }}
 
+# scan-device's WIA unit tests (including 32-bit BoundedStream and COM vtable
+# checks), scripted WIA integration tests, and live Windows COM WIA 2.0 tests
+# for `target` (x86_64-pc-windows-msvc or i686-pc-windows-msvc).
+# scan-device's WIA unit, fake and COM tests for one Windows target.
+scan-device-wia-test target:
+    cargo test --locked -p scan-device --features "wia,fake" --lib --test wia_fake --test wia_com --target {{ target }}
+
 # scan-device's lints for `target` with every feature and target built.
 # scan-device's lints for one Windows target, its tests included.
 scan-device-clippy target:
@@ -249,7 +259,14 @@ scan-device-clippy target:
 scan-worker-twain-test:
     cargo test --locked -p scan-worker --lib --target i686-pc-windows-msvc
     cargo test --locked -p scan-worker --test stop_handle --target i686-pc-windows-msvc
-    cargo test --locked -p scan-worker --test stop_handle --test twain_worker
+    SCAN_WORKER_I686_EXE="${CARGO_TARGET_DIR:-$PWD/target}/i686-pc-windows-msvc/debug/scan-worker-fake.exe" cargo test --locked -p scan-worker --test stop_handle --test twain_worker
+
+# scan-worker's WIA worker tests (scripted WiaBackend and live Windows COM
+# in both 64-bit and 32-bit i686).
+# scan-worker's Windows WIA worker tests in 64-bit and 32-bit.
+scan-worker-wia-test:
+    cargo test --locked -p scan-worker --test wia_worker --target i686-pc-windows-msvc
+    SCAN_WORKER_REQUIRE_I686=1 SCAN_WORKER_I686_EXE="${CARGO_TARGET_DIR:-$PWD/target}/i686-pc-windows-msvc/debug/scan-worker-fake.exe" cargo test --locked -p scan-worker --test wia_worker
 
 # scan-worker's lints for `target` with every feature and target built.
 # scan-worker's lints for one Windows target, its tests included.
