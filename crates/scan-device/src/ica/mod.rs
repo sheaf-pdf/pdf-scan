@@ -218,6 +218,7 @@
 //! dispatch2's behaviour from their docs (<https://docs.rs/objc2/0.6.5/>,
 //! <https://docs.rs/dispatch2/0.3.1/>).
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
@@ -301,9 +302,15 @@ pub struct IcaBackend {
     #[cfg(feature = "fake")]
     fake: Option<driver::fake_ica::FakeIcaHandle>,
     /// The system its listings browse on, made at the first and kept, so a late event of one
-    /// listing meets the next and is dropped there.
-    #[cfg(any(target_os = "macos", feature = "fake"))]
-    listing: Option<Box<dyn driver::IcaSystem>>,
+    /// listing meets the next and is dropped there. Present on every system, and in a `Mutex`
+    /// though only `&mut self` reaches it, so the backend's auto traits are the same everywhere
+    /// and with every feature (`Sync` among them, as the other backends are), whatever a system
+    /// is.
+    #[cfg_attr(
+        not(any(target_os = "macos", feature = "fake")),
+        allow(dead_code, reason = "off macOS only the scripted system lists")
+    )]
+    listing: Mutex<Option<Box<dyn driver::IcaSystem>>>,
 }
 
 impl std::fmt::Debug for IcaBackend {
@@ -324,7 +331,7 @@ impl IcaBackend {
     pub fn from_fake(fake: &fake_ica::FakeIcaHandle) -> IcaBackend {
         IcaBackend {
             fake: Some(fake.clone()),
-            listing: None,
+            listing: Mutex::new(None),
         }
     }
 }
@@ -339,16 +346,20 @@ fn not_installed() -> ScanError {
 
 impl Backend for IcaBackend {
     fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
+        // Never poisoned: no lock is taken, so no guard is dropped by a panic.
+        #[cfg(any(target_os = "macos", feature = "fake"))]
+        let listing = self
+            .listing
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         #[cfg(feature = "fake")]
         if let Some(fake) = &self.fake {
-            let system = self.listing.get_or_insert_with(|| Box::new(fake.system()));
+            let system = listing.get_or_insert_with(|| Box::new(fake.system()));
             return session::list(system.as_mut(), deadline);
         }
         #[cfg(target_os = "macos")]
         let listed = {
-            let system = self
-                .listing
-                .get_or_insert_with(|| Box::new(objc::MacSystem::new()));
+            let system = listing.get_or_insert_with(|| Box::new(objc::MacSystem::new()));
             session::list(system.as_mut(), deadline)
         };
         #[cfg(not(target_os = "macos"))]

@@ -278,3 +278,20 @@ pub use page::{
 /// Progress and cancel: the crate whose [`Progress`](in_progress::Progress) [`Device::scan`]
 /// takes, re-exported, so an app uses the version the trait names.
 pub use in_progress;
+
+// Each backend's auto traits, held as the crate builds: the same on every system and with every
+// feature, whatever its driver's types are there.
+const _: () = {
+    #[allow(dead_code, reason = "called only for the backends built")]
+    const fn holds<T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+    #[cfg(feature = "fake")]
+    holds::<fake::FakeBackend>();
+    #[cfg(feature = "sane")]
+    holds::<sane::SaneBackend>();
+    #[cfg(feature = "twain")]
+    holds::<twain::TwainBackend>();
+    #[cfg(feature = "wia")]
+    holds::<wia::WiaBackend>();
+    #[cfg(feature = "ica")]
+    holds::<ica::IcaBackend>();
+};

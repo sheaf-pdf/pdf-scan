@@ -146,6 +146,7 @@ pub mod fake_wia {
 /// Connects to `IWiaDevMgr2` lazily on the first [`list`](Backend::list) or
 /// [`open`](Backend::open) call; see [the module documentation](self) for details.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct WiaBackend {
     #[cfg(any(windows, test, feature = "fake"))]
     session: Option<Arc<session::Session>>,
