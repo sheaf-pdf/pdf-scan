@@ -48,6 +48,14 @@ fn until(now: Instant, ends: &[Option<Instant>]) -> Duration {
         .map_or(Duration::MAX, |end| end.saturating_duration_since(now))
 }
 
+/// What a callback that came off the main thread is said as: the glue read nothing of it.
+fn off_main(whose: &str) -> ScanError {
+    driver_msg(format!(
+        "ImageCaptureCore called the {whose}'s delegate off the main thread, where the backend \
+         reads nothing it's handed"
+    ))
+}
+
 /// A browse's devices so far, and when its local enumeration ended.
 struct Browsing {
     browse: BrowseRef,
@@ -86,6 +94,7 @@ impl Browsing {
             IcaEvent::Panicked { message, .. } => Err(driver_msg(format!(
                 "a callback of ImageCaptureCore's device browser panicked: {message}"
             ))),
+            IcaEvent::OffMainThread { .. } => Err(off_main("device browser")),
             _ => Ok(None),
         }
     }
@@ -306,8 +315,8 @@ impl IcaDevice {
     /// The device's next event, waiting at most `wait`, the others' dropped: `None` once that
     /// has passed with none. [`ScanError::Gone`] where the device was removed (by its own
     /// delegate's word or its browse's) or its session closed unasked; [`ScanError::Driver`]
-    /// where one of its callbacks, or its browse's, panicked, or where the wait can't be served
-    /// (on the main thread, from inside a block of the main queue).
+    /// where one of its callbacks, or its browse's, panicked or came off the main thread, or where
+    /// the wait can't be served (on the main thread, from inside a block of the main queue).
     pub(super) fn next(&mut self, wait: Duration) -> Result<Option<IcaEvent>, ScanError> {
         self.live()?;
         let end = end_of(Instant::now(), wait);
@@ -328,6 +337,7 @@ impl IcaDevice {
                             "a callback of ImageCaptureCore's device browser panicked: {message}"
                         )));
                     }
+                    IcaEvent::OffMainThread { .. } => return Err(off_main("device browser")),
                     _ => continue,
                 }
             }
@@ -347,6 +357,7 @@ impl IcaDevice {
                 IcaEvent::Panicked { message, .. } => Err(driver_msg(format!(
                     "a callback of ImageCaptureCore's scanner device panicked: {message}"
                 ))),
+                IcaEvent::OffMainThread { .. } => Err(off_main("scanner device")),
                 event => Ok(Some(event)),
             };
         }
@@ -675,6 +686,38 @@ mod tests {
         let mut later = Scripted::new(bounds);
         later.later = Some((Instant::now() + Duration::from_millis(400), added()));
         assert!(open(Box::new(later), &stored(), Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn a_callback_off_the_main_thread_is_said_never_read() {
+        let off = |origin| IcaEvent::OffMainThread { origin };
+        // A listing's.
+        let mut listing = Scripted::new(SHORT);
+        listing.queue.push_back(off(Origin::Browse(BrowseRef(1))));
+        let Err(ScanError::Driver { message, .. }) = list(&mut listing, Duration::from_secs(1))
+        else {
+            panic!("a listing that met one is refused");
+        };
+        assert!(message.contains("off the main thread"), "{message}");
+
+        // The open device's, or its browse's.
+        for origin in [Origin::Device(DeviceRef(7)), Origin::Browse(BrowseRef(1))] {
+            let mut system = Scripted::new(SHORT);
+            system.queue.push_back(off(origin));
+            let mut device = IcaDevice {
+                system: Box::new(system),
+                browse: BrowseRef(1),
+                device: DeviceRef(7),
+                bounds: SHORT,
+                session: false,
+                gone: false,
+                close_by: None,
+            };
+            let Err(ScanError::Driver { message, .. }) = device.next(Duration::from_secs(1)) else {
+                panic!("a device's wait that met one is refused");
+            };
+            assert!(message.contains("off the main thread"), "{message}");
+        }
     }
 
     #[test]

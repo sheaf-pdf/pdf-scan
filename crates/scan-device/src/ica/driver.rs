@@ -465,6 +465,13 @@ pub enum IcaEvent {
         /// The panic's message.
         message: String,
     },
+    /// A callback came off the main thread, where the glue reads nothing it's handed: the
+    /// framework's documentation has the device's delegate called on the main thread, and the
+    /// backend takes the device browser's to be too, so this says it wasn't.
+    OffMainThread {
+        /// The delegate it came to.
+        origin: Origin,
+    },
 }
 
 impl IcaEvent {
@@ -484,7 +491,7 @@ impl IcaEvent {
             | IcaEvent::ScanCompleted { device, .. }
             | IcaEvent::DeviceError { device, .. }
             | IcaEvent::Status { device, .. } => Origin::Device(*device),
-            IcaEvent::Panicked { origin, .. } => *origin,
+            IcaEvent::Panicked { origin, .. } | IcaEvent::OffMainThread { origin } => *origin,
         }
     }
 }

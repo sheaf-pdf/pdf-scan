@@ -146,14 +146,20 @@
 //! (<https://developer.apple.com/documentation/imagecapturecore/icdevice/requestopensession()>),
 //! and the SDK's header of the device's delegate, "unless otherwise noted"
 //! (<https://docs.rs/objc2-image-capture-core/0.3.2/objc2_image_capture_core/trait.ICDeviceDelegate.html>);
-//! the device browser's delegate is taken as the same, its header saying nothing of a thread.
-//! So the backend can't start a thread of its own for the framework, as other backends do for
-//! their driver's: whoever calls it, every call it makes to the framework is made on the main
-//! thread.
+//! the device browser's delegate is taken as the same, its header saying nothing of a thread, and
+//! each callback checks it: one that comes elsewhere reads nothing it's handed, and the call
+//! waiting on it is [`ScanError::Driver`] saying so. So the backend can't start a thread of its
+//! own for the framework, as other backends do for their driver's: whoever calls it, every call
+//! it makes to the framework is made on the main thread.
 //!
 //! - **Called on the main thread** (a worker's `main`), it runs the main run loop's default mode
 //!   while it waits for a callback, in slices of at most 50 ms, taking each callback's event
 //!   between them. Other sources in that mode (an app's windows) run inside the call then too.
+//!   Where the call is made inside a run of the main run loop (from one of its timers or
+//!   sources), a stop of the run loop that one of the backend's slices takes is made again as
+//!   the backend's wait ends, so the run around the call sees it; one made while a slice ends
+//!   otherwise is kept by Core Foundation for that slice alone, as for any run of a run loop
+//!   inside another.
 //! - **Called on another thread,** it posts each call to the main queue and waits at most 5 s for
 //!   the main thread to run it, and takes the callbacks' events as they come. So the main thread
 //!   must be running its run loop meanwhile (an app's, or `CFRunLoopRun`); where it isn't (blocked
@@ -187,8 +193,17 @@
 //! plain data: a nil where the framework's header promises an object is taken as absent, a band's
 //! buffer past 64 MiB isn't copied, and a panic in a callback is caught there and reported as
 //! [`ScanError::Driver`], never unwound into the framework. An Objective-C exception the
-//! framework throws isn't caught: it ends the process (in a worker, a crash its client reports),
-//! and every value the backend sets is one the unit listed.
+//! framework throws isn't caught: it ends the process (in a worker, a crash its client reports).
+//! The bit depth, the resolution and a feeder's document type the backend sets are values the
+//! unit listed; the pixel type is one its depths allow, the framework listing no pixel types, and
+//! the pages' orientation a constant, so that the framework takes those without an exception is
+//! unverified on a device. Every call, run of the run loop and callback is made in an
+//! autorelease pool of the backend's own, since a worker's `main` drains none; and a delegate
+//! unset is let go of only once the main queue has run what it held at the unset.
+//!
+//! The framework's error domain, which the backend reads to map its errors, came with macOS
+//! 10.15 and is linked as the program loads, so a program built with this backend needs macOS
+//! 10.15 or later (every Mac with Apple silicon runs 11 or later).
 //!
 //! # Sources
 //!

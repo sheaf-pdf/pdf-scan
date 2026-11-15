@@ -7,24 +7,28 @@
 //!   alone, implementing the device browser's, the device's and the scanner's delegate methods
 //!   the backend uses. Every object it's handed is taken as an `Option`, the same encoding as a
 //!   reference, so a nil where a header promises an object is `None`, never a reference made from
-//!   null. Every body runs under `catch_unwind`, a panic sent as an event, never unwound into the
-//!   framework. A body only reads what it's handed into an [`IcaEvent`] and sends it: it requests,
-//!   sets and selects nothing, touches no registry and never blocks. A browse's delegate keeps
-//!   the devices its browse found, beside the numbers the backend knows them by.
+//!   null. Every body checks it's on the main thread, saying so as an event where it isn't, and
+//!   runs under `catch_unwind`, a panic sent as an event, never unwound into the framework. A body
+//!   only reads what it's handed into an [`IcaEvent`] and sends it: it requests, sets and selects
+//!   nothing, touches no registry and never blocks. A browse's delegate keeps the devices its
+//!   browse found, beside the numbers the backend knows them by.
 //! - **The registry:** every browser and scanner device the backend uses, each beside the
 //!   delegate set on it (the framework doesn't retain its delegate), in a thread-local on the main
 //!   thread, reached only through a [`MainThreadMarker`] and keyed by the numbers the rest of the
 //!   backend holds. Each access is a short borrow, never held across a run of the run loop or a
-//!   call into the framework; a delegate is unset before it or its object is dropped, and the
-//!   registry itself is never dropped, so the process's end lets go of nothing still set.
+//!   call into the framework; a delegate is unset before it or its object is dropped, and let go
+//!   of only once the main queue has run what it held at the unset; and the registry itself is
+//!   never dropped, so the process's end lets go of nothing still set.
 //! - **The main thread's marker** is taken by every function here that calls the framework, so
-//!   each `unsafe` call's "on the main thread" is the marker's proof, not a claim: a callback has
-//!   it from its delegate's class, usable on the main thread alone.
+//!   each `unsafe` call's "on the main thread" is the marker's proof, not a claim: a callback makes
+//!   its own from a check of the thread it's called on.
 //! - **The executor:** on the main thread a call runs at once, and a wait for a callback runs the
 //!   main run loop's default mode in slices, reading each slice's answer (the rules are
 //!   `main_thread`'s); elsewhere a call is posted to the main queue and its answer awaited, the
 //!   handshake letting the caller give up only on a call not yet begun, and its events come on
-//!   the callbacks' channel.
+//!   the callbacks' channel. Every call, slice, posted block and callback runs in an
+//!   autorelease pool of its own, since nothing in a worker drains one: not the main queue, and
+//!   not a `main` that runs no application.
 //! - **The real system** (`MacSystem`): one per listing backend and per open device, with the
 //!   channel its delegates send to.
 
@@ -41,7 +45,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use dispatch2::{DispatchQueue, DispatchTime};
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 use objc2_core_foundation::{CFRunLoop, kCFRunLoopDefaultMode};
@@ -64,7 +68,7 @@ use super::driver::{
     TRANSFER_MEMORY_BASED, UnitProps, UnitRect, UnitSize, UnitWrite,
 };
 use super::error::driver_msg;
-use super::id::{MAX_ID_BYTES, MAX_TEXT_BYTES, capped};
+use super::id::{MAX_ID_BYTES, MAX_TEXT_BYTES, id_of_units, text_of_units};
 use super::main_thread::{
     Handshake, MainWait, RUN_FINISHED, SLICE, Verdict, await_posted, contained, panic_message,
     run_posted, unserved_in_block,
@@ -106,25 +110,42 @@ fn ns_uint(value: u64, what: &str) -> Result<usize, ScanError> {
     })
 }
 
-/// `text` copied, capped at `max` bytes on a character boundary; `None` where it's past
-/// [`MAX_STRING_UNITS`], so a hostile string is never copied whole.
-fn text_of(text: &NSString, max: usize) -> Option<String> {
-    (text.length() <= MAX_STRING_UNITS).then(|| capped(&text.to_string(), max))
+/// The first `count` UTF-16 code units of `text`, each read as it is. A string is never asked for
+/// a UTF-8 copy (objc2's `to_string`, through `UTF8String`): one holding an unpaired surrogate has
+/// none, and Foundation answers that with a null pointer, which objc2's copy doesn't check for.
+fn units_of(text: &NSString, count: usize) -> Vec<u16> {
+    (0..count)
+        .map(|index| text.characterAtIndex(index))
+        .collect()
 }
 
-/// An id copied whole, never cut (a cut one would name another device); `None` where it's past
-/// [`MAX_ID_BYTES`] already in UTF-16 code units, each at least a byte in UTF-8, so the backend
-/// couldn't form an id of it anyway.
+/// `text` copied, capped at `max` bytes on a character boundary, a lone surrogate as U+FFFD;
+/// `None` where it's past [`MAX_STRING_UNITS`]. At most `max` of its units are read: enough for
+/// `max` bytes (`id::text_of_units`).
+fn text_of(text: &NSString, max: usize) -> Option<String> {
+    let length = text.length();
+    (length <= MAX_STRING_UNITS).then(|| text_of_units(&units_of(text, length.min(max)), max))
+}
+
+/// An id copied whole, never cut or changed (either would name another device); `None` where it's
+/// past [`MAX_ID_BYTES`] already in UTF-16 code units, each at least a byte in UTF-8, so the
+/// backend couldn't form an id of it anyway, or where it isn't valid UTF-16.
 fn id_text(text: &NSString) -> Option<String> {
-    (text.length() <= MAX_ID_BYTES).then(|| text.to_string())
+    let length = text.length();
+    (length <= MAX_ID_BYTES)
+        .then(|| id_of_units(&units_of(text, length)))
+        .flatten()
 }
 
 /// An `NSError` as [`IcaError`]: whether its domain is ImageCaptureCore's, its domain and its
 /// localized description capped, its code.
 fn ica_error(error: &NSError) -> IcaError {
     let domain = error.domain();
-    // SAFETY: `ICErrorDomain` is an extern static the framework defines for the life of the
-    // process, read once; the binding types it as an optional string, so a nil is `None`.
+    // SAFETY: `ICErrorDomain` is an extern static the framework defines, from macOS 10.15, for the
+    // life of the process, read once; the binding types it as an optional string, so a nil is
+    // `None`. It's linked as the program loads (the binding's reference isn't weak), so on an
+    // older macOS the program doesn't load at all: the crate's docs give 10.15 as the feature's
+    // least.
     let ica = unsafe { ICErrorDomain };
     IcaError {
         ica_domain: ica.is_some_and(|ica| domain.isEqualToString(ica)),
@@ -274,8 +295,9 @@ fn unit_props(_mtm: MainThreadMarker, unit: &ICScannerFunctionalUnit) -> UnitPro
     props
 }
 
-/// `write` set on `unit`, in [`UnitWrite`]'s order: every value one the unit listed (the settings
-/// chose it so), converted before the first set.
+/// `write` set on `unit`, in [`UnitWrite`]'s order, converted before the first set: the depth,
+/// the resolution and the document type values the unit listed, the pixel type one its depths
+/// allow, the area one cut to its bed, the orientation a constant.
 fn write_props(
     _mtm: MainThreadMarker,
     unit: &ICScannerFunctionalUnit,
@@ -299,8 +321,10 @@ fn write_props(
         unsafe { feeder.setDuplexScanningEnabled(duplex) };
     }
     // SAFETY: property sets of the selected unit with values of the types the binding takes, on
-    // the main thread (the marker); the values are those the unit listed, so none is refused by
-    // an exception.
+    // the main thread (the marker). The bit depth and the resolution are values the unit listed;
+    // the pixel type is inferred from its depths, the framework listing none, so only the
+    // framework's leniency, undocumented, keeps its set from throwing. An exception thrown here
+    // isn't caught by the backend: it ends the process.
     unsafe {
         unit.setPixelDataType(ICScannerPixelDataType(pixel_type));
         unit.setBitDepth(ICScannerBitDepth(bit_depth));
@@ -321,6 +345,8 @@ fn write_props(
     }
     if let (Some(orientation), Some(feeder)) = (orientation, feeder) {
         // SAFETY: property sets on a feeder with plain values, on the main thread (the marker).
+        // The orientation is a constant, the first of the type's, which no unit lists, so as for
+        // the pixel type above only the framework's leniency keeps the sets from throwing.
         unsafe {
             feeder.setOddPageOrientation(ICEXIFOrientationType(orientation));
             feeder.setEvenPageOrientation(ICEXIFOrientationType(orientation));
@@ -432,8 +458,10 @@ struct Ivars {
 
 define_class!(
     // SAFETY: `NSObject` has no subclassing requirements, and `Delegate` implements no `Drop`
-    // (its ivars are dropped by objc2's `dealloc`). It's usable on the main thread alone, where
-    // the framework calls it.
+    // (its ivars are dropped by objc2's `dealloc`). It's made on the main thread alone, and each
+    // of its methods checks the thread it's called on before it reads anything main-thread-only
+    // (`guarded`): the device's delegate is documented to be called on the main thread, but
+    // nothing documents the device browser's.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[ivars = Ivars]
@@ -609,22 +637,37 @@ impl Delegate {
         unsafe { msg_send![super(this), init] }
     }
 
-    /// A callback's body: run under `catch_unwind`, its event (or its panic, as
-    /// [`IcaEvent::Panicked`]) sent; nothing unwinds into the framework, a payload whose drop
-    /// panics included.
+    /// A callback's body: run on the main thread alone, in an autorelease pool of its own and
+    /// under `catch_unwind`, its event (or its panic, as [`IcaEvent::Panicked`]) sent; nothing
+    /// unwinds into the framework, a payload whose drop panics included.
+    ///
+    /// The thread is checked on every call, the marker made from that check rather than taken from
+    /// the class (whose `mtm` checks nothing in a release build): a callback the framework makes
+    /// off the main thread reads nothing it's handed and touches none of the delegate's
+    /// main-thread state (its found devices), and is said as [`IcaEvent::OffMainThread`]. It reads
+    /// only the delegate's role, plain data set as it was made, and sends on its channel, whose
+    /// sender may be used from any thread.
     fn guarded(&self, body: impl FnOnce(MainThreadMarker, &Ivars) -> Option<IcaEvent>) {
         contained(|| {
             let ivars = self.ivars();
-            let event = match catch_unwind(AssertUnwindSafe(|| body(self.mtm(), ivars))) {
-                Ok(event) => event,
-                Err(payload) => Some(IcaEvent::Panicked {
+            let Some(mtm) = MainThreadMarker::new() else {
+                let _ = ivars.events.send(IcaEvent::OffMainThread {
                     origin: ivars.role.origin(),
-                    message: panic_message(payload),
-                }),
+                });
+                return;
             };
-            if let Some(event) = event {
-                let _ = ivars.events.send(event);
-            }
+            autoreleasepool(|_| {
+                let event = match catch_unwind(AssertUnwindSafe(|| body(mtm, ivars))) {
+                    Ok(event) => event,
+                    Err(payload) => Some(IcaEvent::Panicked {
+                        origin: ivars.role.origin(),
+                        message: panic_message(payload),
+                    }),
+                };
+                if let Some(event) = event {
+                    let _ = ivars.events.send(event);
+                }
+            });
         });
     }
 
@@ -655,10 +698,31 @@ struct DeviceEntry {
     delegate: Retained<Delegate>,
 }
 
+/// What a delegate's unset left to let go of: a browse's entry and the devices' it ended, or a
+/// device's entry a later open replaced, each delegate already unset. Kept until a block posted to
+/// the main queue after the unset runs (`retire`), so a delivery the framework had queued there
+/// by then has run before its delegate is let go, even were the framework to hold it unretained
+/// (it holds a delegate as an unretained pointer while it's set).
+struct Retired {
+    /// Which posted block lets go of it.
+    batch: u64,
+    #[expect(
+        dead_code,
+        reason = "held, never read: kept until the posted block lets go of them"
+    )]
+    browse: Option<BrowseEntry>,
+    #[expect(
+        dead_code,
+        reason = "held, never read: kept until the posted block lets go of them"
+    )]
+    devices: Vec<DeviceEntry>,
+}
+
 #[derive(Default)]
 struct Registry {
     browses: HashMap<BrowseRef, BrowseEntry>,
     devices: HashMap<DeviceRef, DeviceEntry>,
+    retired: Vec<Retired>,
 }
 
 thread_local! {
@@ -735,8 +799,39 @@ fn start_browse(mtm: MainThreadMarker, events: Sender<IcaEvent>) -> Result<Brows
     Ok(browse)
 }
 
+/// `browse` and `devices`, their delegates unset, kept until a block posted to the main queue now
+/// has run, then let go of there, outside the registry's borrow. Where the main thread never
+/// serves its queue again, they're kept to the process's end, as the registry is.
+fn retire(mtm: MainThreadMarker, browse: Option<BrowseEntry>, devices: Vec<DeviceEntry>) {
+    if browse.is_none() && devices.is_empty() {
+        return;
+    }
+    let batch = next_ref();
+    with_registry(mtm, |registry| {
+        registry.retired.push(Retired {
+            batch,
+            browse,
+            devices,
+        });
+    });
+    post(move || {
+        let _ = on_main(|mtm| {
+            let released: Vec<Retired> = with_registry(mtm, |registry| {
+                let (released, kept) = std::mem::take(&mut registry.retired)
+                    .into_iter()
+                    .partition(|retired| retired.batch == batch);
+                registry.retired = kept;
+                released
+            });
+            drop(released);
+            Ok(())
+        });
+    });
+}
+
 /// A browse ended on the main thread: the delegates of the devices it found and the backend
-/// opened unset, then its own, the browser stopped, and all of them let go.
+/// opened unset, then its own, the browser stopped, and all of them retired, to be let go of once
+/// the main queue has run what it held by then.
 fn end_browse(mtm: MainThreadMarker, browse: BrowseRef) {
     let (entry, devices) = with_registry(mtm, |registry| {
         let entry = registry.browses.remove(&browse);
@@ -755,32 +850,35 @@ fn end_browse(mtm: MainThreadMarker, browse: BrowseRef) {
     // Outside the borrow, from here: each delegate unset before it or its object is let go.
     for device in &devices {
         // SAFETY: the device's delegate unset, on the main thread (the marker), while both are
-        // still kept (`devices` drops them after), so it's never let go while set.
+        // still kept (`retire` keeps them after), so it's never let go while set.
         unsafe { device.device.setDelegate(None) };
     }
     if let Some(entry) = &entry {
-        // SAFETY: the browser's delegate unset while both are kept (`entry` drops them after), so
-        // it's never let go while set, then the browser stopped; on the main thread (the
+        // SAFETY: the browser's delegate unset while both are kept (`retire` keeps them after),
+        // so it's never let go while set, then the browser stopped; on the main thread (the
         // marker).
         unsafe {
             entry.browser.setDelegate(None);
             entry.browser.stop();
         }
     }
-    drop(devices);
-    drop(entry);
+    // A delivery the framework queued to the main queue before the unsets runs before these are
+    // let go; one it makes some other way, holding a delegate unretained past its unset, is the
+    // framework's to keep from happening.
+    retire(mtm, entry, devices);
 }
 
-/// `work` posted to the main queue, any panic in it caught there (the queue runs it inside a C
-/// function, where an unwind would abort the process). Never run where the main thread never
-/// serves its queue: it's leaked then, with what it holds.
+/// `work` posted to the main queue, in an autorelease pool of its own (the main queue drains
+/// none), any panic in it caught there (the queue runs it inside a C function, where an unwind
+/// would abort the process). Never run where the main thread never serves its queue: it's leaked
+/// then, with what it holds.
 fn post(work: impl FnOnce() + Send + 'static) {
-    DispatchQueue::main().exec_async(move || contained(work));
+    DispatchQueue::main().exec_async(move || contained(|| autoreleasepool(|_| work())));
 }
 
-/// `work` posted to the main queue to run once `delay` has passed.
+/// `work` posted to the main queue to run once `delay` has passed, as [`post`]'s does.
 fn post_after(delay: Duration, work: impl FnOnce() + Send + 'static) {
-    let work = move || contained(work);
+    let work = move || contained(|| autoreleasepool(|_| work()));
     match DispatchTime::try_from(delay) {
         Ok(when) => {
             let _ = DispatchQueue::main().after(when, work);
@@ -801,7 +899,8 @@ fn on_main<T>(work: impl FnOnce(MainThreadMarker) -> Result<T, ScanError>) -> Re
 }
 
 /// One slice of the main run loop's default mode, at most `slice` long, returning after a source
-/// is handled; its answer as Core Foundation numbers it.
+/// is handled, in an autorelease pool of its own (nothing else drains one in a worker); its
+/// answer as Core Foundation numbers it.
 fn pump(_mtm: MainThreadMarker, slice: Duration) -> i32 {
     // SAFETY: `kCFRunLoopDefaultMode` is an extern static Core Foundation defines for the life of
     // the process, read once; typed optional, so a nil is `None`.
@@ -809,7 +908,17 @@ fn pump(_mtm: MainThreadMarker, slice: Duration) -> i32 {
         // No default mode to run: nothing can be served.
         return RUN_FINISHED;
     };
-    CFRunLoop::run_in_mode(Some(mode), slice.as_secs_f64(), true).0
+    autoreleasepool(|_| CFRunLoop::run_in_mode(Some(mode), slice.as_secs_f64(), true).0)
+}
+
+/// A stop of the main run loop made again: one the backend's own slice took, which was meant for
+/// a run of the main run loop around the backend's call (`MainWait::stopped`). Core Foundation
+/// keeps a stop for the run it's made in, so the backend's run, now ended, can't pass it on; made
+/// now, it's the outer run's, or nobody's where no run is around the call.
+fn stop_again(_mtm: MainThreadMarker) {
+    if let Some(main) = CFRunLoop::main() {
+        main.stop();
+    }
 }
 
 /// ImageCaptureCore as one listing backend's, or one open device's: the channel its delegates send
@@ -837,14 +946,15 @@ impl MacSystem {
         }
     }
 
-    /// `body` run on the main thread: at once there, else posted to the main queue and its answer
-    /// awaited at most [`Bounds::post`], never run late where it's given up on.
+    /// `body` run on the main thread, in an autorelease pool of its own: at once there, else
+    /// posted to the main queue and its answer awaited at most [`Bounds::post`], never run late
+    /// where it's given up on.
     fn call<T: Send + 'static>(
         &self,
         body: impl FnOnce(MainThreadMarker) -> Result<T, ScanError> + Send + 'static,
     ) -> Result<T, ScanError> {
         if let Some(mtm) = MainThreadMarker::new() {
-            return body(mtm);
+            return autoreleasepool(|_| body(mtm));
         }
         let handshake = Arc::new(Handshake::new());
         let (answer, answered) = mpsc::sync_channel(1);
@@ -853,11 +963,12 @@ impl MacSystem {
         await_posted(&handshake, &answered, self.bounds.post)
     }
 
-    /// The browse ended: at once on the main thread; posted and not waited for elsewhere, after
-    /// the close's bound where a session's close was posted before it.
+    /// The browse ended, in an autorelease pool: at once on the main thread; posted and not
+    /// waited for elsewhere, after the close's bound where a session's close was posted before
+    /// it.
     fn end(&self, browse: BrowseRef) {
         if let Some(mtm) = MainThreadMarker::new() {
-            end_browse(mtm, browse);
+            autoreleasepool(|_| end_browse(mtm, browse));
             return;
         }
         let work = move || {
@@ -874,7 +985,8 @@ impl MacSystem {
     }
 
     /// On the main thread: the next event, the main run loop run in slices meanwhile, at most
-    /// `wait`; refused at once where the main queue isn't served there (`main_thread`'s rules).
+    /// `wait`; refused at once where the main queue isn't served there (`main_thread`'s rules). A
+    /// stop of the main run loop one of its slices took is made again as it returns.
     fn pumped(&self, mtm: MainThreadMarker, wait: Duration) -> Result<Option<IcaEvent>, ScanError> {
         if let Ok(event) = self.events.try_recv() {
             return Ok(Some(event));
@@ -886,19 +998,25 @@ impl MacSystem {
             post(move || probe.store(true, Ordering::Release));
         }
         let mut judge = MainWait::new();
-        loop {
+        let waited = loop {
             let left = end.map_or(SLICE, |end| end.saturating_duration_since(Instant::now()));
-            let answer = pump(mtm, left.min(SLICE));
+            let slice = left.min(SLICE);
+            let answer = pump(mtm, slice);
             if let Ok(event) = self.events.try_recv() {
-                return Ok(Some(event));
+                break Ok(Some(event));
             }
-            if judge.after_slice(answer, probe.load(Ordering::Acquire)) == Verdict::Refuse {
-                return Err(unserved_in_block());
+            let probe_ran = probe.load(Ordering::Acquire);
+            if judge.after_slice(answer, slice == SLICE, probe_ran) == Verdict::Refuse {
+                break Err(unserved_in_block());
             }
             if end.is_some_and(|end| Instant::now() >= end) {
-                return Ok(None);
+                break Ok(None);
             }
+        };
+        if judge.stopped() {
+            stop_again(mtm);
         }
+        waited
     }
 }
 
@@ -940,9 +1058,9 @@ impl IcaSystem for MacSystem {
     fn open_session(&mut self, device: DeviceRef) -> Result<(), ScanError> {
         let events = self.sender.clone();
         self.call(move |mtm| {
-            let (browse, object) = found(mtm, device).ok_or_else(|| {
-                driver_msg("ImageCaptureCore no longer holds the device its browse found")
-            })?;
+            // The browse found it, and its removal (its browse's callback) has run since: it's
+            // gone, as the scripted framework says too.
+            let (browse, object) = found(mtm, device).ok_or(ScanError::Gone)?;
             let scanner = object
                 .downcast::<ICScannerDevice>()
                 .map_err(|_| driver_msg("the device ImageCaptureCore found isn't a scanner"))?;
@@ -958,15 +1076,15 @@ impl IcaSystem for MacSystem {
                 )
             });
             // SAFETY: the delegate is unretained by the device, and is kept alive beside it in the
-            // registry until it's unset (`end_browse`), and one it replaces is let go only after;
+            // registry until it's unset (`end_browse`), and one it replaces is retired only after;
             // then the session asked for. On the main thread (the marker), where the device's
             // callbacks come.
             unsafe {
                 scanner.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
                 scanner.requestOpenSession();
             }
-            // A delegate this one replaced on the device is let go only now it's unset.
-            drop(replaced);
+            // A delegate this one replaced on the device is retired only now it's unset.
+            retire(mtm, None, replaced.into_iter().collect());
             Ok(())
         })
     }
@@ -980,7 +1098,7 @@ impl IcaSystem for MacSystem {
             Ok(())
         };
         match MainThreadMarker::new() {
-            Some(mtm) => close(mtm).is_ok(),
+            Some(mtm) => autoreleasepool(|_| close(mtm)).is_ok(),
             None => {
                 self.closing = true;
                 post(move || {

@@ -25,6 +25,30 @@ pub(super) fn capped(text: &str, max: usize) -> String {
     text[..end].to_owned()
 }
 
+/// A string the framework gave, as the glue copied its UTF-16 code units, at most `max` bytes of
+/// it, cut on a character boundary: an unpaired surrogate (which an `NSString` may hold, and which
+/// no UTF-8 copy of it can) becomes U+FFFD. The glue copies at most `max` units, enough for `max`
+/// bytes, since each is at least a byte; a pair cut at the last of them is a U+FFFD past the cap,
+/// so it's dropped with the rest.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    allow(dead_code, reason = "the glue's, on macOS alone")
+)]
+pub(super) fn text_of_units(units: &[u16], max: usize) -> String {
+    capped(&String::from_utf16_lossy(units), max)
+}
+
+/// An id the framework gave, as the glue copied its UTF-16 code units whole, or `None` where they
+/// aren't valid UTF-16 (an unpaired surrogate): an id is never changed, since a changed one could
+/// name another device.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    allow(dead_code, reason = "the glue's, on macOS alone")
+)]
+pub(super) fn id_of_units(units: &[u16]) -> Option<String> {
+    String::from_utf16(units).ok()
+}
+
 /// `ica:<native>`.
 pub(super) fn id_of(native: &str) -> DeviceId {
     let mut full = String::with_capacity(PREFIX.len() + native.len());
@@ -235,5 +259,54 @@ mod tests {
         assert_eq!(capped("aé", 2), "a");
         assert_eq!(capped("aé", 3), "aé");
         assert_eq!(capped("", 0), "");
+    }
+
+    fn utf16(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
+
+    #[test]
+    fn a_string_with_an_unpaired_surrogate_is_copied_without_utf_8_from_the_framework() {
+        // A name a module cut mid-pair: its lone half becomes U+FFFD, the rest kept.
+        let mut cut = utf16("Desk");
+        cut.push(0xD83D);
+        cut.extend(utf16(" scanner"));
+        assert_eq!(text_of_units(&cut, MAX_TEXT_BYTES), "Desk\u{FFFD} scanner");
+        // A lone low half too, and at either end.
+        assert_eq!(
+            text_of_units(&[0xDC00, 0x41, 0xD800], 16),
+            "\u{FFFD}A\u{FFFD}"
+        );
+        assert_eq!(text_of_units(&[], 16), "");
+        // A pair whole is its character.
+        assert_eq!(text_of_units(&utf16("a📠"), 16), "a📠");
+
+        // An id isn't changed: one that isn't valid UTF-16 isn't taken at all.
+        assert_eq!(
+            id_of_units(&utf16("0x1234-abcd")),
+            Some("0x1234-abcd".to_owned())
+        );
+        assert_eq!(id_of_units(&cut), None);
+        assert_eq!(id_of_units(&[0xDC00]), None);
+    }
+
+    #[test]
+    fn as_many_units_as_the_cap_s_bytes_are_enough_for_the_cap() {
+        // `max` units give at least `max` bytes, so copying no more of a long string is the same
+        // as copying it whole, a pair cut at the last unit copied included.
+        let max = 8;
+        for text in [
+            "abcdefghijk",
+            "abcdefg📠xyz",
+            "abcdef📠xyz",
+            "ééééééé",
+            "📠📠📠📠📠",
+        ] {
+            let units = utf16(text);
+            let whole = text_of_units(&units, max);
+            let first = text_of_units(&units[..units.len().min(max)], max);
+            assert_eq!(first, whole, "{text}");
+            assert!(whole.len() <= max);
+        }
     }
 }

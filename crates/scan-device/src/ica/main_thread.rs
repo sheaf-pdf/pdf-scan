@@ -175,12 +175,20 @@ pub(super) enum Verdict {
 
 /// A wait on the main thread, judging each slice by the run loop's answer and by whether the no-op
 /// it posted to the main queue as it began has run.
+///
+/// A slice that passes with nothing handled is evidence only where it was a whole [`SLICE`]:
+/// Core Foundation's run looks at the main queue's port on its own only from its second pass, and
+/// a slice of no time, or of very little, makes one pass, whose one receive may take another
+/// port's message (a timer due, a wake-up) before the no-op's. So a short slice's time-out goes
+/// unjudged, and the wait ends at its end as any other does.
 #[derive(Debug, Default)]
 pub(super) struct MainWait {
     /// Whether the no-op has been seen to run.
     served: bool,
     /// The slices run before it did.
     probed: u32,
+    /// Whether a slice answered that the run loop was stopped.
+    stopped: bool,
 }
 
 impl MainWait {
@@ -189,14 +197,16 @@ impl MainWait {
         MainWait::default()
     }
 
-    /// After a slice that answered `answer`, with the no-op run by then or not: refused at once
-    /// where the mode had nothing to run (the main queue not counted, as inside one of its
-    /// blocks), or where the no-op hasn't run though the slice passed with nothing handled, or
-    /// hasn't after [`MAX_PROBE_SLICES`] slices of other sources; else the wait goes on.
-    pub(super) fn after_slice(&mut self, answer: i32, probe_ran: bool) -> Verdict {
+    /// After a slice that answered `answer`, `whole` where it was asked to run a whole
+    /// [`SLICE`], with the no-op run by then or not: refused at once where the mode had nothing to
+    /// run (the main queue not counted, as inside one of its blocks), or where the no-op hasn't
+    /// run though a whole slice passed with nothing handled, or hasn't after
+    /// [`MAX_PROBE_SLICES`] slices of other sources; else the wait goes on.
+    pub(super) fn after_slice(&mut self, answer: i32, whole: bool, probe_ran: bool) -> Verdict {
         match answer {
             RUN_FINISHED => return Verdict::Refuse,
-            RUN_STOPPED | RUN_TIMED_OUT | RUN_HANDLED_SOURCE => {}
+            RUN_STOPPED => self.stopped = true,
+            RUN_TIMED_OUT | RUN_HANDLED_SOURCE => {}
             // An answer Core Foundation doesn't give: judged as one with something handled.
             _ => {}
         }
@@ -204,12 +214,27 @@ impl MainWait {
             self.served = true;
             return Verdict::Wait;
         }
+        if answer == RUN_TIMED_OUT {
+            return if whole {
+                Verdict::Refuse
+            } else {
+                Verdict::Wait
+            };
+        }
         self.probed = self.probed.saturating_add(1);
-        if answer == RUN_TIMED_OUT || self.probed >= MAX_PROBE_SLICES {
+        if self.probed >= MAX_PROBE_SLICES {
             Verdict::Refuse
         } else {
             Verdict::Wait
         }
+    }
+
+    /// Whether a slice answered that the run loop was stopped. The stop was meant for whoever
+    /// runs the main run loop around the backend's call, and Core Foundation keeps it for the run
+    /// it's made in, the backend's own slice, which takes it; so the glue makes it again as the
+    /// wait ends, for that outer run to see.
+    pub(super) fn stopped(&self) -> bool {
+        self.stopped
     }
 }
 
@@ -312,22 +337,49 @@ mod tests {
 
     #[test]
     fn a_mode_with_nothing_to_run_is_refused_at_once() {
-        // Inside a block of the main queue, with nothing else in the mode.
-        assert_eq!(
-            MainWait::new().after_slice(RUN_FINISHED, false),
-            Verdict::Refuse
-        );
+        // Inside a block of the main queue, with nothing else in the mode, whatever the slice.
+        for whole in [true, false] {
+            assert_eq!(
+                MainWait::new().after_slice(RUN_FINISHED, whole, false),
+                Verdict::Refuse
+            );
+        }
         // And after the queue was seen served, too: no spin.
         let mut wait = MainWait::new();
-        assert_eq!(wait.after_slice(RUN_HANDLED_SOURCE, true), Verdict::Wait);
-        assert_eq!(wait.after_slice(RUN_FINISHED, false), Verdict::Refuse);
+        assert_eq!(
+            wait.after_slice(RUN_HANDLED_SOURCE, true, true),
+            Verdict::Wait
+        );
+        assert_eq!(
+            wait.after_slice(RUN_FINISHED, false, false),
+            Verdict::Refuse
+        );
     }
 
     #[test]
-    fn a_slice_passing_with_the_probe_unrun_is_refused() {
+    fn a_whole_slice_passing_with_the_probe_unrun_is_refused() {
         // A UI's sources in the mode, the main queue unserved.
         assert_eq!(
-            MainWait::new().after_slice(RUN_TIMED_OUT, false),
+            MainWait::new().after_slice(RUN_TIMED_OUT, true, false),
+            Verdict::Refuse
+        );
+    }
+
+    #[test]
+    fn a_short_slice_passing_with_the_probe_unrun_is_not_judged() {
+        // A wait of no time (a snapshot's drain), or the last few milliseconds of one: its one
+        // pass may have taken a timer's or a wake-up's message before the no-op's.
+        let mut wait = MainWait::new();
+        for _ in 0..MAX_PROBE_SLICES * 2 {
+            assert_eq!(wait.after_slice(RUN_TIMED_OUT, false, false), Verdict::Wait);
+        }
+        // They count for nothing against the probe's slices, and a whole one is judged after.
+        assert_eq!(
+            wait.after_slice(RUN_HANDLED_SOURCE, true, false),
+            Verdict::Wait
+        );
+        assert_eq!(
+            wait.after_slice(RUN_TIMED_OUT, true, false),
             Verdict::Refuse
         );
     }
@@ -335,28 +387,65 @@ mod tests {
     #[test]
     fn once_the_probe_has_run_the_wait_goes_on_whatever_the_slices_answer() {
         let mut wait = MainWait::new();
-        assert_eq!(wait.after_slice(RUN_HANDLED_SOURCE, true), Verdict::Wait);
+        assert_eq!(
+            wait.after_slice(RUN_HANDLED_SOURCE, true, true),
+            Verdict::Wait
+        );
         for answer in [
             RUN_TIMED_OUT,
             RUN_HANDLED_SOURCE,
             RUN_STOPPED,
             RUN_TIMED_OUT,
         ] {
-            assert_eq!(wait.after_slice(answer, false), Verdict::Wait);
+            assert_eq!(wait.after_slice(answer, true, false), Verdict::Wait);
         }
     }
 
     #[test]
     fn other_sources_handled_first_are_given_a_bounded_number_of_slices() {
-        let mut wait = MainWait::new();
-        for _ in 1..MAX_PROBE_SLICES {
-            assert_eq!(wait.after_slice(RUN_HANDLED_SOURCE, false), Verdict::Wait);
+        for whole in [true, false] {
+            let mut wait = MainWait::new();
+            for _ in 1..MAX_PROBE_SLICES {
+                assert_eq!(
+                    wait.after_slice(RUN_HANDLED_SOURCE, whole, false),
+                    Verdict::Wait
+                );
+            }
+            assert_eq!(
+                wait.after_slice(RUN_HANDLED_SOURCE, whole, false),
+                Verdict::Refuse
+            );
         }
-        assert_eq!(wait.after_slice(RUN_HANDLED_SOURCE, false), Verdict::Refuse);
 
         let mut stopped = MainWait::new();
-        assert_eq!(stopped.after_slice(RUN_STOPPED, false), Verdict::Wait);
-        assert_eq!(stopped.after_slice(RUN_HANDLED_SOURCE, true), Verdict::Wait);
+        assert_eq!(stopped.after_slice(RUN_STOPPED, true, false), Verdict::Wait);
+        assert_eq!(
+            stopped.after_slice(RUN_HANDLED_SOURCE, true, true),
+            Verdict::Wait
+        );
+    }
+
+    #[test]
+    fn a_stop_taken_by_a_slice_is_said_so_it_is_made_again() {
+        let mut wait = MainWait::new();
+        assert!(!wait.stopped());
+        assert_eq!(
+            wait.after_slice(RUN_HANDLED_SOURCE, true, true),
+            Verdict::Wait
+        );
+        assert!(!wait.stopped());
+        // The stop goes on being said, whatever the slices after answer.
+        assert_eq!(wait.after_slice(RUN_STOPPED, false, false), Verdict::Wait);
+        assert_eq!(wait.after_slice(RUN_TIMED_OUT, true, false), Verdict::Wait);
+        assert!(wait.stopped());
+        // And a refused wait still says it.
+        let mut refused = MainWait::new();
+        assert_eq!(refused.after_slice(RUN_STOPPED, true, false), Verdict::Wait);
+        assert_eq!(
+            refused.after_slice(RUN_FINISHED, true, false),
+            Verdict::Refuse
+        );
+        assert!(refused.stopped());
     }
 
     #[test]
