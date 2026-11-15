@@ -11,14 +11,14 @@ use std::cmp::Reverse;
 
 use super::caps::{self, DiscoveredSource};
 use super::driver::{
-    ALL_PAGES, BACK_FIRST, BACK_ONLY, DUPLEX, FEEDER, FLATBED, FRONT_ONLY, FormatPair, GuidBytes,
-    ItemId, PORTRAIT, PropAttr, PropConstraint, PropId, PropValue, TYMED_CALLBACK, TYMED_FILE,
-    WIA_AUTO_CROP_DISABLED, WIA_AUTO_CROP_SINGLE, WIA_AUTO_DESKEW_OFF,
-    WIA_BLANK_PAGE_DETECTION_DISABLED, WIA_COMPRESSION_NONE, WIA_DATA_COLOR, WIA_DATA_GRAYSCALE,
-    WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD, WIA_FINAL_SCAN, WIA_IMG_FMT_BMP_GUID,
-    WIA_IMG_FMT_MEMORYBMP_GUID, WIA_IMG_FMT_RAW_GUID, WIA_IPA_BITS_PER_CHANNEL,
-    WIA_IPA_COMPRESSION, WIA_IPA_DATATYPE, WIA_IPA_DEPTH, WIA_IPA_FORMAT, WIA_IPA_PLANAR,
-    WIA_IPA_TYMED, WIA_IPS_AUTO_CROP, WIA_IPS_AUTO_DESKEW, WIA_IPS_BLANK_PAGES,
+    ADVANCED_DUPLEX, ALL_PAGES, BACK_FIRST, BACK_ONLY, DUPLEX, FEEDER, FLATBED, FRONT_FIRST,
+    FRONT_ONLY, FormatPair, GuidBytes, ItemId, PORTRAIT, PropAttr, PropConstraint, PropId,
+    PropValue, TYMED_CALLBACK, TYMED_FILE, WIA_AUTO_CROP_DISABLED, WIA_AUTO_CROP_SINGLE,
+    WIA_AUTO_DESKEW_OFF, WIA_BLANK_PAGE_DETECTION_DISABLED, WIA_COMPRESSION_NONE, WIA_DATA_COLOR,
+    WIA_DATA_DITHER, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD,
+    WIA_FINAL_SCAN, WIA_IMG_FMT_BMP_GUID, WIA_IMG_FMT_MEMORYBMP_GUID, WIA_IMG_FMT_RAW_GUID,
+    WIA_IPA_BITS_PER_CHANNEL, WIA_IPA_COMPRESSION, WIA_IPA_DATATYPE, WIA_IPA_DEPTH, WIA_IPA_FORMAT,
+    WIA_IPA_PLANAR, WIA_IPA_TYMED, WIA_IPS_AUTO_CROP, WIA_IPS_AUTO_DESKEW, WIA_IPS_BLANK_PAGES,
     WIA_IPS_DOCUMENT_HANDLING_SELECT, WIA_IPS_OPTICAL_XRES, WIA_IPS_OPTICAL_YRES,
     WIA_IPS_PAGE_SIZE, WIA_IPS_PAGES, WIA_IPS_PHOTOMETRIC_INTERP, WIA_IPS_PREVIEW,
     WIA_IPS_ROTATION, WIA_IPS_XEXTENT, WIA_IPS_XPOS, WIA_IPS_XRES, WIA_IPS_YEXTENT, WIA_IPS_YPOS,
@@ -76,6 +76,7 @@ pub(super) struct Taken {
 /// and constructs [`Taken`].
 pub(super) fn apply(tree: &mut dyn WiaDeviceTree, asked: &Settings) -> Result<Taken, ScanError> {
     let discovered = caps::discover_usable_sources(tree)?;
+    tree.set_op(WiaOp::Settings);
     if discovered.is_empty() {
         return Err(ScanError::Unsupported);
     }
@@ -158,15 +159,18 @@ pub(super) fn fallback_callback_to_file(
     tree: &mut dyn WiaDeviceTree,
     taken: &mut Taken,
 ) -> Result<bool, ScanError> {
+    tree.set_op(WiaOp::Settings);
     if taken.tymed != TYMED_CALLBACK || matches!(taken.transfer_mode, TransferMode::Encoded(_)) {
         return Ok(false);
     }
     let pairs = caps::collect_transfer_pairs(tree, taken.item)?;
+    let cur_dt = read_i4(tree, taken.item, WIA_IPA_DATATYPE)?;
+    let raw_datatype = matches!(cur_dt, Some(WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR));
     let is_16bit = matches!(
         taken.applied.settings.format,
         Format::Gray16 | Format::Rgb16
     );
-    let candidates: &[(GuidBytes, TransferMode)] = if is_16bit {
+    let candidates: &[(GuidBytes, TransferMode)] = if is_16bit || raw_datatype {
         &[(WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia)]
     } else {
         &[
@@ -183,9 +187,7 @@ pub(super) fn fallback_callback_to_file(
         if !supported {
             continue;
         }
-        if try_write_prop(tree, taken.item, WIA_IPA_TYMED, &PropValue::I4(TYMED_FILE))?
-            && try_write_prop(tree, taken.item, WIA_IPA_FORMAT, &PropValue::Guid(guid))?
-        {
+        if select_tymed_and_format(tree, taken.item, TYMED_FILE, guid)? {
             taken.tymed = TYMED_FILE;
             taken.transfer_mode = mode;
             return Ok(true);
@@ -328,28 +330,30 @@ fn build_feeder_select_candidates(
 
     if want_duplex {
         if let Some(c) = cur {
-            let preserved = (c & !(FRONT_ONLY | BACK_ONLY)) | DUPLEX;
+            let preserved = (c & !(FRONT_ONLY | BACK_ONLY | ADVANCED_DUPLEX)) | DUPLEX;
             push_if_ok(preserved);
         }
         push_if_ok(FEEDER | DUPLEX);
+        push_if_ok(FEEDER | DUPLEX | FRONT_FIRST);
         push_if_ok(DUPLEX);
+        push_if_ok(DUPLEX | FRONT_FIRST);
         if let PropConstraint::ListI4 { values, .. } = constraint {
             for &v in values {
-                if (v & DUPLEX) != 0 && (v & BACK_ONLY) == 0 {
+                if (v & DUPLEX) != 0 && (v & (BACK_ONLY | ADVANCED_DUPLEX)) == 0 {
                     push_if_ok(v);
                 }
             }
             for &v in values {
-                if (v & DUPLEX) != 0 {
+                if (v & DUPLEX) != 0 && (v & ADVANCED_DUPLEX) == 0 {
                     push_if_ok(v);
                 }
             }
         }
     } else {
         if let Some(c) = cur {
-            let simplex = (c & !(DUPLEX | BACK_ONLY)) | FRONT_ONLY;
+            let simplex = (c & !(DUPLEX | BACK_ONLY | ADVANCED_DUPLEX)) | FRONT_ONLY;
             push_if_ok(simplex);
-            let cleared = c & !(DUPLEX | BACK_ONLY);
+            let cleared = c & !(DUPLEX | BACK_ONLY | ADVANCED_DUPLEX);
             if cleared != 0 {
                 push_if_ok(cleared);
             }
@@ -359,7 +363,7 @@ fn build_feeder_select_candidates(
         push_if_ok(FEEDER);
         if let PropConstraint::ListI4 { values, .. } = constraint {
             for &v in values {
-                if (v & DUPLEX) == 0 && (v & BACK_ONLY) == 0 {
+                if (v & (DUPLEX | BACK_ONLY | ADVANCED_DUPLEX)) == 0 {
                     push_if_ok(v);
                 }
             }
@@ -519,11 +523,13 @@ fn negotiate_format(
     }
     let target = format_for(asked, offered);
 
-    let dt_candidates: &[i32] = match target {
-        Format::Bw1 => &[WIA_DATA_THRESHOLD, WIA_DATA_GRAYSCALE],
-        Format::Gray8 | Format::Gray16 => &[WIA_DATA_GRAYSCALE],
-        Format::Rgb8 => &[WIA_DATA_COLOR, WIA_DATA_RAW_RGB, WIA_DATA_RAW_BGR],
-        Format::Rgb16 => &[WIA_DATA_COLOR, WIA_DATA_RAW_RGB, WIA_DATA_RAW_BGR],
+    let dt_candidates: &[i32] = match (target, allow_16bit) {
+        (Format::Bw1, _) => &[WIA_DATA_THRESHOLD, WIA_DATA_DITHER, WIA_DATA_GRAYSCALE],
+        (Format::Gray8 | Format::Gray16, _) => &[WIA_DATA_GRAYSCALE],
+        (Format::Rgb8 | Format::Rgb16, true) => {
+            &[WIA_DATA_COLOR, WIA_DATA_RAW_RGB, WIA_DATA_RAW_BGR]
+        }
+        (Format::Rgb8 | Format::Rgb16, false) => &[WIA_DATA_COLOR],
     };
     let depth_candidates: &[i32] = match target {
         Format::Bw1 => &[1],
@@ -604,18 +610,18 @@ fn readback_format(
         .and_then(PropValue::as_i4);
 
     match dt {
-        WIA_DATA_THRESHOLD => Ok(Format::Bw1),
+        WIA_DATA_THRESHOLD | WIA_DATA_DITHER => Ok(Format::Bw1),
         WIA_DATA_GRAYSCALE => match (depth, bpc) {
-            (Some(1), _) | (_, Some(1)) => Ok(Format::Bw1),
-            (Some(16), _) | (_, Some(16)) if allow_16bit => Ok(Format::Gray16),
-            (None | Some(8), _) | (_, Some(8)) => Ok(Format::Gray8),
+            (Some(1), _) | (None, Some(1)) => Ok(Format::Bw1),
+            (Some(16), _) | (None, Some(16)) if allow_16bit => Ok(Format::Gray16),
+            (Some(8), _) | (None, None | Some(8)) => Ok(Format::Gray8),
             _ => Err(error::driver_msg(format!(
                 "unsupported WIA grayscale depth {depth:?} (bpc {bpc:?})"
             ))),
         },
         WIA_DATA_COLOR | WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR => match (depth, bpc) {
-            (Some(48 | 16), _) | (_, Some(16)) if allow_16bit => Ok(Format::Rgb16),
-            (None | Some(24 | 32 | 8), _) | (_, Some(8)) => Ok(Format::Rgb8),
+            (Some(48 | 16), _) | (None, Some(16)) if allow_16bit => Ok(Format::Rgb16),
+            (Some(24 | 32 | 8), _) | (None, None | Some(8)) => Ok(Format::Rgb8),
             _ => Err(error::driver_msg(format!(
                 "unsupported WIA color depth {depth:?} (bpc {bpc:?})"
             ))),
@@ -633,8 +639,10 @@ fn negotiate_transfer_format(
     asked_encodings: &[Encoding],
 ) -> Result<(TransferMode, i32, Vec<Encoding>), ScanError> {
     let pairs = caps::collect_transfer_pairs(tree, item)?;
+    let cur_dt = read_i4(tree, item, WIA_IPA_DATATYPE)?;
+    let raw_datatype = matches!(cur_dt, Some(WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR));
 
-    if !asked_encodings.is_empty() {
+    if !asked_encodings.is_empty() && !raw_datatype {
         let mut rejected: Vec<Encoding> = Vec::new();
         for &enc in asked_encodings {
             if rejected.contains(&enc) || !caps::encoding_supports_format(enc, format_now) {
@@ -668,27 +676,30 @@ fn negotiate_transfer_format(
     }
 
     // Raw transfer mode selection (`TYMED` written before `FORMAT`).
-    let raw_candidates: &[(i32, GuidBytes, TransferMode)] = match format_now {
-        Format::Gray16 | Format::Rgb16 => &[
-            (TYMED_FILE, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
-            (TYMED_CALLBACK, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
-        ],
-        Format::Bw1 | Format::Gray8 | Format::Rgb8 => &[
-            (TYMED_FILE, WIA_IMG_FMT_BMP_GUID, TransferMode::RawBmp),
-            (TYMED_FILE, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
-            (
-                TYMED_CALLBACK,
-                WIA_IMG_FMT_MEMORYBMP_GUID,
-                TransferMode::RawMemoryBmp,
-            ),
-            (
-                TYMED_FILE,
-                WIA_IMG_FMT_MEMORYBMP_GUID,
-                TransferMode::RawMemoryBmp,
-            ),
-            (TYMED_CALLBACK, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
-        ],
-    };
+    // `WIA_DATA_RAW_RGB` / `WIA_DATA_RAW_BGR` and 16-bit formats require `WiaImgFmt_RAW`.
+    let raw_candidates: &[(i32, GuidBytes, TransferMode)] =
+        if raw_datatype || matches!(format_now, Format::Gray16 | Format::Rgb16) {
+            &[
+                (TYMED_FILE, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
+                (TYMED_CALLBACK, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
+            ]
+        } else {
+            &[
+                (TYMED_FILE, WIA_IMG_FMT_BMP_GUID, TransferMode::RawBmp),
+                (TYMED_FILE, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
+                (
+                    TYMED_CALLBACK,
+                    WIA_IMG_FMT_MEMORYBMP_GUID,
+                    TransferMode::RawMemoryBmp,
+                ),
+                (
+                    TYMED_FILE,
+                    WIA_IMG_FMT_MEMORYBMP_GUID,
+                    TransferMode::RawMemoryBmp,
+                ),
+                (TYMED_CALLBACK, WIA_IMG_FMT_RAW_GUID, TransferMode::RawWia),
+            ]
+        };
 
     for &(tymed, guid, mode) in raw_candidates {
         let supported = pairs
@@ -865,11 +876,12 @@ fn negotiate_paper(
     down_dpi: f64,
 ) -> Result<Paper, ScanError> {
     let paper_auto_supported = caps::read_paper_auto(tree, item)?;
-    let max_area = caps::read_max_area_mm(tree, item, source)?;
 
     if asked == Paper::Auto && paper_auto_supported {
-        // Reset extents to full bed `[min, max]` before turning on auto-crop so a prior crop does
-        // not clip the automatic border window.
+        // Disable `AUTO_CROP` and switch to `WIA_PAGE_CUSTOM` before resetting `(XPOS, YPOS)` and
+        // `(XEXTENT, YEXTENT)` to the full bed so WDK-strict drivers accept the extent reset and a
+        // prior crop never clips the automatic border window.
+        let _ = write_optional_i4(tree, item, WIA_IPS_AUTO_CROP, WIA_AUTO_CROP_DISABLED)?;
         let _ = write_optional_i4(tree, item, WIA_IPS_PAGE_SIZE, WIA_PAGE_CUSTOM)?;
         reset_extents_to_full_bed(tree, item)?;
 
@@ -902,12 +914,15 @@ fn negotiate_paper(
         }
     }
 
-    // Explicit `Paper::Size` (or `Paper::Auto` when unsupported/refused): turn off auto-crop and
-    // unlock custom extents via `WIA_PAGE_CUSTOM` (`2`) first.
+    // Explicit `Paper::Size` (or `Paper::Auto` when unsupported/refused): turn off auto-crop,
+    // unlock custom extents via `WIA_PAGE_CUSTOM` (`2`), and reset `(XPOS, YPOS)` to `[min, min]`
+    // *before* reading `max_area` so any extent-derived fallback reflects the full bed at the
+    // active resolution.
     let _ = write_optional_i4(tree, item, WIA_IPS_AUTO_CROP, WIA_AUTO_CROP_DISABLED)?;
     let _ = write_optional_i4(tree, item, WIA_IPS_PAGE_SIZE, WIA_PAGE_CUSTOM)?;
 
     set_origin_to_min(tree, item)?;
+    let max_area = caps::read_max_area_mm(tree, item, source)?;
 
     let ext_vals = tree.read_props(item, &[WIA_IPS_XEXTENT, WIA_IPS_YEXTENT])?;
     let ext_attrs = tree.prop_attrs(item, &[WIA_IPS_XEXTENT, WIA_IPS_YEXTENT])?;
@@ -1106,8 +1121,13 @@ pub(super) fn choose_extent_pixels(
 }
 
 pub(super) fn snap_extent_to_range(min: i32, max: i32, step: i32, asked: i32) -> i32 {
-    if step <= 0 || min == max {
-        return min.max(1).min(max);
+    if min == max {
+        return min.max(1);
+    }
+    if step <= 0 {
+        let lo = min.max(1).min(max);
+        let hi = max.max(1);
+        return asked.clamp(lo, hi);
     }
     let step64 = i64::from(step);
     let min64 = if min >= 1 {
@@ -1665,5 +1685,25 @@ mod tests {
             taken_bad.applied.clamped,
             vec![Clamped::Paper(asked_bad_sz.paper)]
         );
+
+        // `snap_extent_to_range` with `step == 0` clamps `asked` into `[min, max]` rather than `1`.
+        assert_eq!(snap_extent_to_range(1, 2550, 0, 1200), 1200);
+        assert_eq!(snap_extent_to_range(1, 2550, 0, 5000), 2550);
+
+        // `build_feeder_select_candidates` strips `ADVANCED_DUPLEX` and tries `DUPLEX | FRONT_FIRST`.
+        let list_constraint = PropConstraint::ListI4 {
+            nom: FEEDER | FRONT_ONLY,
+            values: vec![
+                FEEDER | FRONT_ONLY,
+                FEEDER | DUPLEX | ADVANCED_DUPLEX,
+                FEEDER | DUPLEX | FRONT_FIRST,
+            ],
+        };
+        let cands = build_feeder_select_candidates(
+            &list_constraint,
+            Some(FEEDER | FRONT_ONLY | ADVANCED_DUPLEX),
+            true,
+        );
+        assert_eq!(cands, vec![FEEDER | DUPLEX | FRONT_FIRST]);
     }
 }

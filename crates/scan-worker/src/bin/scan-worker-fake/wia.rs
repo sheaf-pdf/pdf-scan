@@ -4,17 +4,17 @@
 
 use std::{
     env, fs,
-    path::Path,
     process::ExitCode,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
+        mpsc::SyncSender,
     },
     thread,
     time::{Duration, Instant},
 };
 
-use scan_device::Backend;
+use scan_device::in_progress::Progress;
 use scan_device::twain::TwainBackend;
 use scan_device::wia::WiaBackend;
 use scan_device::wia::fake_wia::{
@@ -29,6 +29,10 @@ use scan_device::wia::fake_wia::{
     WIA_IPS_XEXTENT, WIA_IPS_XPOS, WIA_IPS_XRES, WIA_IPS_YEXTENT, WIA_IPS_YPOS, WIA_IPS_YRES,
     WIA_ITEM_TYPE_IMAGE, WIA_ITEM_TYPE_TRANSFER, WIA_PAGE_AUTO, WIA_PAGE_CUSTOM, WIA_PAGE_LETTER,
     WIA_PROP_FLAG, WIA_PROP_LIST, WIA_PROP_RANGE, WIA_PROP_RW, WIA_STATUS_WARMING_UP_HR,
+};
+use scan_device::{
+    Backend, Caps, Device, DeviceInfo, Done, Event, Opened, ScanError, Settings, WindowClosed,
+    WindowOwner,
 };
 
 use crate::twain::NoisyBackend;
@@ -67,7 +71,7 @@ pub fn fake_main(args: &[String]) -> ExitCode {
         }
     }
 
-    let (fake, command_log, extra_fed) = match build_fake(mode) {
+    let (fake, command_log, extra_fed, cancel_slot) = match build_fake(mode) {
         Ok(built) => built,
         Err(msg) => {
             eprintln!("scan-worker-fake: wia-fake: {msg}");
@@ -83,6 +87,15 @@ pub fn fake_main(args: &[String]) -> ExitCode {
         }
     };
 
+    let wia_backend: Box<dyn Backend> = if mode == "await-cancel" {
+        Box::new(CancelWatchBackend {
+            inner: Box::new(wia),
+            slot: cancel_slot,
+        })
+    } else {
+        Box::new(wia)
+    };
+
     let mut backends: Vec<Box<dyn Backend>> = Vec::new();
     if mode == "multi-backend" {
         // Put `TwainBackend` ahead of `WiaBackend` so `serve`'s open loop must skip `BadId` on
@@ -90,9 +103,9 @@ pub fn fake_main(args: &[String]) -> ExitCode {
         backends.push(Box::new(TwainBackend::new()));
     }
     if noisy {
-        backends.push(Box::new(NoisyBackend(Box::new(wia))));
+        backends.push(Box::new(NoisyBackend(wia_backend)));
     } else {
-        backends.push(Box::new(wia));
+        backends.push(wia_backend);
     }
 
     let code = scan_worker::serve(backends);
@@ -295,15 +308,67 @@ fn base_source_item(category: GuidBytes, handling_valid: i32) -> FakeItem {
     item
 }
 
+type CancelSlot = Arc<Mutex<Option<Box<dyn Progress>>>>;
+
+struct CancelWatchBackend {
+    inner: Box<dyn Backend>,
+    slot: CancelSlot,
+}
+
+impl Backend for CancelWatchBackend {
+    fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
+        self.inner.list(deadline)
+    }
+
+    fn open(&mut self, device: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
+        let mut opened = self.inner.open(device, deadline)?;
+        opened.device = Box::new(CancelWatchDevice {
+            inner: opened.device,
+            slot: Arc::clone(&self.slot),
+        });
+        Ok(opened)
+    }
+}
+
+struct CancelWatchDevice {
+    inner: Box<dyn Device>,
+    slot: CancelSlot,
+}
+
+impl Device for CancelWatchDevice {
+    fn caps(&mut self) -> Result<Caps, ScanError> {
+        self.inner.caps()
+    }
+
+    fn scan(
+        &mut self,
+        settings: &Settings,
+        first_sheet: u32,
+        events: &SyncSender<Event>,
+        progress: &dyn Progress,
+    ) -> Result<Done, ScanError> {
+        *self.slot.lock().unwrap() = Some(progress.child("cancel-watch", 0.0));
+        let res = self.inner.scan(settings, first_sheet, events, progress);
+        *self.slot.lock().unwrap() = None;
+        res
+    }
+
+    fn settings_window(&mut self, owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError> {
+        self.inner.settings_window(owner)
+    }
+}
+
 type BuiltFake = (
     FakeWiaHandle,
-    Arc<std::sync::Mutex<Vec<GuidBytes>>>,
+    Arc<Mutex<Vec<GuidBytes>>>,
     Arc<AtomicUsize>,
+    CancelSlot,
 );
 
 fn build_fake(mode: &str) -> Result<BuiltFake, String> {
     let fake = FakeWiaHandle::new();
     let extra_fed = Arc::new(AtomicUsize::new(0));
+    let cancel_slot: CancelSlot = Arc::new(Mutex::new(None));
 
     if mode == "not-installed" {
         fake.state.lock().unwrap().list_error_hr = Some(REGDB_E_CLASSNOTREG_HR);
@@ -311,7 +376,7 @@ fn build_fake(mode: &str) -> Result<BuiltFake, String> {
         spec.open_error_hr = Some(REGDB_E_CLASSNOTREG_HR);
         let log = Arc::clone(&spec.command_log);
         fake.add_device(spec);
-        return Ok((fake, log, extra_fed));
+        return Ok((fake, log, extra_fed, cancel_slot));
     }
 
     // Add a non-scanner camera node to verify worker listings filter cameras out.
@@ -337,6 +402,7 @@ fn build_fake(mode: &str) -> Result<BuiltFake, String> {
                         bytes: make_bmp_24bit_2x2(0xAA),
                     }],
                     return_hr: S_OK_HR,
+                    cancel_hr: None,
                     require_tymed: None,
                     stdout_chatter: Some("{\"error\":\"Jammed\"}\nWIA minidriver trace".to_owned()),
                 },
@@ -387,6 +453,7 @@ fn build_fake(mode: &str) -> Result<BuiltFake, String> {
         }
         "await-cancel" => {
             let fed_clone = Arc::clone(&extra_fed);
+            let slot_clone = Arc::clone(&cancel_slot);
             let feeder = base_source_item(WIA_CATEGORY_FEEDER_GUID, FEEDER | DUPLEX)
                 .with_downloads([FakeDownloadCall::ok(vec![
                     // Sheet 1 Front
@@ -394,19 +461,22 @@ fn build_fake(mode: &str) -> Result<BuiltFake, String> {
                         chunks: vec![70],
                         bytes: make_bmp_24bit_2x2(1),
                     },
-                    // Signal parent test that Sheet 1 Front is done, then wait for parent to
-                    // send `"cancel"` over the worker pipe!
+                    // Signal parent test that Sheet 1 Front is done, then wait deterministically
+                    // until `scan_worker::serve`'s stdin reader marks the batch `Progress`
+                    // cancelled!
                     FakeTransferEvent::Hook(Arc::new(move || {
                         if let Some(sig) = env::var_os("SCAN_WORKER_TEST_SIGNAL_FILE") {
                             let _ = fs::write(sig, b"front-done");
                         }
-                        if let Some(go) = env::var_os("SCAN_WORKER_TEST_GO_FILE") {
-                            let start = Instant::now();
-                            while !Path::new(&go).exists()
-                                && start.elapsed() < Duration::from_secs(5)
-                            {
-                                thread::sleep(Duration::from_millis(5));
-                            }
+                        let start = Instant::now();
+                        while !slot_clone
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .is_some_and(|p| p.is_cancelled())
+                            && start.elapsed() < Duration::from_secs(5)
+                        {
+                            thread::sleep(Duration::from_millis(5));
                         }
                     })),
                     // Sheet 1 Back (must still be delivered to complete the duplex sheet!)
@@ -452,5 +522,5 @@ fn build_fake(mode: &str) -> Result<BuiltFake, String> {
     }
 
     fake.add_device(spec);
-    Ok((fake, cmd_log, extra_fed))
+    Ok((fake, cmd_log, extra_fed, cancel_slot))
 }

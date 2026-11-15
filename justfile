@@ -53,6 +53,8 @@ libraries := "sane-dl twain-dsm scan-device scan-worker fake-libsane"
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     for crate in {{ libraries }}; do cargo clippy --locked -p "$crate" --lib -- -D warnings || exit 1; done
+    cargo clippy --locked -p scan-device --lib --no-default-features --features sane,twain,wia,serde -- -D warnings
+    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
@@ -257,14 +259,14 @@ scan-device-clippy target:
 scan-worker-twain-test:
     cargo test --locked -p scan-worker --lib --target i686-pc-windows-msvc
     cargo test --locked -p scan-worker --test stop_handle --target i686-pc-windows-msvc
-    cargo test --locked -p scan-worker --test stop_handle --test twain_worker
+    SCAN_WORKER_I686_EXE="${CARGO_TARGET_DIR:-$PWD/target}/i686-pc-windows-msvc/debug/scan-worker-fake.exe" cargo test --locked -p scan-worker --test stop_handle --test twain_worker
 
 # scan-worker's WIA worker tests (scripted WiaBackend and live Windows COM
 # in both 64-bit and 32-bit i686).
 # scan-worker's Windows WIA worker tests in 64-bit and 32-bit.
 scan-worker-wia-test:
     cargo test --locked -p scan-worker --test wia_worker --target i686-pc-windows-msvc
-    cargo test --locked -p scan-worker --test wia_worker
+    SCAN_WORKER_REQUIRE_I686=1 SCAN_WORKER_I686_EXE="${CARGO_TARGET_DIR:-$PWD/target}/i686-pc-windows-msvc/debug/scan-worker-fake.exe" cargo test --locked -p scan-worker --test wia_worker
 
 # scan-worker's lints for `target` with every feature and target built.
 # scan-worker's lints for one Windows target, its tests included.

@@ -189,7 +189,11 @@ pub(super) fn symbol(op: WiaOp, hr: i32) -> Option<&'static str> {
 /// Maps a failure `HRESULT` from `op` to [`ScanError`].
 pub(super) fn hresult(op: WiaOp, hr: i32) -> ScanError {
     match hr {
-        REGDB_E_CLASSNOTREG_HR | ERROR_SERVICE_DISABLED_HR | ERROR_SERVICE_DOES_NOT_EXIST_HR
+        REGDB_E_CLASSNOTREG_HR
+        | ERROR_SERVICE_DISABLED_HR
+        | ERROR_SERVICE_DOES_NOT_EXIST_HR
+        | RPC_S_SERVER_UNAVAILABLE_HR
+        | ERROR_SERVICE_NOT_ACTIVE_HR
             if matches!(
                 op,
                 WiaOp::CreateManager | WiaOp::EnumDevices | WiaOp::OpenDevice
@@ -199,12 +203,13 @@ pub(super) fn hresult(op: WiaOp, hr: i32) -> ScanError {
                 what: WIA.to_owned(),
             }
         }
-        RPC_S_SERVER_UNAVAILABLE_HR | ERROR_SERVICE_NOT_ACTIVE_HR
-            if matches!(op, WiaOp::CreateManager) =>
+        RPC_S_SERVER_UNAVAILABLE_HR | RPC_S_CALL_FAILED_HR
+            if matches!(
+                op,
+                WiaOp::Caps | WiaOp::Settings | WiaOp::Download | WiaOp::StopFeeder
+            ) =>
         {
-            ScanError::NotInstalled {
-                what: WIA.to_owned(),
-            }
+            ScanError::Gone
         }
         E_ACCESSDENIED_HR => ScanError::AccessDenied,
         WIA_ERROR_PAPER_JAM_HR => ScanError::Jammed,
@@ -220,14 +225,8 @@ pub(super) fn hresult(op: WiaOp, hr: i32) -> ScanError {
         | WIA_ERROR_DEVICE_COMMUNICATION_HR
         | ERROR_DEVICE_NOT_CONNECTED_HR
         | CO_E_OBJNOTCONNECTED_HR => ScanError::Gone,
-        ERROR_FILE_NOT_FOUND_HR | ERROR_NOT_FOUND_HR if matches!(op, WiaOp::OpenDevice) => {
-            ScanError::Gone
-        }
-        WIA_NO_DEVICE_OR_ENDORSER_HR
-            if matches!(
-                op,
-                WiaOp::CreateManager | WiaOp::EnumDevices | WiaOp::OpenDevice
-            ) =>
+        ERROR_FILE_NOT_FOUND_HR | ERROR_NOT_FOUND_HR | WIA_NO_DEVICE_OR_ENDORSER_HR
+            if matches!(op, WiaOp::OpenDevice) =>
         {
             ScanError::Gone
         }
@@ -252,6 +251,25 @@ pub(super) fn hresult(op: WiaOp, hr: i32) -> ScanError {
                 None => driver_msg(format!("{what} failed ({:#010x})", hr.cast_unsigned())),
             }
         }
+    }
+}
+
+/// Latches a negative non-warmup `WiaTransferParams::hrErrorStatus` into `slot`, allowing a
+/// specific WIA/COM error code to upgrade an earlier generic `E_FAIL` or
+/// `WIA_ERROR_GENERAL_ERROR`.
+pub(super) fn latch_callback_error(slot: &mut Option<i32>, hr_status: i32) {
+    if hr_status >= 0 || is_warming_up(hr_status) {
+        return;
+    }
+    match *slot {
+        None => *slot = Some(hr_status),
+        Some(prev)
+            if matches!(prev, E_FAIL_HR | WIA_ERROR_GENERAL_ERROR_HR)
+                && !matches!(hr_status, E_FAIL_HR | WIA_ERROR_GENERAL_ERROR_HR) =>
+        {
+            *slot = Some(hr_status);
+        }
+        Some(_) => {}
     }
 }
 
@@ -374,10 +392,10 @@ mod tests {
             hresult(WiaOp::OpenDevice, WIA_NO_DEVICE_OR_ENDORSER_HR),
             ScanError::Gone
         );
-        assert_eq!(
+        assert!(matches!(
             hresult(WiaOp::EnumDevices, WIA_NO_DEVICE_OR_ENDORSER_HR),
-            ScanError::Gone
-        );
+            ScanError::Driver { shown: false, .. }
+        ));
         match hresult(WiaOp::Download, WIA_NO_DEVICE_OR_ENDORSER_HR) {
             ScanError::Driver { message, shown } => {
                 assert!(!shown);
@@ -401,22 +419,39 @@ mod tests {
     }
 
     #[test]
-    fn service_missing_or_disabled_maps_to_not_installed() {
-        for hr in [
-            REGDB_E_CLASSNOTREG_HR,
-            ERROR_SERVICE_DISABLED_HR,
-            ERROR_SERVICE_DOES_NOT_EXIST_HR,
-            RPC_S_SERVER_UNAVAILABLE_HR,
-            ERROR_SERVICE_NOT_ACTIVE_HR,
+    fn service_missing_or_disabled_maps_to_not_installed_and_dead_rpc_on_open_item_maps_to_gone() {
+        for op in [WiaOp::CreateManager, WiaOp::EnumDevices, WiaOp::OpenDevice] {
+            for hr in [
+                REGDB_E_CLASSNOTREG_HR,
+                ERROR_SERVICE_DISABLED_HR,
+                ERROR_SERVICE_DOES_NOT_EXIST_HR,
+                RPC_S_SERVER_UNAVAILABLE_HR,
+                ERROR_SERVICE_NOT_ACTIVE_HR,
+            ] {
+                assert_eq!(
+                    hresult(op, hr),
+                    ScanError::NotInstalled {
+                        what: "WIA".to_owned()
+                    },
+                    "{op:?} {:#010x}",
+                    hr.cast_unsigned()
+                );
+            }
+        }
+        for op in [
+            WiaOp::Caps,
+            WiaOp::Settings,
+            WiaOp::Download,
+            WiaOp::StopFeeder,
         ] {
-            assert_eq!(
-                hresult(WiaOp::CreateManager, hr),
-                ScanError::NotInstalled {
-                    what: "WIA".to_owned()
-                },
-                "{:#010x}",
-                hr.cast_unsigned()
-            );
+            for hr in [RPC_S_SERVER_UNAVAILABLE_HR, RPC_S_CALL_FAILED_HR] {
+                assert_eq!(
+                    hresult(op, hr),
+                    ScanError::Gone,
+                    "{op:?} {:#010x}",
+                    hr.cast_unsigned()
+                );
+            }
         }
     }
 

@@ -202,7 +202,7 @@
 //! # Stability
 //!
 //! Provisional: 0.0.x and unpublished, while the model is tried against each driver API. It's
-//! frozen at 0.1.0 once a second one has been through it.
+//! frozen at 0.1.0 once the Linux and Windows ones have been through it.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -210,6 +210,10 @@
 mod caps;
 mod device;
 #[cfg(any(feature = "twain", feature = "wia"))]
+#[cfg_attr(
+    not(any(windows, test, all(feature = "wia", feature = "fake"))),
+    allow(dead_code)
+)]
 mod dib;
 mod error;
 #[cfg(feature = "fake")]

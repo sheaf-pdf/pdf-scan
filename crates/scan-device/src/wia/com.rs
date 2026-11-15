@@ -26,16 +26,18 @@ use windows::Win32::Devices::ImageAcquisition::{
     WiaTransferParams,
 };
 use windows::Win32::Foundation::{
-    E_ABORT, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, RPC_E_WRONG_THREAD,
-    S_FALSE, S_OK, STG_E_INVALIDFUNCTION, STG_E_INVALIDPOINTER, STG_E_MEDIUMFULL,
+    E_ABORT, E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER,
+    RPC_E_WRONG_THREAD, S_FALSE, S_OK, STG_E_INVALIDFLAG, STG_E_INVALIDFUNCTION,
+    STG_E_INVALIDPOINTER, STG_E_MEDIUMFULL,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     InitPropVariantFromCLSID, PROPSPEC, PROPSPEC_0, PROPVARIANT, PRSPEC_PROPID,
 };
 use windows::Win32::System::Com::{
     CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize, ISequentialStream_Impl, IStream, IStream_Impl, LOCKTYPE, STATFLAG, STATSTG,
-    STGC, STGTY_STREAM, STREAM_SEEK, STREAM_SEEK_CUR, STREAM_SEEK_END, STREAM_SEEK_SET,
+    CoUninitialize, ISequentialStream_Impl, IStream, IStream_Impl, LOCKTYPE, STATFLAG,
+    STATFLAG_DEFAULT, STATFLAG_NONAME, STATSTG, STGC, STGM_READWRITE, STGTY_STREAM, STREAM_SEEK,
+    STREAM_SEEK_CUR, STREAM_SEEK_END, STREAM_SEEK_SET,
 };
 use windows::Win32::System::Variant::{
     VARENUM, VT_BOOL, VT_BSTR, VT_CLSID, VT_EMPTY, VT_I2, VT_I4, VT_INT, VT_LPWSTR, VT_UI1, VT_UI2,
@@ -130,14 +132,19 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn panic_payload_string(payload: Box<dyn Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_owned()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "panic inside WIA COM callback".to_owned()
-    }
+fn extract_panic_message(payload: Box<dyn Any + Send>) -> String {
+    catch_unwind(AssertUnwindSafe(move || {
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_owned()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic inside WIA COM callback".to_owned()
+        };
+        drop(payload);
+        msg
+    }))
+    .unwrap_or_else(|_| "panic inside WIA COM callback (payload drop panicked)".to_owned())
 }
 
 /// RAII guard for single-threaded apartment (`COINIT_APARTMENTTHREADED`) initialization.
@@ -249,8 +256,11 @@ impl WiaSystem for ComWiaSystem {
             // SAFETY: `slot` is a single-element output buffer and `fetched` is initialized to `0`
             // so `S_FALSE` (mapped to `Ok(())` by `windows 0.62`) leaves `fetched == 0` or
             // `slot == None`.
-            unsafe { enumerator.Next(1, &mut slot, &mut fetched) }
-                .map_err(|err| error::hresult(WiaOp::EnumDevices, err.code().0))?;
+            match unsafe { enumerator.Next(1, &mut slot, &mut fetched) } {
+                Ok(()) => {}
+                Err(err) if err.code().0 == error::WIA_NO_DEVICE_OR_ENDORSER_HR => break,
+                Err(err) => return Err(error::hresult(WiaOp::EnumDevices, err.code().0)),
+            }
             if fetched == 0 {
                 break;
             }
@@ -277,12 +287,19 @@ impl WiaSystem for ComWiaSystem {
             .cast()
             .map_err(|err| error::hresult(WiaOp::OpenDevice, err.code().0))?;
         let props = read_device_props(&storage, WiaOp::OpenDevice)?;
-        Ok((props, Box::new(ComDeviceTree { items: vec![root] })))
+        Ok((
+            props,
+            Box::new(ComDeviceTree {
+                items: vec![root],
+                op: WiaOp::Caps,
+            }),
+        ))
     }
 }
 
 struct ComDeviceTree {
     items: Vec<IWiaItem2>,
+    op: WiaOp,
 }
 
 impl ComDeviceTree {
@@ -294,11 +311,16 @@ impl ComDeviceTree {
 }
 
 impl WiaDeviceTree for ComDeviceTree {
+    fn set_op(&mut self, op: WiaOp) {
+        self.op = op;
+    }
+
     fn reset_children(&mut self) {
         self.items.truncate(1);
     }
 
     fn children_of(&mut self, item: ItemId) -> Result<Vec<ItemId>, ScanError> {
+        let op = self.op;
         let parent = self.item(item)?.clone();
         // SAFETY: `parent` is a valid STA `IWiaItem2`; passing `None` enumerates all direct child
         // items regardless of category.
@@ -307,7 +329,7 @@ impl WiaDeviceTree for ComDeviceTree {
             Err(err) if err.code() == E_INVALIDARG || err.code() == E_NOTIMPL => {
                 return Ok(Vec::new());
             }
-            Err(err) => return Err(error::hresult(WiaOp::Caps, err.code().0)),
+            Err(err) => return Err(error::hresult(op, err.code().0)),
         };
 
         let mut ids = Vec::new();
@@ -316,7 +338,7 @@ impl WiaDeviceTree for ComDeviceTree {
             let mut fetched = 0u32;
             // SAFETY: `slot` is a 1-element buffer and `fetched` is initialized to `0`.
             unsafe { enumerator.Next(1, &mut slot, &mut fetched) }
-                .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
+                .map_err(|err| error::hresult(op, err.code().0))?;
             if fetched == 0 {
                 break;
             }
@@ -331,9 +353,10 @@ impl WiaDeviceTree for ComDeviceTree {
     }
 
     fn item_type(&mut self, item: ItemId) -> Result<i32, ScanError> {
+        let op = self.op;
         let node = self.item(item)?;
         // SAFETY: `node` is a valid STA `IWiaItem2`.
-        unsafe { node.GetItemType() }.map_err(|err| error::hresult(WiaOp::Caps, err.code().0))
+        unsafe { node.GetItemType() }.map_err(|err| error::hresult(op, err.code().0))
     }
 
     fn read_props(
@@ -341,11 +364,12 @@ impl WiaDeviceTree for ComDeviceTree {
         item: ItemId,
         ids: &[PropId],
     ) -> Result<Vec<Option<PropValue>>, ScanError> {
+        let op = self.op;
         let storage: IWiaPropertyStorage = self
             .item(item)?
             .cast()
-            .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
-        read_multiple(&storage, ids, WiaOp::Caps)
+            .map_err(|err| error::hresult(op, err.code().0))?;
+        read_multiple(&storage, ids, op)
     }
 
     fn prop_attrs(
@@ -356,10 +380,11 @@ impl WiaDeviceTree for ComDeviceTree {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+        let op = self.op;
         let storage: IWiaPropertyStorage = self
             .item(item)?
             .cast()
-            .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
+            .map_err(|err| error::hresult(op, err.code().0))?;
         let specs: Vec<PROPSPEC> = ids.iter().copied().map(make_propspec).collect();
         let mut flags = vec![0u32; specs.len()];
         let mut vars = vec![PROPVARIANT::default(); specs.len()];
@@ -391,7 +416,7 @@ impl WiaDeviceTree for ComDeviceTree {
                 .collect());
         }
         if let Err(err) = batch_res {
-            let mapped = error::hresult(WiaOp::Caps, err.code().0);
+            let mapped = error::hresult(op, err.code().0);
             if error::is_fatal_scan_error(&mapped) {
                 return Err(mapped);
             }
@@ -405,9 +430,15 @@ impl WiaDeviceTree for ComDeviceTree {
             // SAFETY: single-element `spec`, `flag`, and fresh `VT_EMPTY` `pv`.
             let single = unsafe { storage.GetPropertyAttributes(1, &spec, &mut flag, &mut pv) };
             match single {
-                Ok(()) => out.push(Some(decode_prop_attr(flag, &pv))),
+                Ok(()) => {
+                    if flag == 0 && pv.vt() == VT_EMPTY {
+                        out.push(None);
+                    } else {
+                        out.push(Some(decode_prop_attr(flag, &pv)));
+                    }
+                }
                 Err(err) => {
-                    let mapped = error::hresult(WiaOp::Caps, err.code().0);
+                    let mapped = error::hresult(op, err.code().0);
                     if error::is_fatal_scan_error(&mapped) {
                         return Err(mapped);
                     }
@@ -433,20 +464,21 @@ impl WiaDeviceTree for ComDeviceTree {
     }
 
     fn transfer_formats(&mut self, item: ItemId) -> Result<Vec<FormatPair>, ScanError> {
+        let op = self.op;
         let transfer: IWiaTransfer = self
             .item(item)?
             .cast()
-            .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
+            .map_err(|err| error::hresult(op, err.code().0))?;
         // SAFETY: `transfer` is a valid STA `IWiaTransfer`.
         let enumerator: IEnumWIA_FORMAT_INFO = unsafe { transfer.EnumWIA_FORMAT_INFO() }
-            .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
+            .map_err(|err| error::hresult(op, err.code().0))?;
         let mut pairs = Vec::new();
         loop {
             let mut info = WIA_FORMAT_INFO::default();
             let mut fetched = 0u32;
             // SAFETY: `info` is a 1-element output buffer and `fetched` is initialized to `0`.
             unsafe { enumerator.Next(1, &mut info, &mut fetched) }
-                .map_err(|err| error::hresult(WiaOp::Caps, err.code().0))?;
+                .map_err(|err| error::hresult(op, err.code().0))?;
             if fetched == 0 {
                 break;
             }
@@ -782,6 +814,35 @@ struct StreamInner {
     panic_msg: Option<String>,
 }
 
+impl StreamInner {
+    /// Grows `self.buf` to `target_len` (`<= self.cap`) with amortized doubling clamped to
+    /// `self.cap.min(isize::MAX as u64)` so chunked writes stay `O(n)` without ever attempting a
+    /// 2x allocation past `MAX_DIB_BYTES` on 32-bit `i686`. Falls back to exact reservation if the
+    /// doubled allocation fails, returning `Err(E_OUTOFMEMORY)` only on genuine OS OOM.
+    fn grow_to(&mut self, target_len: usize) -> Result<(), HRESULT> {
+        if target_len <= self.buf.len() {
+            return Ok(());
+        }
+        let max_cap = usize::try_from(self.cap)
+            .unwrap_or(isize::MAX as usize)
+            .min(isize::MAX as usize);
+        let cur_cap = self.buf.capacity();
+        if target_len > cur_cap {
+            let doubled = cur_cap.saturating_mul(2).max(4096);
+            let desired_cap = doubled.max(target_len).min(max_cap);
+            let extra_desired = desired_cap - self.buf.len();
+            if self.buf.try_reserve_exact(extra_desired).is_err() {
+                let extra_min = target_len - self.buf.len();
+                if self.buf.try_reserve_exact(extra_min).is_err() {
+                    return Err(E_OUTOFMEMORY);
+                }
+            }
+        }
+        self.buf.resize(target_len, 0);
+        Ok(())
+    }
+}
+
 #[implement(IStream)]
 struct BoundedStream {
     inner: Arc<Mutex<StreamInner>>,
@@ -814,10 +875,13 @@ impl BoundedStream {
         })) {
             Ok(res) => res,
             Err(payload) => {
-                let mut guard = lock(&self.inner);
-                if guard.panic_msg.is_none() {
-                    guard.panic_msg = Some(panic_payload_string(payload));
-                }
+                let msg = extract_panic_message(payload);
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let mut guard = lock(&self.inner);
+                    if guard.panic_msg.is_none() {
+                        guard.panic_msg = Some(msg);
+                    }
+                }));
                 Err(windows_core::Error::from_hresult(E_FAIL))
             }
         }
@@ -827,11 +891,11 @@ impl BoundedStream {
 impl ISequentialStream_Impl for BoundedStream_Impl {
     fn Read(&self, pv: *mut core::ffi::c_void, cb: u32, pcbread: *mut u32) -> HRESULT {
         match self.run_guarded(|inner| {
+            if !pcbread.is_null() {
+                // SAFETY: `pcbread` was checked non-null.
+                unsafe { *pcbread = 0 };
+            }
             if cb == 0 {
-                if !pcbread.is_null() {
-                    // SAFETY: `pcbread` was checked non-null.
-                    unsafe { *pcbread = 0 };
-                }
                 return Ok(());
             }
             if pv.is_null() {
@@ -863,11 +927,11 @@ impl ISequentialStream_Impl for BoundedStream_Impl {
 
     fn Write(&self, pv: *const core::ffi::c_void, cb: u32, pcbwritten: *mut u32) -> HRESULT {
         match self.run_guarded(|inner| {
+            if !pcbwritten.is_null() {
+                // SAFETY: `pcbwritten` was checked non-null.
+                unsafe { *pcbwritten = 0 };
+            }
             if cb == 0 {
-                if !pcbwritten.is_null() {
-                    // SAFETY: `pcbwritten` was checked non-null.
-                    unsafe { *pcbwritten = 0 };
-                }
                 return Ok(());
             }
             if pv.is_null() {
@@ -875,10 +939,6 @@ impl ISequentialStream_Impl for BoundedStream_Impl {
             }
             let fail_full = |inner: &mut StreamInner| {
                 inner.overflowed = true;
-                if !pcbwritten.is_null() {
-                    // SAFETY: `pcbwritten` was checked non-null.
-                    unsafe { *pcbwritten = 0 };
-                }
                 windows_core::Error::from_hresult(STG_E_MEDIUMFULL)
             };
 
@@ -892,13 +952,9 @@ impl ISequentialStream_Impl for BoundedStream_Impl {
             else {
                 return Err(fail_full(inner));
             };
-            if end_usize > inner.buf.len() {
-                let needed = end_usize - inner.buf.len();
-                if inner.buf.try_reserve(needed).is_err() {
-                    return Err(fail_full(inner));
-                }
-                inner.buf.resize(end_usize, 0);
-            }
+            inner
+                .grow_to(end_usize)
+                .map_err(windows_core::Error::from_hresult)?;
             // SAFETY: `pv` is non-null and `cb > 0` was checked above, so the caller supplies
             // `cb` readable bytes.
             let src = unsafe { core::slice::from_raw_parts(pv.cast::<u8>(), cb as usize) };
@@ -924,6 +980,10 @@ impl IStream_Impl for BoundedStream_Impl {
         plibnewposition: *mut u64,
     ) -> windows_core::Result<()> {
         self.run_guarded(|inner| {
+            if !plibnewposition.is_null() {
+                // SAFETY: `plibnewposition` was checked non-null.
+                unsafe { *plibnewposition = 0 };
+            }
             let base: i128 = match dworigin {
                 STREAM_SEEK_SET => 0,
                 STREAM_SEEK_CUR => i128::from(inner.pos),
@@ -957,13 +1017,13 @@ impl IStream_Impl for BoundedStream_Impl {
                 inner.overflowed = true;
                 return Err(windows_core::Error::from_hresult(STG_E_MEDIUMFULL));
             };
-            if new_len > inner.buf.len()
-                && inner.buf.try_reserve(new_len - inner.buf.len()).is_err()
-            {
-                inner.overflowed = true;
-                return Err(windows_core::Error::from_hresult(STG_E_MEDIUMFULL));
+            if new_len <= inner.buf.len() {
+                inner.buf.truncate(new_len);
+            } else {
+                inner
+                    .grow_to(new_len)
+                    .map_err(windows_core::Error::from_hresult)?;
             }
-            inner.buf.resize(new_len, 0);
             Ok(())
         })
     }
@@ -1004,20 +1064,24 @@ impl IStream_Impl for BoundedStream_Impl {
         Err(windows_core::Error::from_hresult(E_NOTIMPL))
     }
 
-    fn Stat(&self, pstatstg: *mut STATSTG, _grfstatflag: &STATFLAG) -> windows_core::Result<()> {
+    fn Stat(&self, pstatstg: *mut STATSTG, grfstatflag: &STATFLAG) -> windows_core::Result<()> {
         self.run_guarded(|inner| {
             if pstatstg.is_null() {
                 return Err(windows_core::Error::from_hresult(STG_E_INVALIDPOINTER));
             }
-            // Zero-initialize all fields (`pwcsName` null) so COM RPC marshaling never frees an
-            // uninitialized pointer regardless of `STATFLAG_NONAME`.
+            // Zero-initialize all fields (`pwcsName` null) upfront so COM RPC marshaling never
+            // frees an uninitialized pointer even on `STG_E_INVALIDFLAG`.
             let stat = STATSTG {
                 r#type: STGTY_STREAM.0.cast_unsigned(),
                 cbSize: inner.buf.len() as u64,
+                grfMode: STGM_READWRITE,
                 ..Default::default()
             };
             // SAFETY: `pstatstg` was checked non-null.
             unsafe { *pstatstg = stat };
+            if *grfstatflag != STATFLAG_DEFAULT && *grfstatflag != STATFLAG_NONAME {
+                return Err(windows_core::Error::from_hresult(STG_E_INVALIDFLAG));
+            }
             Ok(())
         })
     }
@@ -1041,6 +1105,7 @@ struct CallbackShared {
     stream_cap: u64,
     current_stream: Option<Arc<Mutex<StreamInner>>>,
     callback_error_hr: Option<i32>,
+    saw_warming_up: bool,
     stream_overflowed: bool,
     callback_panic: Option<String>,
 }
@@ -1061,13 +1126,7 @@ impl Drop for SinkLease {
         guard.lease_active = false;
         guard.sink = None;
         if let Some(stream) = guard.current_stream.take() {
-            let s = lock(&stream);
-            if s.overflowed {
-                guard.stream_overflowed = true;
-            }
-            if s.panic_msg.is_some() && guard.callback_panic.is_none() {
-                guard.callback_panic = s.panic_msg.clone();
-            }
+            TransferCallbackCom::harvest_stream_flags(&mut guard, &stream);
         }
     }
 }
@@ -1125,6 +1184,14 @@ impl TransferCallbackCom {
         unsafe { IWiaTransferCallback::from_raw(raw.cast()) }
     }
 
+    fn add_ref_inner(&self) -> u32 {
+        let prev = self.ref_count.fetch_add(1, Ordering::Relaxed);
+        if prev == 0 || prev >= i32::MAX as u32 {
+            std::process::abort();
+        }
+        prev + 1
+    }
+
     unsafe extern "system" fn query_interface(
         this: *mut core::ffi::c_void,
         riid: *const GUID,
@@ -1143,7 +1210,7 @@ impl TransferCallbackCom {
         if iid == IWiaTransferCallback::IID || iid == IUnknown::IID {
             // SAFETY: `this` is a live `TransferCallbackCom` pointer.
             let me = unsafe { &*this.cast::<Self>() };
-            me.ref_count.fetch_add(1, Ordering::Relaxed);
+            me.add_ref_inner();
             // SAFETY: `ppv` is non-null.
             unsafe { *ppv = this };
             S_OK
@@ -1153,22 +1220,34 @@ impl TransferCallbackCom {
     }
 
     unsafe extern "system" fn add_ref(this: *mut core::ffi::c_void) -> u32 {
+        if this.is_null() {
+            return 0;
+        }
         // SAFETY: `this` is a live `TransferCallbackCom` pointer.
         let me = unsafe { &*this.cast::<Self>() };
-        me.ref_count.fetch_add(1, Ordering::Relaxed) + 1
+        me.add_ref_inner()
     }
 
     unsafe extern "system" fn release(this: *mut core::ffi::c_void) -> u32 {
+        if this.is_null() {
+            return 0;
+        }
         // SAFETY: `this` is a live `TransferCallbackCom` pointer with positive refcount.
         let prev = unsafe {
             (*this.cast::<Self>())
                 .ref_count
                 .fetch_sub(1, Ordering::Release)
         };
+        if prev == 0 {
+            std::process::abort();
+        }
         if prev == 1 {
             core::sync::atomic::fence(Ordering::Acquire);
-            // SAFETY: Last COM reference released; reclaim the heap allocation from `into_interface`.
-            unsafe { drop(Box::from_raw(this.cast::<Self>())) };
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: Last COM reference released; reclaim the heap allocation from
+                // `into_interface`.
+                unsafe { drop(Box::from_raw(this.cast::<Self>())) };
+            }));
             0
         } else {
             prev - 1
@@ -1179,10 +1258,13 @@ impl TransferCallbackCom {
         match catch_unwind(AssertUnwindSafe(|| f(self))) {
             Ok(hr) => hr,
             Err(payload) => {
-                let mut guard = lock(&self.shared);
-                if guard.callback_panic.is_none() {
-                    guard.callback_panic = Some(panic_payload_string(payload));
-                }
+                let msg = extract_panic_message(payload);
+                let _ = catch_unwind(AssertUnwindSafe(|| {
+                    let mut guard = lock(&self.shared);
+                    if guard.callback_panic.is_none() {
+                        guard.callback_panic = Some(msg);
+                    }
+                }));
                 E_FAIL
             }
         }
@@ -1295,8 +1377,10 @@ impl TransferCallbackCom {
                 if let Some(stream) = state.current_stream.clone() {
                     Self::harvest_stream_flags(&mut state, &stream);
                 }
-                if hr_status < 0 && state.callback_error_hr.is_none() {
-                    state.callback_error_hr = Some(hr_status);
+                if error::is_warming_up(hr_status) {
+                    state.saw_warming_up = true;
+                } else {
+                    error::latch_callback_error(&mut state.callback_error_hr, hr_status);
                 }
             }
 
@@ -1340,13 +1424,19 @@ impl TransferCallbackCom {
         // SAFETY: `this` is a live `TransferCallbackCom` pointer.
         let me = unsafe { &*this.cast::<Self>() };
         me.run_guarded(|me| {
+            // If a multi-page driver omitted `WIA_TRANSFER_MSG_END_OF_STREAM` before requesting
+            // the next page's stream, finalize any non-empty error-free stream first.
+            let finalize_hr = me.finalize_current_stream(true);
+            if finalize_hr != S_OK {
+                return finalize_hr;
+            }
             let cap = {
-                let mut state = lock(&me.shared);
+                let state = lock(&me.shared);
                 if std::thread::current().id() != state.owner_thread {
                     return RPC_E_WRONG_THREAD;
                 }
-                if let Some(prev) = state.current_stream.take() {
-                    Self::harvest_stream_flags(&mut state, &prev);
+                if state.stream_overflowed {
+                    return S_FALSE;
                 }
                 state.stream_cap
             };
@@ -1388,6 +1478,7 @@ fn run_download_with_callback(
         stream_cap,
         current_stream: None,
         callback_error_hr: None,
+        saw_warming_up: false,
         stream_overflowed: false,
         callback_panic: None,
     }));
@@ -1415,6 +1506,7 @@ fn run_download_with_callback(
     DownloadOutcome {
         hr: hr.0,
         callback_error_hr: guard.callback_error_hr,
+        saw_warming_up: guard.saw_warming_up,
         stream_overflowed: guard.stream_overflowed,
         callback_panic: guard.callback_panic.clone(),
     }
@@ -1423,7 +1515,6 @@ fn run_download_with_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::System::Com::STATFLAG_NONAME;
 
     #[test]
     fn propvariant_round_trips_i4_bstr_clsid_and_attributes() {
@@ -1796,8 +1887,8 @@ mod tests {
                 // Mode 2: Stream 1 writes placeholder BMP header, streams pixel row, seeks back
                 // to byte 2 and byte 10 to back-patch `bfSize` and `bfOffBits`, then sends
                 // `END_OF_STREAM`; Stream 2 writes past `stream_cap`, gets `STG_E_MEDIUMFULL`,
-                // and returns generic `E_FAIL`.
-                _ => {
+                // and returns generic `E_FAIL` without any subsequent `TransferCallback`.
+                2 => {
                     let name = BSTR::from("Feeder");
                     let full = BSTR::from("0000\\Root\\Feeder");
                     let mut raw_s1: *mut core::ffi::c_void = core::ptr::null_mut();
@@ -1917,6 +2008,69 @@ mod tests {
                     }
                     Err(windows_core::Error::from_hresult(E_FAIL))
                 }
+                // Mode 3: Negative `WIA_ERROR_WARMING_UP` (`0x80210007`) status followed by two
+                // back-to-back `GetNextStream` pages with NO `END_OF_STREAM` between them.
+                _ => {
+                    let name = BSTR::from("Feeder");
+                    let full = BSTR::from("0000\\Root\\Feeder");
+                    // SAFETY: Exercising warmup status + multi-page `GetNextStream` finalization.
+                    unsafe {
+                        let warmup = WiaTransferParams {
+                            lMessage: WIA_TRANSFER_MSG_STATUS,
+                            lPercentComplete: 0,
+                            ulTransferredBytes: 0,
+                            hrErrorStatus: HRESULT(error::WIA_ERROR_WARMING_UP_HR),
+                        };
+                        assert_eq!(
+                            (Interface::vtable(cb).TransferCallback)(
+                                Interface::as_raw(cb),
+                                0,
+                                &warmup,
+                            ),
+                            S_OK
+                        );
+
+                        for payload in [b"page-1".as_slice(), b"page-2".as_slice()] {
+                            let mut raw_st: *mut core::ffi::c_void = core::ptr::null_mut();
+                            assert_eq!(
+                                (Interface::vtable(cb).GetNextStream)(
+                                    Interface::as_raw(cb),
+                                    0,
+                                    core::mem::transmute_copy(&name),
+                                    core::mem::transmute_copy(&full),
+                                    &mut raw_st,
+                                ),
+                                S_OK
+                            );
+                            let st = IStream::from_raw(raw_st);
+                            assert_eq!(
+                                (Interface::vtable(&st).base__.Write)(
+                                    Interface::as_raw(&st),
+                                    payload.as_ptr().cast(),
+                                    payload.len() as u32,
+                                    core::ptr::null_mut(),
+                                ),
+                                S_OK
+                            );
+                        }
+
+                        let eot = WiaTransferParams {
+                            lMessage: WIA_TRANSFER_MSG_END_OF_TRANSFER,
+                            lPercentComplete: 100,
+                            ulTransferredBytes: 12,
+                            hrErrorStatus: S_OK,
+                        };
+                        assert_eq!(
+                            (Interface::vtable(cb).TransferCallback)(
+                                Interface::as_raw(cb),
+                                0,
+                                &eot,
+                            ),
+                            S_OK
+                        );
+                    }
+                    Ok(())
+                }
             }
         }
 
@@ -1994,6 +2148,22 @@ mod tests {
             panic!("expected RawImage");
         };
         assert_eq!(img.data(), &[0xAA, 0xBB, 0xCC]);
+
+        // Mode 3: `WIA_ERROR_WARMING_UP` (`0x80210007`) sets `saw_warming_up` without poisoning
+        // `callback_error_hr`, and back-to-back `GetNextStream` calls without `END_OF_STREAM`
+        // deliver both pages cleanly.
+        let transfer_warmup_multipage: IWiaTransfer = MockComTransfer { mode: 3 }.into();
+        let mut sink4 = RecordingSink {
+            cancel_on_next: false,
+            panic_on_status: false,
+            pages: Vec::new(),
+            statuses: Vec::new(),
+        };
+        let out4 = run_download_with_callback(&transfer_warmup_multipage, 1024, &mut sink4);
+        assert_eq!(out4.hr, S_OK.0);
+        assert!(out4.saw_warming_up);
+        assert_eq!(out4.callback_error_hr, None);
+        assert_eq!(sink4.pages, vec![b"page-1".to_vec(), b"page-2".to_vec()]);
     }
 
     #[test]

@@ -398,8 +398,12 @@ pub(super) struct DownloadOutcome {
     /// Exact `HRESULT` returned by `IWiaTransfer::Download` (`S_OK`, `S_FALSE`,
     /// `WIA_STATUS_END_OF_MEDIA`, `WIA_STATUS_WARMING_UP`, or a negative failure `HRESULT`).
     pub hr: i32,
-    /// First negative `WiaTransferParams::hrErrorStatus` reported to `TransferCallback`, if any.
+    /// Most informative negative non-warmup `WiaTransferParams::hrErrorStatus` reported to
+    /// `TransferCallback`, if any.
     pub callback_error_hr: Option<i32>,
+    /// Whether `TransferCallback` observed `WIA_STATUS_WARMING_UP` or `WIA_ERROR_WARMING_UP` in
+    /// `WiaTransferParams::hrErrorStatus`.
+    pub saw_warming_up: bool,
     /// Whether any page stream hit [`crate::dib::MAX_DIB_BYTES`] (`STG_E_MEDIUMFULL`).
     pub stream_overflowed: bool,
     /// Panic message caught at a COM vtable boundary (`IStream` or `IWiaTransferCallback`), if any.
@@ -425,6 +429,11 @@ pub(super) trait TransferSink {
 /// Safe interface to an open WIA 2.0 device tree (`IWiaItem2` root + child items) on the STA
 /// thread.
 pub(super) trait WiaDeviceTree {
+    /// Updates the active high-level operation context used when mapping COM `HRESULT`s.
+    fn set_op(&mut self, op: super::error::WiaOp) {
+        let _ = op;
+    }
+
     /// Drops any previously enumerated child items so subsequent [`Self::children_of`] calls start
     /// fresh from [`ItemId::ROOT`].
     fn reset_children(&mut self);
@@ -555,6 +564,11 @@ pub(crate) mod fake_wia {
     pub struct FakeDownloadCall {
         pub events: Vec<FakeTransferEvent>,
         pub return_hr: i32,
+        /// Optional `HRESULT` returned by `Download` when a callback returns
+        /// `TransferAction::Cancel` (`S_FALSE`); defaults to `S_FALSE_HR` (`1`), or e.g.
+        /// `Some(E_ABORT_HR)` / `Some(ERROR_CANCELLED_HR)` for minidrivers that translate
+        /// `S_FALSE` into an abort `HRESULT`.
+        pub cancel_hr: Option<i32>,
         /// Optional required `WIA_IPA_TYMED` value; if the item's `WIA_IPA_TYMED` differs,
         /// returns `refuse_hr` immediately with 0 streams (for testing `TYMED_CALLBACK` ->
         /// `TYMED_FILE` fallback).
@@ -568,6 +582,7 @@ pub(crate) mod fake_wia {
             FakeDownloadCall {
                 events,
                 return_hr: S_OK_HR,
+                cancel_hr: None,
                 require_tymed: None,
                 stdout_chatter: None,
             }
@@ -577,6 +592,7 @@ pub(crate) mod fake_wia {
             FakeDownloadCall {
                 events,
                 return_hr,
+                cancel_hr: None,
                 require_tymed: None,
                 stdout_chatter: None,
             }
@@ -707,6 +723,7 @@ pub(crate) mod fake_wia {
     #[derive(Clone, Debug, Default)]
     pub struct FakeWiaHandle {
         pub state: Arc<Mutex<FakeWiaState>>,
+        session: Arc<Mutex<std::sync::Weak<crate::wia::session::Session>>>,
     }
 
     impl FakeWiaHandle {
@@ -722,6 +739,20 @@ pub(crate) mod fake_wia {
             FakeWiaSystem {
                 state: Arc::clone(&self.state),
             }
+        }
+
+        pub(crate) fn shared_session(
+            &self,
+        ) -> Result<Arc<crate::wia::session::Session>, ScanError> {
+            let mut slot = lock(&self.session);
+            if let Some(existing) = slot.upgrade()
+                && !existing.is_dead()
+            {
+                return Ok(existing);
+            }
+            let session = crate::wia::session::Session::spawn_with(Box::new(self.make_system()))?;
+            *slot = Arc::downgrade(&session);
+            Ok(session)
         }
     }
 
@@ -924,6 +955,7 @@ pub(crate) mod fake_wia {
                 return Ok(DownloadOutcome {
                     hr: crate::wia::error::WIA_ERROR_PAPER_EMPTY_HR,
                     callback_error_hr: None,
+                    saw_warming_up: false,
                     stream_overflowed: false,
                     callback_panic: None,
                 });
@@ -934,16 +966,18 @@ pub(crate) mod fake_wia {
             if let Some((expected_tymed, refuse_hr)) = call.require_tymed
                 && current_tymed != Some(expected_tymed)
             {
-                // Push back any subsequent calls? No, the fallback call is queued right after.
                 return Ok(DownloadOutcome {
                     hr: refuse_hr,
                     callback_error_hr: None,
+                    saw_warming_up: false,
                     stream_overflowed: false,
                     callback_panic: None,
                 });
             }
 
+            let cancel_hr = call.cancel_hr.unwrap_or(S_FALSE_HR);
             let mut callback_error_hr = None;
+            let mut saw_warming_up = false;
             for ev in call.events {
                 match ev {
                     FakeTransferEvent::Status {
@@ -951,15 +985,21 @@ pub(crate) mod fake_wia {
                         transferred_bytes,
                         hr_status,
                     } => {
-                        if hr_status < 0 && callback_error_hr.is_none() {
-                            callback_error_hr = Some(hr_status);
+                        if crate::wia::error::is_warming_up(hr_status) {
+                            saw_warming_up = true;
+                        } else {
+                            crate::wia::error::latch_callback_error(
+                                &mut callback_error_hr,
+                                hr_status,
+                            );
                         }
                         if sink.on_status(msg, transferred_bytes, hr_status)
                             == TransferAction::Cancel
                         {
                             return Ok(DownloadOutcome {
-                                hr: S_FALSE_HR,
+                                hr: cancel_hr,
                                 callback_error_hr,
+                                saw_warming_up,
                                 stream_overflowed: false,
                                 callback_panic: None,
                             });
@@ -968,8 +1008,9 @@ pub(crate) mod fake_wia {
                     FakeTransferEvent::Page { chunks, bytes } => {
                         if sink.on_next_stream() == TransferAction::Cancel {
                             return Ok(DownloadOutcome {
-                                hr: S_FALSE_HR,
+                                hr: cancel_hr,
                                 callback_error_hr,
+                                saw_warming_up,
                                 stream_overflowed: false,
                                 callback_panic: None,
                             });
@@ -979,17 +1020,21 @@ pub(crate) mod fake_wia {
                                 == TransferAction::Cancel
                             {
                                 return Ok(DownloadOutcome {
-                                    hr: S_FALSE_HR,
+                                    hr: cancel_hr,
                                     callback_error_hr,
+                                    saw_warming_up,
                                     stream_overflowed: false,
                                     callback_panic: None,
                                 });
                             }
                         }
-                        if sink.on_stream_complete(bytes) == TransferAction::Cancel {
+                        if callback_error_hr.is_none()
+                            && sink.on_stream_complete(bytes) == TransferAction::Cancel
+                        {
                             return Ok(DownloadOutcome {
-                                hr: S_FALSE_HR,
+                                hr: cancel_hr,
                                 callback_error_hr,
+                                saw_warming_up,
                                 stream_overflowed: false,
                                 callback_panic: None,
                             });
@@ -998,22 +1043,39 @@ pub(crate) mod fake_wia {
                     FakeTransferEvent::EmptyStreamError { hr_status } => {
                         if sink.on_next_stream() == TransferAction::Cancel {
                             return Ok(DownloadOutcome {
-                                hr: S_FALSE_HR,
+                                hr: cancel_hr,
                                 callback_error_hr,
+                                saw_warming_up,
                                 stream_overflowed: false,
                                 callback_panic: None,
                             });
                         }
-                        if hr_status < 0 && callback_error_hr.is_none() {
-                            callback_error_hr = Some(hr_status);
+                        if crate::wia::error::is_warming_up(hr_status) {
+                            saw_warming_up = true;
+                        } else {
+                            crate::wia::error::latch_callback_error(
+                                &mut callback_error_hr,
+                                hr_status,
+                            );
                         }
-                        let _ = sink.on_status(WIA_TRANSFER_MSG_STATUS, 0, hr_status);
+                        if sink.on_status(WIA_TRANSFER_MSG_STATUS, 0, hr_status)
+                            == TransferAction::Cancel
+                        {
+                            return Ok(DownloadOutcome {
+                                hr: cancel_hr,
+                                callback_error_hr,
+                                saw_warming_up,
+                                stream_overflowed: false,
+                                callback_panic: None,
+                            });
+                        }
                     }
                     FakeTransferEvent::StreamOverflow { return_hr } => {
                         if sink.on_next_stream() == TransferAction::Cancel {
                             return Ok(DownloadOutcome {
-                                hr: S_FALSE_HR,
+                                hr: cancel_hr,
                                 callback_error_hr,
+                                saw_warming_up,
                                 stream_overflowed: false,
                                 callback_panic: None,
                             });
@@ -1021,6 +1083,7 @@ pub(crate) mod fake_wia {
                         return Ok(DownloadOutcome {
                             hr: return_hr,
                             callback_error_hr,
+                            saw_warming_up,
                             stream_overflowed: true,
                             callback_panic: None,
                         });
@@ -1034,6 +1097,7 @@ pub(crate) mod fake_wia {
             Ok(DownloadOutcome {
                 hr: call.return_hr,
                 callback_error_hr,
+                saw_warming_up,
                 stream_overflowed: false,
                 callback_panic: None,
             })

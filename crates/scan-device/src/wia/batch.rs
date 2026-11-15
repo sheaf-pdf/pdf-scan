@@ -154,6 +154,7 @@ pub(super) fn run(
             fatal_err: None,
         };
 
+        tree.set_op(WiaOp::Download);
         let outcome = tree.download(taken.item, &mut sink)?;
         let streams_in_call = sink.streams_in_call;
         let cancelled_by_progress = sink.cancelled_by_progress;
@@ -204,8 +205,13 @@ pub(super) fn run(
         let effective_hr = resolve_effective_hr(outcome.hr, cb_err);
 
         // Lamp / calibration warm-up retry when 0 pages transferred in this call.
+        let callback_only_warmup = outcome.saw_warming_up
+            && cb_err.is_none()
+            && (outcome.hr >= 0 || matches!(outcome.hr, E_FAIL_HR | WIA_ERROR_GENERAL_ERROR_HR));
         if streams_in_call == 0
-            && (error::is_warming_up(effective_hr) || error::is_warming_up(outcome.hr))
+            && (callback_only_warmup
+                || error::is_warming_up(effective_hr)
+                || error::is_warming_up(outcome.hr))
         {
             if !emitted_warming_up {
                 if events.send(Event::Status(Status::WarmingUp)).is_err() {
@@ -238,9 +244,10 @@ pub(super) fn run(
 
         // `Source::Flatbed` produces strictly one page per batch (`Done::OnePage`).
         if !is_feeder {
-            if total_pages >= 1
-                && (effective_hr >= 0 || (effective_hr == S_FALSE_HR && stopped_flatbed_extra))
-            {
+            let clean_extra_stop = stopped_flatbed_extra
+                && cb_err.is_none()
+                && matches!(outcome.hr, S_FALSE_HR | E_ABORT_HR | ERROR_CANCELLED_HR);
+            if total_pages >= 1 && (effective_hr >= 0 || clean_extra_stop) {
                 return Ok(Done::OnePage);
             }
             if effective_hr < 0 {
@@ -275,10 +282,9 @@ pub(super) fn run(
         }
 
         if effective_hr < 0 {
-            if matches!(effective_hr, ERROR_CANCELLED_HR | E_ABORT_HR)
-                && !tracker.mid_sheet()
-                && progress.check().is_err()
-            {
+            let hw_panel_cancelled = effective_hr == ERROR_CANCELLED_HR;
+            let host_abort_cancelled = effective_hr == E_ABORT_HR && progress.check().is_err();
+            if !tracker.mid_sheet() && (hw_panel_cancelled || host_abort_cancelled) {
                 stop_feeder_best_effort(tree, taken.item, taken.handling_item);
                 return Ok(Done::Cancelled);
             }
@@ -290,7 +296,7 @@ pub(super) fn run(
 
         let should_continue_wsd_loop = taken
             .pages_per_download
-            .is_some_and(|capped_n| outcome.hr == S_OK_HR && streams_in_call == capped_n);
+            .is_some_and(|capped_n| outcome.hr == S_OK_HR && streams_in_call >= capped_n);
         if !should_continue_wsd_loop {
             if !tracker.mid_sheet() && progress.check().is_err() {
                 stop_feeder_best_effort(tree, taken.item, taken.handling_item);

@@ -10,6 +10,7 @@ mod support;
 use std::fs;
 use std::sync::mpsc;
 use std::thread;
+#[cfg(windows)]
 use std::time::Duration;
 
 use scan_worker::scan_device::in_progress::{Tracker, Unit};
@@ -146,12 +147,10 @@ fn wia_worker_lists_filters_cameras_reads_caps_and_scans_raw_encoded_and_duplex_
 fn wia_worker_mid_sheet_duplex_cancel_finishes_sheet_and_issues_stop_feeder() {
     let dir = tempfile::tempdir().unwrap();
     let signal_file = dir.path().join("front.ready");
-    let go_file = dir.path().join("cancel.go");
     let summary_file = dir.path().join("summary.json");
 
     let cmd = wia_fake("await-cancel")
         .env("SCAN_WORKER_TEST_SIGNAL_FILE", &signal_file)
-        .env("SCAN_WORKER_TEST_GO_FILE", &go_file)
         .env("SCAN_WORKER_TEST_SUMMARY_FILE", &summary_file);
 
     let client = Client::new().worker(Driver::Wia, cmd);
@@ -179,11 +178,10 @@ fn wia_worker_mid_sheet_duplex_cancel_finishes_sheet_and_issues_stop_feeder() {
         "worker never reached Sheet 1 Front signal"
     );
 
-    // Cancel from the parent `Client` side, give the client's 50 ms cancel poller a moment to
-    // write `"cancel"` to the worker's stdin, then release the hook so Sheet 1 Back runs.
+    // Cancel from the parent `Client` side; the worker's `await-cancel` hook polls its batch
+    // `Progress::is_cancelled()` directly, so it unblocks deterministically as soon as `"cancel"`
+    // arrives on the worker's stdin!
     cancel_handle.cancel();
-    thread::sleep(Duration::from_millis(150));
-    fs::write(&go_file, b"go").unwrap();
 
     let done = batch_thread
         .join()
@@ -318,17 +316,27 @@ fn live_wia_worker_handles_os_service_and_bad_ids() {
         check_windows_live_client(&client);
 
         // On 64-bit Windows, also verify a 32-bit `i686-pc-windows-msvc` WIA worker when the
-        // `i686` target is installed.
-        if cfg!(target_pointer_width = "64")
-            && let Ok(exe_32) = i686_worker_exe()
-        {
-            let client_32 = Client::new().worker(
-                Driver::Wia,
-                WorkerCommand::new(exe_32).arg("wia").arg("--noisy-stdout"),
-            );
-            check_windows_live_client(&client_32);
+        // `i686` target is installed (required when `SCAN_WORKER_REQUIRE_I686=1`).
+        if cfg!(target_pointer_width = "64") {
+            match i686_worker_exe() {
+                Ok(exe_32) => {
+                    let client_32 = Client::new().worker(
+                        Driver::Wia,
+                        WorkerCommand::new(exe_32).arg("wia").arg("--noisy-stdout"),
+                    );
+                    check_windows_live_client(&client_32);
+                }
+                Err(missing) => {
+                    assert!(!require_i686(), "{missing} with SCAN_WORKER_REQUIRE_I686=1");
+                }
+            }
         }
     }
+}
+
+#[cfg(windows)]
+fn require_i686() -> bool {
+    std::env::var("SCAN_WORKER_REQUIRE_I686").is_ok_and(|v| v == "1")
 }
 
 #[cfg(windows)]
@@ -360,6 +368,26 @@ fn check_windows_live_client(client: &Client) {
 }
 
 #[cfg(windows)]
+fn rustc_has_i686_target() -> bool {
+    use std::path::Path;
+    use std::process::Command;
+
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let Ok(out) = Command::new(rustc).args(["--print", "sysroot"]).output() else {
+        return true;
+    };
+    if !out.status.success() {
+        return true;
+    }
+    let sysroot = String::from_utf8_lossy(&out.stdout);
+    Path::new(sysroot.trim())
+        .join("lib")
+        .join("rustlib")
+        .join("i686-pc-windows-msvc")
+        .is_dir()
+}
+
+#[cfg(windows)]
 fn i686_worker_exe() -> Result<&'static std::path::Path, String> {
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -376,6 +404,9 @@ fn i686_worker_exe() -> Result<&'static std::path::Path, String> {
                     path.display()
                 );
                 return Ok(path);
+            }
+            if !rustc_has_i686_target() {
+                return Err("i686-pc-windows-msvc target is not installed".to_owned());
             }
             let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
             let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("i686-scan-worker-wia");

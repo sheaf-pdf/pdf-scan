@@ -7,9 +7,9 @@
 //! `MAX_PIXELS`, and `MAX_IMAGE_BYTES` (`512 MiB`) before allocating or indexing.
 
 use super::driver::{
-    WIA_COMPRESSION_NONE, WIA_DATA_COLOR, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB,
-    WIA_DATA_THRESHOLD, WIA_LINE_ORDER_BOTTOM_TO_TOP, WIA_LINE_ORDER_TOP_TO_BOTTOM,
-    WIA_PHOTO_WHITE_0, WIA_PHOTO_WHITE_1,
+    WIA_COMPRESSION_NONE, WIA_DATA_COLOR, WIA_DATA_DITHER, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR,
+    WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD, WIA_LINE_ORDER_BOTTOM_TO_TOP,
+    WIA_LINE_ORDER_TOP_TO_BOTTOM, WIA_PHOTO_WHITE_0, WIA_PHOTO_WHITE_1,
 };
 use super::error::driver_msg;
 use super::settings::TransferMode;
@@ -121,6 +121,7 @@ pub(super) fn decode_wia_raw(
     bytes: &[u8],
     fallback_dpi: (f32, f32),
 ) -> Result<(RawImage, (f32, f32)), ScanError> {
+    let fallback_dpi = sanitize_fallback_dpi(fallback_dpi);
     if bytes.is_empty() {
         return Err(driver_msg("the scanner returned an empty WIA raw stream"));
     }
@@ -141,6 +142,13 @@ pub(super) fn decode_wia_raw(
         return Err(driver_msg(
             "the scanner's WIA raw stream lacks the 'WRAW' signature",
         ));
+    }
+
+    let version = u32_at(bytes, 4);
+    if version != 0x0001_0000 && version != 0 {
+        return Err(driver_msg(format!(
+            "the scanner's WIA_RAW_HEADER Version (0x{version:08x}) is unsupported"
+        )));
     }
 
     let header_size = u32_at(bytes, 8);
@@ -165,10 +173,17 @@ pub(super) fn decode_wia_raw(
     let photometric = u32_at(bytes, 56);
     let line_order = u32_at(bytes, 60);
     let raw_data_offset = u32_at(bytes, 64);
+    let raw_data_size = u32_at(bytes, 68);
+    let palette_size = u32_at(bytes, 76);
 
     if compression != WIA_COMPRESSION_NONE as u32 {
         return Err(driver_msg(format!(
             "the scanner's WIA raw stream uses unsupported compression ({compression})"
+        )));
+    }
+    if palette_size != 0 {
+        return Err(driver_msg(format!(
+            "the scanner's WIA raw stream uses an unsupported {palette_size}-byte color palette"
         )));
     }
 
@@ -183,7 +198,7 @@ pub(super) fn decode_wia_raw(
     };
 
     let bottom_up = match line_order {
-        0 | WIA_LINE_ORDER_TOP_TO_BOTTOM => false,
+        WIA_LINE_ORDER_TOP_TO_BOTTOM => false,
         WIA_LINE_ORDER_BOTTOM_TO_TOP => true,
         other => {
             return Err(driver_msg(format!(
@@ -242,8 +257,23 @@ pub(super) fn decode_wia_raw(
             pixel_slice.len()
         )));
     }
+    if raw_data_size != 0 {
+        let declared = u64::from(raw_data_size);
+        if declared < needed_u64 || declared > pixel_slice.len() as u64 {
+            return Err(driver_msg(format!(
+                "the scanner's WIA raw RawDataSize ({raw_data_size}) disagrees with the \
+                 {needed_u64}-byte image and {}-byte payload",
+                pixel_slice.len()
+            )));
+        }
+    }
 
-    let mut out = Vec::with_capacity(dst_len);
+    let mut out = Vec::new();
+    out.try_reserve_exact(dst_len).map_err(|_| {
+        driver_msg(format!(
+            "couldn't allocate {dst_len} bytes for decoded WIA raw image"
+        ))
+    })?;
     for y in 0..height as usize {
         let src_y = if bottom_up {
             (height as usize) - 1 - y
@@ -325,32 +355,57 @@ pub(super) fn decode_wia_raw(
     Ok((raw, (dpi_x, dpi_y)))
 }
 
+fn bpc_channels_match(bits_per_channel: &[u8; 8], channels: usize, expected: u8) -> bool {
+    let active = &bits_per_channel[..channels];
+    active.iter().all(|&b| b == 0) || active.iter().all(|&b| b == expected)
+}
+
 fn classify_raw_layout(
     bits_per_pixel: u32,
     channels_per_pixel: u32,
     data_type: u32,
     bits_per_channel: &[u8; 8],
 ) -> Result<RawSampleLayout, ScanError> {
-    let bgr = data_type == WIA_DATA_RAW_BGR as u32;
+    let dt = i32::try_from(data_type).ok();
+    let bgr = dt == Some(WIA_DATA_RAW_BGR);
     let is_color_dt = matches!(
-        i32::try_from(data_type).ok(),
+        dt,
         Some(WIA_DATA_COLOR | WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR)
     );
-    let is_mono_dt = matches!(
-        i32::try_from(data_type).ok(),
-        Some(WIA_DATA_THRESHOLD | WIA_DATA_GRAYSCALE)
+    let is_bw_dt = matches!(
+        dt,
+        Some(WIA_DATA_THRESHOLD | WIA_DATA_DITHER | WIA_DATA_GRAYSCALE)
     );
+    let is_gray_dt = matches!(dt, Some(WIA_DATA_GRAYSCALE));
 
     match (bits_per_pixel, channels_per_pixel) {
-        (1, 0 | 1) => Ok(RawSampleLayout::Bw1),
-        (8, 0 | 1) if !is_color_dt => Ok(RawSampleLayout::Gray8),
-        (16, 0 | 1) if !is_color_dt => Ok(RawSampleLayout::Gray16),
-        (24, 0 | 3) if !is_mono_dt => Ok(RawSampleLayout::Rgb24 { bgr }),
-        (32, 3 | 4) if !is_mono_dt && (bits_per_channel[0] == 0 || bits_per_channel[0] == 8) => {
+        (1, 0 | 1) if is_bw_dt && bpc_channels_match(bits_per_channel, 1, 1) => {
+            Ok(RawSampleLayout::Bw1)
+        }
+        (8, 0 | 1) if is_gray_dt && bpc_channels_match(bits_per_channel, 1, 8) => {
+            Ok(RawSampleLayout::Gray8)
+        }
+        (16, 0 | 1) if is_gray_dt && bpc_channels_match(bits_per_channel, 1, 16) => {
+            Ok(RawSampleLayout::Gray16)
+        }
+        (24, 0 | 3) if is_color_dt && bpc_channels_match(bits_per_channel, 3, 8) => {
+            Ok(RawSampleLayout::Rgb24 { bgr })
+        }
+        (32, 3 | 4)
+            if is_color_dt
+                && bpc_channels_match(bits_per_channel, 3, 8)
+                && matches!(bits_per_channel[3], 0 | 8) =>
+        {
             Ok(RawSampleLayout::Rgbx32 { bgr })
         }
-        (48, 0 | 3) if !is_mono_dt => Ok(RawSampleLayout::Rgb48 { bgr }),
-        (64, 3 | 4) if !is_mono_dt && bits_per_channel[0] == 16 => {
+        (48, 0 | 3) if is_color_dt && bpc_channels_match(bits_per_channel, 3, 16) => {
+            Ok(RawSampleLayout::Rgb48 { bgr })
+        }
+        (64, 3 | 4)
+            if is_color_dt
+                && bpc_channels_match(bits_per_channel, 3, 16)
+                && matches!(bits_per_channel[3], 0 | 16) =>
+        {
             Ok(RawSampleLayout::Rgbx64 { bgr })
         }
         _ => Err(driver_msg(format!(
@@ -785,5 +840,133 @@ mod tests {
             )
             .is_err()
         );
+
+        // `WIA_DATA_DITHER` (`1`) decodes cleanly as `Bw1`, whereas unknown `DataType` (e.g. CMYK `9`),
+        // non-zero `PaletteSize`, `LineOrder == 0`, unsupported `Version`, asymmetric `BitsPerChannel`
+        // (`[10, 10, 10, 2, ..]`), or `RawDataSize` past payload are all rejected.
+        let dither = build_wraw(
+            80,
+            300,
+            300,
+            8,
+            1,
+            1,
+            1,
+            1,
+            WIA_DATA_DITHER as u32,
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            0,
+            0,
+            WIA_LINE_ORDER_TOP_TO_BOTTOM,
+            0,
+            &[0b1010_0101],
+        );
+        let (Pixels::Raw(dither_img), _) =
+            decode_stream(dither, TransferMode::RawWia, (0.0, f32::NAN)).unwrap()
+        else {
+            panic!("expected Raw");
+        };
+        assert_eq!(dither_img.format(), Format::Bw1);
+        assert_eq!(dither_img.data(), &[0b1010_0101]);
+
+        // CMYK (`DataType = 9`, 32 bpp, 4 channels) rejected instead of dropping K channel.
+        let cmyk = build_wraw(
+            80,
+            300,
+            300,
+            1,
+            1,
+            4,
+            32,
+            4,
+            9,
+            [8, 8, 8, 8, 0, 0, 0, 0],
+            0,
+            0,
+            WIA_LINE_ORDER_TOP_TO_BOTTOM,
+            0,
+            &[1, 2, 3, 4],
+        );
+        assert!(decode_stream(cmyk, TransferMode::RawWia, (300.0, 300.0)).is_err());
+
+        // Asymmetric `BitsPerChannel` (`10-10-10-2` packed in 32 bpp) rejected.
+        let rgb10 = build_wraw(
+            80,
+            300,
+            300,
+            1,
+            1,
+            4,
+            32,
+            4,
+            WIA_DATA_COLOR as u32,
+            [10, 10, 10, 2, 0, 0, 0, 0],
+            0,
+            0,
+            WIA_LINE_ORDER_TOP_TO_BOTTOM,
+            0,
+            &[1, 2, 3, 4],
+        );
+        assert!(decode_stream(rgb10, TransferMode::RawWia, (300.0, 300.0)).is_err());
+
+        // `LineOrder == 0`, non-zero `PaletteSize`, and `RawDataSize > payload.len()` rejected.
+        let line_order_zero = build_wraw(
+            80,
+            300,
+            300,
+            1,
+            1,
+            1,
+            8,
+            1,
+            WIA_DATA_GRAYSCALE as u32,
+            [8, 0, 0, 0, 0, 0, 0, 0],
+            0,
+            0,
+            0,
+            0,
+            &[0x42],
+        );
+        assert!(decode_stream(line_order_zero, TransferMode::RawWia, (300.0, 300.0)).is_err());
+
+        let mut paletted = build_wraw(
+            80,
+            300,
+            300,
+            1,
+            1,
+            1,
+            8,
+            1,
+            WIA_DATA_GRAYSCALE as u32,
+            [8, 0, 0, 0, 0, 0, 0, 0],
+            0,
+            0,
+            WIA_LINE_ORDER_TOP_TO_BOTTOM,
+            0,
+            &[0x42],
+        );
+        paletted[76..80].copy_from_slice(&1024u32.to_le_bytes());
+        assert!(decode_stream(paletted, TransferMode::RawWia, (300.0, 300.0)).is_err());
+
+        let mut bad_raw_size = build_wraw(
+            80,
+            300,
+            300,
+            1,
+            1,
+            1,
+            8,
+            1,
+            WIA_DATA_GRAYSCALE as u32,
+            [8, 0, 0, 0, 0, 0, 0, 0],
+            0,
+            0,
+            WIA_LINE_ORDER_TOP_TO_BOTTOM,
+            0,
+            &[0x42],
+        );
+        bad_raw_size[68..72].copy_from_slice(&99u32.to_le_bytes());
+        assert!(decode_stream(bad_raw_size, TransferMode::RawWia, (300.0, 300.0)).is_err());
     }
 }

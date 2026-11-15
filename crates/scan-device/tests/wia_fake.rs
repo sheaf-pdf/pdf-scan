@@ -306,7 +306,7 @@ fn lists_filters_cameras_verifies_slot_identity_and_scans_flatbed_raw_and_encode
     fake.add_device(spec);
 
     let mut backend = WiaBackend::from_fake(&fake).unwrap();
-    let shared = backend.share_fake().unwrap();
+    let mut shared = WiaBackend::from_fake(&fake).unwrap();
     let listed = backend.list(Duration::from_secs(2)).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].maker, "Contoso");
@@ -327,7 +327,6 @@ fn lists_filters_cameras_verifies_slot_identity_and_scans_flatbed_raw_and_encode
     );
 
     let mut opened = backend.open(&listed[0], Duration::from_secs(2)).unwrap();
-    let mut shared = shared;
     assert_eq!(
         shared.open(&listed[0], Duration::from_secs(2)).err(),
         Some(ScanError::Busy)
@@ -663,6 +662,7 @@ fn callback_to_file_fallback_all_five_raw_formats_overflow_and_error_mapping() {
             FakeDownloadCall {
                 events: Vec::new(),
                 return_hr: S_OK_HR,
+                cancel_hr: None,
                 require_tymed: Some((TYMED_FILE, E_INVALIDARG_HR)),
                 stdout_chatter: None,
             },
@@ -943,4 +943,157 @@ fn callback_to_file_fallback_all_five_raw_formats_overflow_and_error_mapping() {
         backend.open(&bad, Duration::from_secs(2)).err(),
         Some(ScanError::BadId)
     );
+}
+
+#[test]
+fn callback_error_warming_up_preserves_same_call_page_and_flatbed_extra_e_abort_and_hw_cancel() {
+    let fake = FakeWiaHandle::new();
+    let mut spec = FakeDeviceSpec::new(scanner_props(r"{6BDD1FC6}\0042"));
+    let cmd_log = Arc::clone(&spec.command_log);
+
+    let mut second_flatbed_call = FakeDownloadCall::ok(vec![
+        FakeTransferEvent::Status {
+            msg: WIA_TRANSFER_MSG_STATUS,
+            transferred_bytes: 0,
+            hr_status: WIA_ERROR_WARMING_UP_HR,
+        },
+        FakeTransferEvent::Page {
+            chunks: vec![58],
+            bytes: make_bmp_24bit_1x1(0x44, 0x55, 0x66),
+        },
+        // Bogus second flatbed stream inside the same `Download`: `BatchSink` cancels with
+        // `S_FALSE`, and this minidriver translates `S_FALSE` into `E_ABORT_HR`.
+        FakeTransferEvent::Page {
+            chunks: vec![58],
+            bytes: make_bmp_24bit_1x1(0x99, 0x88, 0x77),
+        },
+    ]);
+    second_flatbed_call.cancel_hr = Some(E_ABORT_HR);
+
+    let flatbed = FakeItem::new(WIA_ITEM_TYPE_IMAGE | WIA_ITEM_TYPE_TRANSFER)
+        .with_prop(
+            WIA_IPA_ITEM_CATEGORY,
+            PropValue::Guid(WIA_CATEGORY_FLATBED_GUID),
+            None,
+        )
+        .with_prop(WIA_IPS_XRES, PropValue::I4(300), rw_list(300, vec![300]))
+        .with_prop(WIA_IPS_YRES, PropValue::I4(300), rw_list(300, vec![300]))
+        .with_prop(
+            WIA_IPA_DATATYPE,
+            PropValue::I4(WIA_DATA_COLOR),
+            rw_list(WIA_DATA_COLOR, vec![WIA_DATA_COLOR]),
+        )
+        .with_prop(WIA_IPA_DEPTH, PropValue::I4(24), None)
+        .with_prop(WIA_IPA_TYMED, PropValue::I4(TYMED_FILE), None)
+        .with_prop(WIA_IPA_FORMAT, PropValue::Guid(WIA_IMG_FMT_BMP_GUID), None)
+        .with_prop(WIA_IPS_MAX_HORIZONTAL_SIZE, PropValue::I4(8500), None)
+        .with_prop(WIA_IPS_MAX_VERTICAL_SIZE, PropValue::I4(11000), None)
+        .with_formats(vec![FormatPair {
+            format: WIA_IMG_FMT_BMP_GUID,
+            tymed: TYMED_FILE,
+        }])
+        .with_downloads([
+            // Call 1: 0-page `WIA_ERROR_WARMING_UP_HR` callback status + generic `E_FAIL_HR`
+            // return from `Download` -> emits `Status::WarmingUp` and retries!
+            FakeDownloadCall::with_hr(
+                vec![FakeTransferEvent::Status {
+                    msg: WIA_TRANSFER_MSG_STATUS,
+                    transferred_bytes: 0,
+                    hr_status: WIA_ERROR_WARMING_UP_HR,
+                }],
+                E_FAIL_HR,
+            ),
+            second_flatbed_call,
+        ]);
+
+    let feeder = FakeItem::new(WIA_ITEM_TYPE_IMAGE | WIA_ITEM_TYPE_TRANSFER)
+        .with_prop(
+            WIA_IPA_ITEM_CATEGORY,
+            PropValue::Guid(WIA_CATEGORY_FEEDER_GUID),
+            None,
+        )
+        .with_prop(
+            WIA_IPS_DOCUMENT_HANDLING_SELECT,
+            PropValue::I4(FEEDER),
+            rw_flags(FEEDER, FEEDER),
+        )
+        .with_prop(WIA_IPS_PAGES, PropValue::I4(0), rw_range(0, 0, 100, 1))
+        .with_prop(WIA_IPS_XRES, PropValue::I4(300), rw_list(300, vec![300]))
+        .with_prop(WIA_IPS_YRES, PropValue::I4(300), rw_list(300, vec![300]))
+        .with_prop(
+            WIA_IPA_DATATYPE,
+            PropValue::I4(WIA_DATA_COLOR),
+            rw_list(WIA_DATA_COLOR, vec![WIA_DATA_COLOR]),
+        )
+        .with_prop(WIA_IPA_DEPTH, PropValue::I4(24), None)
+        .with_prop(WIA_IPA_TYMED, PropValue::I4(TYMED_FILE), None)
+        .with_prop(WIA_IPA_FORMAT, PropValue::Guid(WIA_IMG_FMT_BMP_GUID), None)
+        .with_prop(WIA_IPS_MAX_HORIZONTAL_SIZE, PropValue::I4(8500), None)
+        .with_prop(WIA_IPS_MAX_VERTICAL_SIZE, PropValue::I4(11000), None)
+        .with_formats(vec![FormatPair {
+            format: WIA_IMG_FMT_BMP_GUID,
+            tymed: TYMED_FILE,
+        }])
+        .with_downloads([
+            // Scanner front-panel Stop button pressed between sheets: Page 1 finishes cleanly,
+            // then `Download` returns `HRESULT_FROM_WIN32(ERROR_CANCELLED)`.
+            FakeDownloadCall::with_hr(
+                vec![FakeTransferEvent::Page {
+                    chunks: vec![58],
+                    bytes: make_bmp_24bit_1x1(0x12, 0x34, 0x56),
+                }],
+                ERROR_CANCELLED_HR,
+            ),
+        ]);
+
+    spec.add_child(ItemId::ROOT, flatbed);
+    spec.add_child(ItemId::ROOT, feeder);
+    fake.add_device(spec);
+
+    let mut backend = WiaBackend::from_fake(&fake).unwrap();
+    let listed = backend.list(Duration::from_secs(2)).unwrap();
+    let mut opened = backend.open(&listed[0], Duration::from_secs(2)).unwrap();
+
+    // 1. Flatbed: 0-page `WIA_ERROR_WARMING_UP_HR` retries, same-call `WIA_ERROR_WARMING_UP_HR`
+    // does not drop Page 1, and stopping a bogus 2nd flatbed stream that returns `E_ABORT_HR`
+    // finishes cleanly as `Done::OnePage`!
+    let mut fb = Settings::new(Source::Flatbed, 300, Format::Rgb8);
+    fb.paper = Paper::Size(SizeMm::LETTER);
+    let (tx, rx) = sync_channel(16);
+    let done = opened
+        .device
+        .scan(&fb, 1, &tx, &Tracker::new())
+        .expect("flatbed scan succeeds");
+    drop(tx);
+    assert_eq!(done, Done::OnePage);
+    let fb_events: Vec<Event> = rx.into_iter().collect();
+    assert!(matches!(fb_events[0], Event::Applied(_)));
+    assert_eq!(fb_events[1], Event::Status(Status::WarmingUp));
+    assert_eq!(fb_events[2], Event::Sheet(1));
+    let Event::Page(fb_page) = &fb_events[3] else {
+        panic!("expected Page(1), got {:?}", fb_events.get(3));
+    };
+    let Pixels::Raw(fb_img) = &fb_page.pixels else {
+        panic!("expected raw BMP");
+    };
+    assert_eq!(fb_img.data(), &[0x44, 0x55, 0x66]);
+    assert_eq!(fb_events.len(), 4);
+
+    // 2. Feeder: hardware-panel `ERROR_CANCELLED_HR` between sheets preserves Page 1, issues
+    // `WIA_CMD_STOP_FEEDER`, and returns `Ok(Done::Cancelled)`.
+    let mut adf = Settings::new(Source::Feeder, 300, Format::Rgb8);
+    adf.paper = Paper::Size(SizeMm::LETTER);
+    let (tx2, rx2) = sync_channel(16);
+    let adf_done = opened
+        .device
+        .scan(&adf, 1, &tx2, &Tracker::new())
+        .expect("hardware cancel returns Ok(Done::Cancelled)");
+    drop(tx2);
+    assert_eq!(adf_done, Done::Cancelled);
+    let adf_events: Vec<Event> = rx2.into_iter().collect();
+    assert!(matches!(adf_events[0], Event::Applied(_)));
+    assert_eq!(adf_events[1], Event::Sheet(1));
+    assert!(matches!(adf_events[2], Event::Page(_)));
+    assert_eq!(adf_events.len(), 3);
+    assert!(cmd_log.lock().unwrap().contains(&WIA_CMD_STOP_FEEDER_GUID));
 }

@@ -64,6 +64,7 @@
 //! fallback follows the Windows Driver Kit specification and permissive prior art
 //! (`printscan-windows`, MIT OR Apache-2.0; `NAPS2.Wia`, MIT).
 
+#[cfg(any(windows, test, feature = "fake"))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,8 +107,8 @@ pub mod fake_wia {
         WIA_CATEGORY_FEEDER_BACK_GUID, WIA_CATEGORY_FEEDER_FRONT_GUID, WIA_CATEGORY_FEEDER_GUID,
         WIA_CATEGORY_FILM_GUID, WIA_CATEGORY_FINISHED_FILE_GUID, WIA_CATEGORY_FLATBED_GUID,
         WIA_CATEGORY_FOLDER_GUID, WIA_CMD_STOP_FEEDER_GUID, WIA_COMPRESSION_NONE, WIA_DATA_COLOR,
-        WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD,
-        WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, WIA_DPS_HORIZONTAL_BED_SIZE,
+        WIA_DATA_DITHER, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB,
+        WIA_DATA_THRESHOLD, WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, WIA_DPS_HORIZONTAL_BED_SIZE,
         WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE, WIA_DPS_VERTICAL_BED_SIZE,
         WIA_DPS_VERTICAL_SHEET_FEED_SIZE, WIA_FINAL_SCAN, WIA_IMG_FMT_BMP_GUID,
         WIA_IMG_FMT_JPEG_GUID, WIA_IMG_FMT_MEMORYBMP_GUID, WIA_IMG_FMT_PNG_GUID,
@@ -157,7 +158,7 @@ impl WiaBackend {
     #[cfg(feature = "fake")]
     #[doc(hidden)]
     pub fn from_fake(handle: &fake_wia::FakeWiaHandle) -> Result<WiaBackend, ScanError> {
-        let session = session::Session::spawn_with(Box::new(handle.make_system()))?;
+        let session = handle.shared_session()?;
         Ok(WiaBackend {
             session: Some(session),
         })
@@ -167,32 +168,19 @@ impl WiaBackend {
     pub(crate) fn from_fake(
         handle: &driver::fake_wia::FakeWiaHandle,
     ) -> Result<WiaBackend, ScanError> {
-        let session = session::Session::spawn_with(Box::new(handle.make_system()))?;
+        let session = handle.shared_session()?;
         Ok(WiaBackend {
             session: Some(session),
         })
     }
 
-    #[cfg(feature = "fake")]
-    #[doc(hidden)]
-    pub fn share_fake(&self) -> Option<WiaBackend> {
-        self.session.as_ref().map(|s| WiaBackend {
-            session: Some(Arc::clone(s)),
-        })
-    }
-
-    #[cfg(any(test, feature = "fake"))]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn from_session(session: Arc<session::Session>) -> WiaBackend {
-        WiaBackend {
-            session: Some(session),
-        }
-    }
-
     #[cfg(windows)]
     fn active_session(&mut self) -> Result<Arc<session::Session>, ScanError> {
         if let Some(session) = &self.session {
-            return Ok(Arc::clone(session));
+            if !session.is_global() || !session.is_dead() {
+                return Ok(Arc::clone(session));
+            }
+            self.session = None;
         }
         let session = session::shared()?;
         self.session = Some(Arc::clone(&session));
@@ -329,8 +317,7 @@ mod tests {
         fake.add_device(spec);
 
         let mut backend1 = WiaBackend::from_fake(&fake).expect("fake backend");
-        let session = backend1.session.clone().expect("session");
-        let mut backend2 = WiaBackend::from_session(session);
+        let mut backend2 = WiaBackend::from_fake(&fake).expect("second fake backend");
 
         let listed = backend1.list(Duration::from_secs(2)).expect("list");
         assert_eq!(listed.len(), 1);

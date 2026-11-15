@@ -395,7 +395,7 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
   on trailing empty streams, specific callback `hrErrorStatus` precedence over generic `E_FAIL`, 0-page
   `TYMED_CALLBACK` -> `TYMED_FILE` fallback, deferred `Event::Sheet`, WSD multi-`Download` continuation, `Flatbed`
   `Done::OnePage`, receiver-drop cancel, and mid-sheet-safe `S_FALSE` cancel + `WIA_CMD_STOP_FEEDER`), exposed
-  `#[doc(hidden)] pub mod fake_wia` + `WiaBackend::{from_fake, share_fake}` behind `feature = "fake"`, added
+  `#[doc(hidden)] pub mod fake_wia` + `WiaBackend::from_fake` behind `feature = "fake"`, added
   `/crates/scan-device/tests/wia_fake.rs` and `/crates/scan-device/tests/wia_com.rs` (plus back-patched `.bmp` +
   `STG_E_MEDIUMFULL` COM vtable tests in `wia/com.rs`), and verified all 64-bit, `i686`, single-feature clippy,
   `just doc`, and MSRV `1.89` gates green.
@@ -408,3 +408,51 @@ Reviewed before Step 1 (`ec9bf8be`), folding in all 14 findings (5 Critical, 6 M
   `Jammed` page preservation, `BadId`-before-`NotInstalled`, multi-backend `TwainBackend` + `WiaBackend` open routing,
   and live OS `wia` workers in both 64-bit and `i686`), wired `scan-device-wia-test` and `scan-worker-wia-test` into
   `/justfile` and `/.github/workflows/ci.yml`, and synced crate READMEs, lib docs, and `docs/pm/`.
+
+## Code review
+
+Four adversarial subagents reviewed `master..HEAD` across COM/concurrency (`com.rs`, `session.rs`, `error.rs`,
+`mod.rs`), capabilities/settings (`caps.rs`, `settings.rs`), decoders/batch (`dib.rs`, `pixels.rs`, `batch.rs`),
+and worker/CI/docs (`scan-worker`, `justfile`, `.github/workflows/ci.yml`, `docs/pm/`). All valid findings were
+fixed with regression unit and integration tests:
+
+- **COM & `Session` safety (`com.rs`, `session.rs`, `error.rs`, `mod.rs`):**
+  - Wrapped panic-payload formatting + dropping inside `catch_unwind` (`extract_panic_message`) so a panicking
+    `Drop` on a custom panic payload can never unwind out of an `extern "system"` COM vtable.
+  - Hardened `StreamInner::grow_to` to clamp amortized doubling to `cap.min(isize::MAX as u64)` and fall back to
+    `Vec::try_reserve_exact` (`E_OUTOFMEMORY` on OS OOM within `cap`).
+  - Zeroed `[out]` pointers upfront in `IStream::{Read, Write, Seek}`, validated `grfstatflag` / `STGM_READWRITE`
+    in `Stat`, hardened `TransferCallbackCom` ref-counting (underflow/overflow abort + `catch_unwind` around
+    `Box::from_raw`), finalized unclosed Mode 3 multi-page streams inside `GetNextStream`, and tracked
+    `saw_warming_up` separately from `callback_error_hr` so `WIA_ERROR_WARMING_UP` in `TransferCallback` never
+    drops a valid page delivered later in the same `Download` call while still retrying 0-page warm-up calls.
+  - Tracked `pending_ops`, `has_held_tree`, and `StaExitGuard` in `StaActivity` and blocked `session::shared()`
+    with `ScanError::TimedOut` while any detached STA thread is still blocked in COM, preventing duplicate
+    same-process STA threads after a `list`/`open` timeout; refreshed dead global sessions in `WiaBackend`.
+  - Restricted `0x80210015` -> `Gone` strictly to `WiaOp::OpenDevice`, ended `IEnumWIA_DEV_INFO::Next` loops
+    cleanly on `0x80210015`, mapped `RPC_S_SERVER_UNAVAILABLE` / `ERROR_SERVICE_NOT_ACTIVE` on `CreateManager` /
+    `EnumDevices` / `OpenDevice` to `NotInstalled { what: "WIA" }`, and mapped `RPC_S_SERVER_UNAVAILABLE` /
+    `RPC_S_CALL_FAILED` on open-item ops to `Gone`.
+  - Consolidated `WiaBackend::from_fake` to share a weak `Session` on `FakeWiaHandle` directly (removing
+    `share_fake`).
+- **Capabilities & settings (`caps.rs`, `settings.rs`):**
+  - Propagated sibling `WIA_CATEGORY_FEEDER_BACK` items to enable `duplex = true` on `Feeder`/`FeederFront`,
+    widened `WIA_PROP_RANGE` span checks to `i64`, restored `(DATATYPE, DEPTH)` unconditionally on probe error,
+    prioritized `WIA_IPA_DEPTH` over stale `WIA_IPA_BITS_PER_CHANNEL`, accepted `WIA_DATA_DITHER` for `Bw1`, and
+    added `WIA_IPS_OPTICAL_XRES`/`YRES` fallback for `max_area` when `XRES`/`YRES` isn't yet populated.
+  - Enforced `WiaImgFmt_RAW` whenever `WIA_DATA_RAW_RGB`/`WIA_DATA_RAW_BGR` is negotiated (including across
+    `TYMED_CALLBACK` -> `TYMED_FILE` fallback), masked `ADVANCED_DUPLEX` out of preserved `DOCUMENT_HANDLING_SELECT`
+    bits while trying `DUPLEX | FRONT_FIRST` candidates, disabled sticky `WIA_IPS_AUTO_CROP` before `Paper::Auto`
+    extent fallback, read `max_area` after `set_origin_to_min`, and clamped `step <= 0` extent ranges safely.
+- **Decoders & batch (`dib.rs`, `pixels.rs`, `batch.rs`):**
+  - Used exact rounded `u64` scaling for `width > 8` `BI_BITFIELDS` channels in `dib.rs`.
+  - Sanitized `fallback_dpi` upfront in `decode_wia_raw`, validated `Version`, `PaletteSize == 0`, `LineOrder`
+    (`1` or `2`), `RawDataSize`, explicit `(DataType, BitsPerChannel)` whitelists, and `Vec::try_reserve_exact`.
+  - Accepted `E_ABORT` / `ERROR_CANCELLED` when `stopped_flatbed_extra` cancels a bogus 2nd flatbed stream,
+    handled front-panel `ERROR_CANCELLED` between feeder sheets cleanly as `Done::Cancelled` + `STOP_FEEDER`, and
+    replaced `==` with `>=` on `streams_in_call >= capped_n`.
+- **Worker, CI & docs (`scan-worker`, `justfile`, `ci.yml`):**
+  - Replaced timing-based `go_file` / `150 ms` sleep in `wia_worker` cancel test with deterministic
+    `Progress::is_cancelled()` polling inside `CancelWatchDevice`, added fast `<sysroot>/lib/rustlib/i686-...`
+    pre-checks + `SCAN_WORKER_I686_EXE` reuse + `SCAN_WORKER_REQUIRE_I686=1`, added non-`fake` library clippy lines
+    to `just clippy`, and bumped the `twain-dsm` CI job timeout to `30` minutes.

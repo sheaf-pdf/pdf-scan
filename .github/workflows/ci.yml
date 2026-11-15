@@ -79,22 +79,24 @@ jobs:
       - name: Gates
         run: just gates
 
-  # TWAIN through the TWAIN Working Group's sample data source, a virtual
-  # scanner that reads its pages from a file: the DSM and the source installed
-  # by the script (the runner is elevated, so msiexec asks nothing), then
-  # twain-dsm's, scan-device's and scan-worker's tests and lints in both
-  # bitnesses (including scan-device's 32-bit RawImage layout unit tests,
-  # TEST-12, and a 64-bit client driving both 64-bit and i686 workers), with
-  # twain-dsm's bindings checked against twain.h. Its own timeout, since a hung
-  # driver call would otherwise hold the runner for hours.
+  # TWAIN (through the TWAIN Working Group's sample data source) and WIA 2.0
+  # on Windows: the DSM and the sample source installed by the script (the
+  # runner is elevated, so msiexec asks nothing), then twain-dsm's,
+  # scan-device's (TWAIN and WIA) and scan-worker's (TWAIN and WIA) tests and
+  # lints in both bitnesses (including scan-device's 32-bit RawImage and
+  # BoundedStream layout unit tests, TEST-12, and a 64-bit client driving both
+  # 64-bit and i686 workers), with twain-dsm's bindings checked against
+  # twain.h. Its own timeout, since a hung driver call would otherwise hold the
+  # runner for hours.
   twain-dsm:
     name: TWAIN through the sample source (64- and 32-bit)
     runs-on: windows-latest
-    timeout-minutes: 20
-    # The sample is installed below, so any TWAIN test that can't find it
-    # fails rather than skipping.
+    timeout-minutes: 30
+    # The sample and i686 target are installed below, so any TWAIN or 32-bit
+    # worker test that can't find them fails rather than skipping.
     env:
       TWAIN_DSM_REQUIRE_SAMPLE: "1"
+      SCAN_WORKER_REQUIRE_I686: "1"
     steps:
       - uses: actions/checkout@v7
         with:

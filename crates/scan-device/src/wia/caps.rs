@@ -10,9 +10,9 @@ use super::driver::{
     TYMED_CALLBACK, TYMED_FILE, WIA_AUTO_CROP_SINGLE, WIA_CATEGORY_FEEDER_BACK_GUID,
     WIA_CATEGORY_FEEDER_FRONT_GUID, WIA_CATEGORY_FEEDER_GUID, WIA_CATEGORY_FILM_GUID,
     WIA_CATEGORY_FINISHED_FILE_GUID, WIA_CATEGORY_FLATBED_GUID, WIA_CATEGORY_FOLDER_GUID,
-    WIA_CATEGORY_ROOT_GUID, WIA_DATA_COLOR, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR, WIA_DATA_RAW_RGB,
-    WIA_DATA_THRESHOLD, WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES, WIA_DPS_HORIZONTAL_BED_SIZE,
-    WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE, WIA_DPS_VERTICAL_BED_SIZE,
+    WIA_CATEGORY_ROOT_GUID, WIA_DATA_COLOR, WIA_DATA_DITHER, WIA_DATA_GRAYSCALE, WIA_DATA_RAW_BGR,
+    WIA_DATA_RAW_RGB, WIA_DATA_THRESHOLD, WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES,
+    WIA_DPS_HORIZONTAL_BED_SIZE, WIA_DPS_HORIZONTAL_SHEET_FEED_SIZE, WIA_DPS_VERTICAL_BED_SIZE,
     WIA_DPS_VERTICAL_SHEET_FEED_SIZE, WIA_IMG_FMT_BMP_GUID, WIA_IMG_FMT_JPEG_GUID,
     WIA_IMG_FMT_MEMORYBMP_GUID, WIA_IMG_FMT_PNG_GUID, WIA_IMG_FMT_RAW_GUID, WIA_IMG_FMT_TIFF_GUID,
     WIA_IPA_BITS_PER_CHANNEL, WIA_IPA_DATATYPE, WIA_IPA_DEPTH, WIA_IPA_FORMAT,
@@ -58,6 +58,7 @@ pub(super) fn read(tree: &mut dyn WiaDeviceTree) -> Result<Caps, ScanError> {
 pub(super) fn discover_usable_sources(
     tree: &mut dyn WiaDeviceTree,
 ) -> Result<Vec<DiscoveredSource>, ScanError> {
+    tree.set_op(super::error::WiaOp::Caps);
     tree.reset_children();
 
     let mut candidates: Vec<(ItemId, Source, u8, bool)> = Vec::new();
@@ -100,6 +101,7 @@ fn collect_candidates(
     }
     let children = tree.children_of(parent)?;
     let mut saw_feeder_back = false;
+    let level_start = out.len();
 
     for child in children {
         if *visited >= MAX_TREE_ITEMS {
@@ -136,10 +138,21 @@ fn collect_candidates(
         let mut child_has_back = false;
         if (flags & WIA_ITEM_TYPE_FOLDER) != 0 {
             child_has_back = collect_candidates(tree, child, depth + 1, visited, out)?;
+            if child_has_back {
+                saw_feeder_back = true;
+            }
         }
 
         if let Some((source, prio)) = classify_item(flags, category, name, full_name) {
             out.push((child, source, prio, child_has_back));
+        }
+    }
+
+    if saw_feeder_back {
+        for entry in &mut out[level_start..] {
+            if entry.1 == Source::Feeder {
+                entry.3 = true;
+            }
         }
     }
 
@@ -423,78 +436,84 @@ pub(super) fn read_formats_for_item(
     let mut has_rgb16 = false;
 
     let mut changed_dt = false;
-    for &dt in &datatypes {
-        let active_dt = if Some(dt) == init_dt && !changed_dt {
-            true
-        } else if dt_writable {
-            match tree.write_prop(item, WIA_IPA_DATATYPE, &PropValue::I4(dt)) {
-                Ok(()) => {
-                    changed_dt = true;
-                    true
-                }
-                Err(hr) => {
-                    let mapped = super::error::hresult(super::error::WiaOp::Caps, hr);
-                    if super::error::is_fatal_scan_error(&mapped) {
-                        return Err(mapped);
+    let probe_res: Result<(), ScanError> = (|| {
+        for &dt in &datatypes {
+            let active_dt = if Some(dt) == init_dt && !changed_dt {
+                true
+            } else if dt_writable {
+                match tree.write_prop(item, WIA_IPA_DATATYPE, &PropValue::I4(dt)) {
+                    Ok(()) => {
+                        changed_dt = true;
+                        true
                     }
-                    false
+                    Err(hr) => {
+                        let mapped = super::error::hresult(super::error::WiaOp::Caps, hr);
+                        if super::error::is_fatal_scan_error(&mapped) {
+                            return Err(mapped);
+                        }
+                        false
+                    }
                 }
+            } else {
+                false
+            };
+            if !active_dt {
+                continue;
             }
-        } else {
-            false
-        };
-        if !active_dt {
-            continue;
-        }
 
-        let (depths, bpcs) = read_depth_candidates(tree, item)?;
-        match dt {
-            WIA_DATA_THRESHOLD => {
-                if depths.is_empty() || depths.contains(&1) || bpcs.contains(&1) {
-                    has_bw1 = true;
+            let (depths, bpcs) = read_depth_candidates(tree, item)?;
+            let no_depth_info = depths.is_empty() && bpcs.is_empty();
+            match dt {
+                WIA_DATA_THRESHOLD | WIA_DATA_DITHER => {
+                    if no_depth_info || depths.contains(&1) || bpcs.contains(&1) {
+                        has_bw1 = true;
+                    }
                 }
+                WIA_DATA_GRAYSCALE => {
+                    if no_depth_info || depths.contains(&8) || bpcs.contains(&8) {
+                        has_gray8 = true;
+                    }
+                    if allow_16bit && (depths.contains(&16) || bpcs.contains(&16)) {
+                        has_gray16 = true;
+                    }
+                    if (depths.contains(&1) && !depths.contains(&8))
+                        || (depths.is_empty() && bpcs.contains(&1) && !bpcs.contains(&8))
+                    {
+                        has_bw1 = true;
+                    }
+                }
+                WIA_DATA_COLOR => {
+                    if no_depth_info
+                        || depths.contains(&24)
+                        || depths.contains(&32)
+                        || depths.contains(&8)
+                        || bpcs.contains(&8)
+                    {
+                        has_rgb8 = true;
+                    }
+                    if allow_16bit
+                        && (depths.contains(&48) || depths.contains(&16) || bpcs.contains(&16))
+                    {
+                        has_rgb16 = true;
+                    }
+                }
+                WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR if allow_16bit => {
+                    if no_depth_info
+                        || depths.contains(&24)
+                        || depths.contains(&8)
+                        || bpcs.contains(&8)
+                    {
+                        has_rgb8 = true;
+                    }
+                    if depths.contains(&48) || depths.contains(&16) || bpcs.contains(&16) {
+                        has_rgb16 = true;
+                    }
+                }
+                _ => {}
             }
-            WIA_DATA_GRAYSCALE => {
-                if depths.is_empty() || depths.contains(&8) || bpcs.contains(&8) {
-                    has_gray8 = true;
-                }
-                if allow_16bit && (depths.contains(&16) || bpcs.contains(&16)) {
-                    has_gray16 = true;
-                }
-                if depths.contains(&1) && !depths.contains(&8) {
-                    has_bw1 = true;
-                }
-            }
-            WIA_DATA_COLOR => {
-                if depths.is_empty()
-                    || depths.contains(&24)
-                    || depths.contains(&32)
-                    || depths.contains(&8)
-                    || bpcs.contains(&8)
-                {
-                    has_rgb8 = true;
-                }
-                if allow_16bit
-                    && (depths.contains(&48) || depths.contains(&16) || bpcs.contains(&16))
-                {
-                    has_rgb16 = true;
-                }
-            }
-            WIA_DATA_RAW_RGB | WIA_DATA_RAW_BGR if allow_16bit => {
-                if depths.is_empty()
-                    || depths.contains(&24)
-                    || depths.contains(&8)
-                    || bpcs.contains(&8)
-                {
-                    has_rgb8 = true;
-                }
-                if depths.contains(&48) || depths.contains(&16) || bpcs.contains(&16) {
-                    has_rgb16 = true;
-                }
-            }
-            _ => {}
         }
-    }
+        Ok(())
+    })();
 
     if changed_dt {
         if let Some(dt) = init_dt {
@@ -504,6 +523,7 @@ pub(super) fn read_formats_for_item(
             let _ = tree.write_prop(item, WIA_IPA_DEPTH, &PropValue::I4(depth));
         }
     }
+    probe_res?;
 
     let mut out = Vec::new();
     if has_bw1 {
@@ -547,20 +567,25 @@ fn read_depth_candidates(
         depths.push(cur_d);
     }
 
+    // `WIA_IPA_DEPTH` is the authoritative negotiable depth property in WIA 2.0; consult
+    // `WIA_IPA_BITS_PER_CHANNEL` only when `WIA_IPA_DEPTH` is absent so a stale read-only channel
+    // depth never invents an unsupported bit depth alongside an explicit `WIA_IPA_DEPTH` list.
     let mut bpcs = Vec::new();
-    let bpc_attr = attrs.get(1).and_then(|a| a.as_ref());
-    if bpc_attr.is_some_and(PropAttr::is_writable)
-        && let Some(attr) = bpc_attr
-    {
-        collect_depth_constraint(&attr.constraint, &mut bpcs);
-    }
-    if let Some(cur_b) = vals
-        .get(1)
-        .and_then(|v| v.as_ref())
-        .and_then(PropValue::as_i4)
-        && !bpcs.contains(&cur_b)
-    {
-        bpcs.push(cur_b);
+    if depths.is_empty() {
+        let bpc_attr = attrs.get(1).and_then(|a| a.as_ref());
+        if bpc_attr.is_some_and(PropAttr::is_writable)
+            && let Some(attr) = bpc_attr
+        {
+            collect_depth_constraint(&attr.constraint, &mut bpcs);
+        }
+        if let Some(cur_b) = vals
+            .get(1)
+            .and_then(|v| v.as_ref())
+            .and_then(PropValue::as_i4)
+            && !bpcs.contains(&cur_b)
+        {
+            bpcs.push(cur_b);
+        }
     }
 
     Ok((depths, bpcs))
@@ -575,7 +600,9 @@ fn collect_constraint_i4(constraint: &PropConstraint, out: &mut Vec<i32>) {
                 }
             }
         }
-        PropConstraint::Range { min, max, step, .. } if *min <= *max && (*max - *min) <= 64 => {
+        PropConstraint::Range { min, max, step, .. }
+            if *min <= *max && (i64::from(*max) - i64::from(*min)) <= 64 =>
+        {
             let s = (*step).max(1);
             let mut v = *min;
             while v <= *max {
@@ -607,7 +634,7 @@ fn collect_depth_constraint(constraint: &PropConstraint, out: &mut Vec<i32>) {
                     let ok = if *step <= 0 {
                         cand == *min
                     } else {
-                        (cand - *min) % *step == 0
+                        (i64::from(cand) - i64::from(*min)) % i64::from(*step) == 0
                     };
                     if ok && !out.contains(&cand) {
                         out.push(cand);
@@ -904,22 +931,44 @@ pub(super) fn read_max_area_mm(
         return Ok(Some(SizeMm { width, height }));
     }
 
-    // Fallback: derive from `(XEXTENT.max, YEXTENT.max)` at current `(XRES, YRES)`.
+    // Fallback: derive from `(XEXTENT.max, YEXTENT.max)` at current `(XRES, YRES)` (with optical
+    // DPI fallback).
     let ext_vals = tree.read_props(
         item,
-        &[WIA_IPS_XRES, WIA_IPS_YRES, WIA_IPS_XEXTENT, WIA_IPS_YEXTENT],
+        &[
+            WIA_IPS_XRES,
+            WIA_IPS_YRES,
+            WIA_IPS_OPTICAL_XRES,
+            WIA_IPS_OPTICAL_YRES,
+            WIA_IPS_XEXTENT,
+            WIA_IPS_YEXTENT,
+        ],
     )?;
     let ext_attrs = tree.prop_attrs(item, &[WIA_IPS_XEXTENT, WIA_IPS_YEXTENT])?;
     let xres = ext_vals
         .first()
         .and_then(|v| v.as_ref())
         .and_then(PropValue::as_i4)
-        .filter(|&v| v > 0);
+        .filter(|&v| v > 0)
+        .or_else(|| {
+            ext_vals
+                .get(2)
+                .and_then(|v| v.as_ref())
+                .and_then(PropValue::as_i4)
+                .filter(|&v| v > 0)
+        });
     let yres = ext_vals
         .get(1)
         .and_then(|v| v.as_ref())
         .and_then(PropValue::as_i4)
         .filter(|&v| v > 0)
+        .or_else(|| {
+            ext_vals
+                .get(3)
+                .and_then(|v| v.as_ref())
+                .and_then(PropValue::as_i4)
+                .filter(|&v| v > 0)
+        })
         .or(xres);
 
     let max_px = |attr: Option<&PropAttr>, cur: Option<i32>| -> Option<i32> {
@@ -935,14 +984,14 @@ pub(super) fn read_max_area_mm(
     let x_px = max_px(
         ext_attrs.first().and_then(|a| a.as_ref()),
         ext_vals
-            .get(2)
+            .get(4)
             .and_then(|v| v.as_ref())
             .and_then(PropValue::as_i4),
     );
     let y_px = max_px(
         ext_attrs.get(1).and_then(|a| a.as_ref()),
         ext_vals
-            .get(3)
+            .get(5)
             .and_then(|v| v.as_ref())
             .and_then(PropValue::as_i4),
     );
@@ -1319,5 +1368,82 @@ mod tests {
                 step: NonZeroU32::new(25).unwrap(),
             }
         );
+    }
+
+    #[test]
+    fn sibling_feeder_back_marks_duplex_and_depth_stays_authoritative_over_bpc() {
+        // Extreme `i32` ranges in constraint helpers never overflow signed subtraction.
+        let mut extreme_out = Vec::new();
+        collect_constraint_i4(
+            &PropConstraint::Range {
+                min: i32::MIN,
+                nom: 0,
+                max: i32::MAX,
+                step: 1,
+            },
+            &mut extreme_out,
+        );
+        assert!(extreme_out.is_empty());
+        collect_depth_constraint(
+            &PropConstraint::Range {
+                min: i32::MIN,
+                nom: 8,
+                max: i32::MAX,
+                step: 8,
+            },
+            &mut extreme_out,
+        );
+        assert_eq!(extreme_out, vec![8, 16, 24, 32, 48]);
+
+        // Sibling `Feeder Front` + `Feeder Back` directly under ROOT (unconstrained handling
+        // select, no `WIA_DPS_DOCUMENT_HANDLING_CAPABILITIES`) detects `duplex: true`, and an
+        // item with `WIA_IPA_DEPTH = [24]` + stale read-only `WIA_IPA_BITS_PER_CHANNEL = 16`
+        // advertises `[Rgb8]` only (not `Rgb16`).
+        let fake = FakeWiaHandle::new();
+        let mut spec = FakeDeviceSpec::new(scanner_props());
+        spec.add_child(
+            ItemId::ROOT,
+            FakeItem::new(WIA_ITEM_TYPE_IMAGE | WIA_ITEM_TYPE_TRANSFER)
+                .with_prop(
+                    WIA_IPA_ITEM_CATEGORY,
+                    PropValue::Guid(WIA_CATEGORY_FEEDER_FRONT_GUID),
+                    None,
+                )
+                .with_prop(
+                    WIA_IPS_DOCUMENT_HANDLING_SELECT,
+                    PropValue::I4(FRONT_ONLY),
+                    Some(PropAttr {
+                        access_flags: WIA_PROP_RW,
+                        constraint: PropConstraint::None,
+                    }),
+                )
+                .with_prop(WIA_IPS_OPTICAL_XRES, PropValue::I4(300), None)
+                .with_prop(WIA_IPS_XEXTENT, PropValue::I4(2550), None)
+                .with_prop(WIA_IPS_YEXTENT, PropValue::I4(3300), None)
+                .with_prop(WIA_IPA_DATATYPE, PropValue::I4(WIA_DATA_COLOR), None)
+                .with_prop(WIA_IPA_DEPTH, PropValue::I4(24), rw_list(24, vec![24]))
+                .with_prop(WIA_IPA_BITS_PER_CHANNEL, PropValue::I4(16), None)
+                .with_formats(vec![FormatPair {
+                    format: WIA_IMG_FMT_RAW_GUID,
+                    tymed: TYMED_FILE,
+                }]),
+        );
+        spec.add_child(
+            ItemId::ROOT,
+            FakeItem::new(WIA_ITEM_TYPE_IMAGE | WIA_ITEM_TYPE_TRANSFER).with_prop(
+                WIA_IPA_ITEM_CATEGORY,
+                PropValue::Guid(WIA_CATEGORY_FEEDER_BACK_GUID),
+                None,
+            ),
+        );
+        fake.add_device(spec);
+        let mut sys = fake.make_system();
+        let (_, mut tree) = sys.open_device(r"{6BDD1FC6}\0000").unwrap();
+        let caps = read(&mut *tree).unwrap();
+        assert_eq!(caps.sources.len(), 1);
+        assert_eq!(caps.sources[0].source, Source::Feeder);
+        assert!(caps.sources[0].duplex);
+        assert_eq!(caps.sources[0].formats, vec![Format::Rgb8]);
+        assert_eq!(caps.sources[0].max_area, Some(SizeMm::LETTER));
     }
 }

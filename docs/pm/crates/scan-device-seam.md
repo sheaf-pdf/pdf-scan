@@ -870,6 +870,19 @@ model never asks for (it has no batch length); a fractional resolution as a page
 thread given each batch's child progress and `SyncSender` clone, on which it waits while the channel is full
 (its driver's next transfer waiting too), the cancel's wake-up its own to settle (section 7).
 
+**What slice 10's `wia` backend meets** (`IWiaDevMgr2` over COM on a dedicated STA thread): `wia:<WIA_DIP_DEV_ID>`
+filtered to `StiDeviceTypeScanner` with WSD metadata fallbacks and root `(maker, model)` re-verification on open
+(section 1); child-item `SourceCaps` (`Flatbed`, `Feeder`, `FeederFront` + sibling `FeederBack` duplex, dynamic
+`DATATYPE` -> `DEPTH` with 16-bit gated on `WiaImgFmt_RAW`, optical DPI fallback for thousandths-of-an-inch bed
+extents, WDK-ordered sticky resets, mutual `Paper::Auto` vs `Paper::Size` `AUTO_CROP = 0` + `WIA_PAGE_CUSTOM` +
+stepped extents, and WSD even non-zero `WIA_IPS_PAGES` multi-`Download` fallback; section 2); `.bmp` / DIB (via
+shared `dib.rs`, including `BI_BITFIELDS`) and 80-byte `WIA_RAW_HEADER` transfers decoded across all five raw
+formats or validated as `Pixels::Encoded`, with 0-page `TYMED_CALLBACK` -> `TYMED_FILE` fallback (section 3);
+`FRONT_FIRST` and `BACK_FIRST` duplex streams paired as `SideKnown::Inferred` (section 4); dual SDK and Microsoft
+Learn `HRESULT` tables plus `stisvc` `NotInstalled` / `Gone` mapping and `WarmingUp` retries (sections 5 and 6);
+sheet-granular `S_FALSE` cancellation from `GetNextStream` plus `WIA_CMD_STOP_FEEDER` (section 7); and
+`Caps::settings_window = false` (`Unsupported`, section 9).
+
 ## Changes from proposal 9's model
 
 1. Capabilities per source, resolutions a list or a range (section 2).

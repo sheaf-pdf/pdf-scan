@@ -132,8 +132,6 @@ impl ChannelMask {
         let raw = (pixel & self.mask) >> self.shift;
         if self.width == 8 {
             raw as u8
-        } else if self.width > 8 {
-            (raw >> (self.width - 8)) as u8
         } else {
             let max = (1u64 << self.width) - 1;
             ((u64::from(raw) * 255 + max / 2) / max) as u8
@@ -613,6 +611,24 @@ mod tests {
         let img_555 =
             decode(&make_dib(2, -1, 16, &[], &rows_555), BARE_ONLY).expect("16-bit BI_RGB");
         assert_eq!(img_555.data(), &[0, 255, 0, 0, 0, 255]);
+
+        // 32-bit 10-bit-per-channel BI_BITFIELDS (R=0x3FF0_0000, G=0x000F_FC00, B=0x0000_03FF):
+        // verifies rounded scaling for >8-bit channels (1023 -> 255, 512 -> 128, 511 -> 127).
+        let mut dib_10 = Vec::new();
+        dib_10.extend_from_slice(&40u32.to_le_bytes());
+        dib_10.extend_from_slice(&1i32.to_le_bytes());
+        dib_10.extend_from_slice(&(-1i32).to_le_bytes());
+        dib_10.extend_from_slice(&1u16.to_le_bytes());
+        dib_10.extend_from_slice(&32u16.to_le_bytes());
+        dib_10.extend_from_slice(&BI_BITFIELDS.to_le_bytes());
+        dib_10.extend_from_slice(&[0u8; 20]);
+        dib_10.extend_from_slice(&0x3FF0_0000u32.to_le_bytes());
+        dib_10.extend_from_slice(&0x000F_FC00u32.to_le_bytes());
+        dib_10.extend_from_slice(&0x0000_03FFu32.to_le_bytes());
+        let px_10: u32 = (1023 << 20) | (512 << 10) | 511;
+        dib_10.extend_from_slice(&px_10.to_le_bytes());
+        let img_10 = decode(&dib_10, BARE_ONLY).expect("32-bit 10bpc BI_BITFIELDS");
+        assert_eq!(img_10.data(), &[255, 128, 127]);
     }
 
     #[test]

@@ -10,9 +10,11 @@
 //! timed out (`Gate::AbandonedOpen`) immediately releases its `IWiaItem2` tree when the RPC
 //! returns.
 
+#[cfg(windows)]
+use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -45,11 +47,11 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 static LOADED: Mutex<Weak<Session>> = Mutex::new(Weak::new());
 
 #[cfg(windows)]
-/// Holds the STA thread of a dropped process-wide `Session` that was still mid-RPC (`in_flight >
-/// 0`) at drop time. While `exited` is `false`, `shared()` returns `ScanError::TimedOut` rather
-/// than piling up concurrent hung RPC threads against `stisvc`; once the slow call finishes and
-/// the thread exits, `shared()` joins it and spawns fresh.
-static DETACHED: Mutex<Option<(Arc<StaActivity>, JoinHandle<()>)>> = Mutex::new(None);
+/// Holds STA threads of dropped process-wide `Session`s that were still busy (`is_busy()`) at drop
+/// time. While any detached thread (or dead `LOADED` session) has not yet exited, `shared()`
+/// returns `ScanError::TimedOut` rather than piling up concurrent hung RPC threads against
+/// `stisvc`; once finished, `shared()` joins them and spawns fresh.
+static DETACHED: Mutex<Vec<(Arc<StaActivity>, JoinHandle<()>)>> = Mutex::new(Vec::new());
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -59,7 +61,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct StaActivity {
     /// Number of `Request`s currently executing on the STA thread (`0` while parked in `rx.recv`).
     in_flight: AtomicUsize,
-    /// Set to `true` once the STA loop exits and drops all COM objects.
+    /// Number of non-`Shutdown` `Request`s queued in `tx` or currently being handled. Incremented
+    /// before `tx.send(...)` so `Session::drop` never observes `is_busy() == false` while a
+    /// timed-out request is still sitting in the channel about to start an RPC.
+    pending_ops: AtomicUsize,
+    /// `true` while `sta_loop` holds a live `Box<dyn WiaDeviceTree>` whose `Drop` must release COM
+    /// interfaces on the STA thread.
+    has_held_tree: AtomicBool,
+    /// Set to `true` only after `sta_loop`, any held `WiaDeviceTree`, `WiaSystem`, and
+    /// `CoUninitialize` have all finished on the STA thread.
     exited: AtomicBool,
 }
 
@@ -67,6 +77,8 @@ impl StaActivity {
     fn new() -> Self {
         StaActivity {
             in_flight: AtomicUsize::new(0),
+            pending_ops: AtomicUsize::new(0),
+            has_held_tree: AtomicBool::new(false),
             exited: AtomicBool::new(false),
         }
     }
@@ -76,8 +88,18 @@ impl StaActivity {
         InFlightGuard(self)
     }
 
+    fn queue_op(self: &Arc<Self>) -> OpToken {
+        self.pending_ops.fetch_add(1, Ordering::AcqRel);
+        OpToken(Arc::clone(self))
+    }
+
     fn is_busy(&self) -> bool {
-        self.in_flight.load(Ordering::Acquire) > 0 && !self.exited.load(Ordering::Acquire)
+        if self.exited.load(Ordering::Acquire) {
+            return false;
+        }
+        self.in_flight.load(Ordering::Acquire) > 0
+            || self.pending_ops.load(Ordering::Acquire) > 0
+            || self.has_held_tree.load(Ordering::Acquire)
     }
 }
 
@@ -86,6 +108,26 @@ struct InFlightGuard<'a>(&'a StaActivity);
 impl Drop for InFlightGuard<'_> {
     fn drop(&mut self) {
         self.0.in_flight.fetch_sub(1, Ordering::Release);
+    }
+}
+
+struct OpToken(Arc<StaActivity>);
+
+impl Drop for OpToken {
+    fn drop(&mut self) {
+        self.0.pending_ops.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct StaExitGuard {
+    gate: Arc<GateSlot>,
+    activity: Arc<StaActivity>,
+}
+
+impl Drop for StaExitGuard {
+    fn drop(&mut self) {
+        self.gate.set(Gate::Dead);
+        self.activity.exited.store(true, Ordering::Release);
     }
 }
 
@@ -162,21 +204,28 @@ impl core::fmt::Debug for Session {
 #[cfg(windows)]
 pub(super) fn shared() -> Result<Arc<Session>, ScanError> {
     let mut slot = lock(&LOADED);
-    if let Some(existing) = slot.upgrade()
-        && *lock(&existing.gate.state) != Gate::Dead
-    {
-        return Ok(existing);
+    if let Some(existing) = slot.upgrade() {
+        if !existing.is_dead() {
+            return Ok(existing);
+        }
+        if !existing.activity.exited.load(Ordering::Acquire) {
+            return Err(ScanError::TimedOut);
+        }
     }
 
     {
         let mut detached = lock(&DETACHED);
-        if let Some((act, handle)) = detached.take() {
+        let mut still_running = Vec::new();
+        for (act, handle) in detached.drain(..) {
             if act.exited.load(Ordering::Acquire) {
                 let _ = handle.join();
             } else {
-                *detached = Some((act, handle));
-                return Err(ScanError::TimedOut);
+                still_running.push((act, handle));
             }
+        }
+        if !still_running.is_empty() {
+            *detached = still_running;
+            return Err(ScanError::TimedOut);
         }
     }
 
@@ -190,23 +239,28 @@ impl Session {
     fn spawn() -> Result<Arc<Session>, ScanError> {
         let (tx, rx) = mpsc::channel::<Request>();
         let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<(), ScanError>>(1);
+        let gate = Arc::new(GateSlot::new());
         let activity = Arc::new(StaActivity::new());
+        let thread_gate = Arc::clone(&gate);
         let thread_activity = Arc::clone(&activity);
 
         let handle = thread::Builder::new()
             .name("scan-device-wia".to_owned())
             .spawn(move || {
+                let exit = StaExitGuard {
+                    gate: thread_gate,
+                    activity: thread_activity,
+                };
                 super::com::run_sta(startup_tx, |sys| {
-                    sta_loop(sys, &rx, &thread_activity);
+                    sta_loop(sys, &rx, &exit.activity);
                 });
-                thread_activity.exited.store(true, Ordering::Release);
             })
             .map_err(|err| error::driver_msg(format!("couldn't spawn WIA STA thread: {err}")))?;
 
         match startup_rx.recv() {
             Ok(Ok(())) => Ok(Arc::new(Session {
                 tx,
-                gate: Arc::new(GateSlot::new()),
+                gate,
                 activity,
                 thread: Mutex::new(Some(handle)),
                 is_global: true,
@@ -231,15 +285,20 @@ impl Session {
         mut sys: Box<dyn WiaSystem + Send>,
     ) -> Result<Arc<Session>, ScanError> {
         let (tx, rx) = mpsc::channel::<Request>();
+        let gate = Arc::new(GateSlot::new());
         let activity = Arc::new(StaActivity::new());
+        let thread_gate = Arc::clone(&gate);
         let thread_activity = Arc::clone(&activity);
 
         let handle = thread::Builder::new()
             .name("scan-device-wia-fake".to_owned())
             .spawn(move || {
-                sta_loop(&mut *sys, &rx, &thread_activity);
+                let exit = StaExitGuard {
+                    gate: thread_gate,
+                    activity: thread_activity,
+                };
+                sta_loop(&mut *sys, &rx, &exit.activity);
                 drop(sys);
-                thread_activity.exited.store(true, Ordering::Release);
             })
             .map_err(|err| {
                 error::driver_msg(format!("couldn't spawn fake WIA STA thread: {err}"))
@@ -247,11 +306,20 @@ impl Session {
 
         Ok(Arc::new(Session {
             tx,
-            gate: Arc::new(GateSlot::new()),
+            gate,
             activity,
             thread: Mutex::new(Some(handle)),
             is_global: false,
         }))
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(super) fn is_global(&self) -> bool {
+        self.is_global
+    }
+
+    pub(super) fn is_dead(&self) -> bool {
+        *lock(&self.gate.state) == Gate::Dead
     }
 
     fn disconnected_error(&self) -> ScanError {
@@ -269,6 +337,7 @@ impl Session {
         let state = Arc::new(AtomicU8::new(QUEUED));
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let req = Request::List {
+            _op: self.activity.queue_op(),
             state: Arc::clone(&state),
             reply: reply_tx,
         };
@@ -329,6 +398,7 @@ impl Session {
         let state = Arc::new(AtomicU8::new(QUEUED));
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let req = Request::Open {
+            _op: self.activity.queue_op(),
             stored: stored.clone(),
             native_id,
             state: Arc::clone(&state),
@@ -409,7 +479,17 @@ impl Drop for Session {
                 let _ = self.is_global;
                 #[cfg(windows)]
                 if self.is_global {
-                    *lock(&DETACHED) = Some((Arc::clone(&self.activity), handle));
+                    let mut detached = lock(&DETACHED);
+                    let mut still_running = Vec::with_capacity(detached.len() + 1);
+                    for (act, old_handle) in detached.drain(..) {
+                        if act.exited.load(Ordering::Acquire) {
+                            let _ = old_handle.join();
+                        } else {
+                            still_running.push((act, old_handle));
+                        }
+                    }
+                    still_running.push((Arc::clone(&self.activity), handle));
+                    *detached = still_running;
                 }
             } else {
                 let _ = handle.join();
@@ -430,7 +510,10 @@ impl Device for WiaDevice {
         if self
             .session
             .tx
-            .send(Request::Caps { reply: reply_tx })
+            .send(Request::Caps {
+                _op: self.session.activity.queue_op(),
+                reply: reply_tx,
+            })
             .is_err()
         {
             return Err(self.session.disconnected_error());
@@ -450,6 +533,7 @@ impl Device for WiaDevice {
         self.session.ensure_healthy()?;
         let (step_tx, step_rx) = mpsc::channel();
         let req = Request::Scan {
+            _op: self.session.activity.queue_op(),
             settings: settings.clone(),
             first_sheet,
             events: events.clone(),
@@ -494,6 +578,7 @@ impl Drop for WiaDevice {
             .session
             .tx
             .send(Request::CloseDevice {
+                _op: self.session.activity.queue_op(),
                 gate: Arc::clone(&self.session.gate),
                 done: done_tx,
             })
@@ -558,10 +643,12 @@ impl Progress for RelayProgress {
 /// Requests processed by the WIA STA thread.
 enum Request {
     List {
+        _op: OpToken,
         state: Arc<AtomicU8>,
         reply: SyncSender<Result<Vec<DeviceInfo>, ScanError>>,
     },
     Open {
+        _op: OpToken,
         stored: DeviceInfo,
         native_id: String,
         state: Arc<AtomicU8>,
@@ -569,35 +656,75 @@ enum Request {
         reply: SyncSender<Result<DeviceInfo, ScanError>>,
     },
     Caps {
+        _op: OpToken,
         reply: SyncSender<Result<Caps, ScanError>>,
     },
     Scan {
+        _op: OpToken,
         settings: Settings,
         first_sheet: u32,
         events: SyncSender<Event>,
         steps: Sender<ScanStep>,
     },
     CloseDevice {
+        _op: OpToken,
         gate: Arc<GateSlot>,
         done: SyncSender<()>,
     },
     Shutdown,
 }
 
+struct HeldTreeSlot<'a> {
+    tree: Option<Box<dyn WiaDeviceTree>>,
+    activity: &'a StaActivity,
+}
+
+impl<'a> HeldTreeSlot<'a> {
+    fn new(activity: &'a StaActivity) -> Self {
+        HeldTreeSlot {
+            tree: None,
+            activity,
+        }
+    }
+
+    fn set(&mut self, tree: Box<dyn WiaDeviceTree>) {
+        self.tree = Some(tree);
+        self.activity.has_held_tree.store(true, Ordering::Release);
+    }
+
+    fn clear(&mut self) {
+        let prev = self.tree.take();
+        drop(prev);
+        self.activity.has_held_tree.store(false, Ordering::Release);
+    }
+
+    fn as_deref_mut(&mut self) -> Option<&mut (dyn WiaDeviceTree + 'static)> {
+        self.tree.as_deref_mut()
+    }
+}
+
+impl Drop for HeldTreeSlot<'_> {
+    fn drop(&mut self) {
+        let prev = self.tree.take();
+        drop(prev);
+        self.activity.has_held_tree.store(false, Ordering::Release);
+    }
+}
+
 fn sta_loop(sys: &mut dyn WiaSystem, rx: &Receiver<Request>, activity: &StaActivity) {
-    let mut held: Option<Box<dyn WiaDeviceTree>> = None;
+    let mut held = HeldTreeSlot::new(activity);
     while let Ok(req) = rx.recv() {
         if handle_request(sys, &mut held, req, activity) {
             break;
         }
     }
     let _in_flight = activity.enter();
-    drop(held);
+    held.clear();
 }
 
 fn handle_request(
     sys: &mut dyn WiaSystem,
-    held: &mut Option<Box<dyn WiaDeviceTree>>,
+    held: &mut HeldTreeSlot<'_>,
     req: Request,
     activity: &StaActivity,
 ) -> bool {
@@ -606,7 +733,7 @@ fn handle_request(
     }
     let _in_flight = activity.enter();
     match req {
-        Request::List { state, reply } => {
+        Request::List { _op, state, reply } => {
             if state
                 .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
@@ -617,6 +744,7 @@ fn handle_request(
             false
         }
         Request::Open {
+            _op,
             stored,
             native_id,
             state,
@@ -632,7 +760,7 @@ fn handle_request(
             }
             false
         }
-        Request::Caps { reply } => {
+        Request::Caps { _op, reply } => {
             let res = match held.as_deref_mut() {
                 Some(tree) => handle_caps(tree),
                 None => Err(error::driver_msg("WIA device is not open")),
@@ -641,6 +769,7 @@ fn handle_request(
             false
         }
         Request::Scan {
+            _op,
             settings,
             first_sheet,
             events,
@@ -656,8 +785,8 @@ fn handle_request(
             let _ = steps.send(ScanStep::Finished(res));
             false
         }
-        Request::CloseDevice { gate, done } => {
-            *held = None;
+        Request::CloseDevice { _op, gate, done } => {
+            held.clear();
             gate.finish_cleanup(Gate::Closing);
             let _ = done.send(());
             false
@@ -676,7 +805,7 @@ fn handle_list(sys: &mut dyn WiaSystem) -> Result<Vec<DeviceInfo>, ScanError> {
 
 fn handle_open(
     sys: &mut dyn WiaSystem,
-    held: &mut Option<Box<dyn WiaDeviceTree>>,
+    held: &mut HeldTreeSlot<'_>,
     stored: &DeviceInfo,
     native_id: &str,
 ) -> Result<DeviceInfo, ScanError> {
@@ -692,12 +821,12 @@ fn handle_open(
         drop(tree);
         return Err(ScanError::Gone);
     }
-    *held = Some(tree);
+    held.set(tree);
     Ok(opened_info)
 }
 
 fn finish_sta_open(
-    held: &mut Option<Box<dyn WiaDeviceTree>>,
+    held: &mut HeldTreeSlot<'_>,
     res: Result<DeviceInfo, ScanError>,
     state: &AtomicU8,
     gate: &GateSlot,
@@ -711,7 +840,7 @@ fn finish_sta_open(
         return;
     }
     if res.is_ok() {
-        *held = None;
+        held.clear();
     }
     let mut guard = lock(&gate.state);
     if matches!(*guard, Gate::Opening | Gate::AbandonedOpen) {
