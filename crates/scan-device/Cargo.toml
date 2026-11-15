@@ -42,6 +42,16 @@ twain = ["dep:twain-dsm"]
 # The WIA backend, `scan_device::wia`: WIA 2.0 scanners on Windows, through COM
 # (`IWiaDevMgr2`).
 wia = ["dep:windows", "dep:windows-core"]
+# The ImageCaptureCore backend, `scan_device::ica`: macOS's scanners, through
+# the framework that is part of the system. Its dependencies are macOS's alone,
+# so elsewhere the feature builds the backend's platform-independent parts.
+ica = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-image-capture-core",
+    "dep:dispatch2",
+]
 
 [target.'cfg(windows)'.dependencies]
 # The `wia` backend's way to WIA 2.0 COM interfaces on Windows; private, so none
@@ -55,12 +65,65 @@ windows = { version = "0.62", optional = true, features = [
 ] }
 windows-core = { version = "0.62", optional = true }
 
+# The `ica` backend's way to ImageCaptureCore on macOS, each private, so none of
+# their types is in this crate's API; the bindings' default features off, each
+# taking only what the backend calls. Carets at the versions the backend was
+# checked against, so a fresh resolve never takes an older one.
+[target.'cfg(target_os = "macos")'.dependencies]
+# Objective-C's runtime: classes defined, messages sent, the main thread's
+# marker.
+objc2 = { version = "0.6.5", optional = true }
+# Foundation's types the framework's calls take and give: errors, data,
+# index sets, strings, geometry.
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSIndexSet",
+    "NSObject",
+    "NSString",
+    "NSValue",
+] }
+# Core Foundation's run loop, which the backend runs on the main thread while
+# it waits for the framework's callbacks there.
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CFCGTypes",
+    "CFDate",
+    "CFRunLoop",
+    "CFString",
+] }
+# ImageCaptureCore's classes, protocols and constants: the device browser, the
+# scanner device, its functional units and the bands of a memory transfer.
+# Not its icons and overview images (`objc2-core-graphics`), nor its completion
+# blocks (`block2`).
+objc2-image-capture-core = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "ICDevice",
+    "ICDeviceBrowser",
+    "ICScannerBandData",
+    "ICScannerDevice",
+    "ICScannerFunctionalUnits",
+    "ImageCaptureConstants",
+    "objc2-core-foundation",
+] }
+# The main dispatch queue, where the backend posts its calls when it's called
+# off the main thread.
+dispatch2 = { version = "0.3.1", optional = true, default-features = false, features = [
+    "std",
+    "objc2",
+] }
+
 [dev-dependencies]
 # The crate's own tests, doctests included, take the fake backend, the serde
-# form and the SANE, TWAIN and WIA backends: a dev-dependency on the crate itself
-# turns the features on for them alone, so a plain `cargo test` runs them,
-# while a build without the features has none of them in it.
-scan-device = { path = ".", features = ["fake", "serde", "sane", "twain", "wia"] }
+# form and the SANE, TWAIN, WIA and ImageCaptureCore backends: a dev-dependency
+# on the crate itself turns the features on for them alone, so a plain
+# `cargo test` runs them, while a build without the features has none of them
+# in it.
+scan-device = { path = ".", features = ["fake", "serde", "sane", "twain", "wia", "ica"] }
 # A child process for each test of a fault that ends the process it runs in.
 rusty-fork.workspace = true
 # The serde form's tests write and read it as JSON.

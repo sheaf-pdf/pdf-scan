@@ -3,8 +3,8 @@
 //! A [`Backend`] lists the devices its driver API finds and opens the one an app stored; the
 //! [`Device`] it opens says what it can do ([`Caps`]), scans a batch with the [`Settings`] it's
 //! given, sending what happens as [`Event`]s, and opens its driver's own settings window where it
-//! has one. Each driver API (SANE, TWAIN, WIA, ...) is a backend behind these two traits, so an app
-//! meets the same calls, events and errors whichever one finds a scanner.
+//! has one. Each driver API (SANE, TWAIN, WIA, ImageCaptureCore, ...) is a backend behind these
+//! two traits, so an app meets the same calls, events and errors whichever one finds a scanner.
 //!
 //! Everything is synchronous: a call blocks until it has its answer, and a batch runs on a thread
 //! of its own until it ends. The types are plain data, with every field public but
@@ -141,6 +141,17 @@
 //!   raw layout (or [`Pixels::Encoded`] when asked), and cancels between sheets. Builds on every
 //!   system; off Windows, listing and opening say WIA isn't installed.
 //!
+//! - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore,
+//!   part of the system. Not yet wired to the framework: in this version listing and opening say
+//!   ImageCaptureCore isn't installed on every system, macOS included, once an id the backend
+//!   doesn't form has been refused, while its platform-independent parts are built and tested on
+//!   every system: its devices' ids (`ica:` and the framework's persistent id for each, its UUID
+//!   where it gives none; a name, and a maker and model the framework doesn't give left empty),
+//!   what a source can do from a functional unit's properties (a feeder's paper by document type),
+//!   pages assembled from a memory-based transfer's bands into the raw layout, every number in a
+//!   band checked first, and the framework's errors mapped. Builds on every system, its
+//!   dependencies macOS's alone.
+//!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
 //! # Example
@@ -218,8 +229,16 @@ mod dib;
 mod error;
 #[cfg(feature = "fake")]
 pub mod fake;
+#[cfg(feature = "ica")]
+pub mod ica;
 mod image;
 mod page;
+#[cfg(any(feature = "twain", feature = "wia", feature = "ica"))]
+#[cfg_attr(
+    not(any(windows, test, all(feature = "wia", feature = "fake"))),
+    allow(dead_code)
+)]
+mod page_caps;
 #[cfg(all(test, feature = "serde"))]
 mod round_trip;
 #[cfg(feature = "sane")]
