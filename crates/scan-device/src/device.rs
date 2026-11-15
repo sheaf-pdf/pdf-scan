@@ -135,13 +135,13 @@ pub trait Device: Send {
     /// rendezvous channel (`sync_channel(0)`) each `send` waits until its event is taken. A
     /// `send` that fails, the receiver gone, ends the batch at once as [`Done::Cancelled`].
     ///
-    /// `progress` is checked between sheets and never within one: once its check fails, the
-    /// sheet in flight is finished, front and back, no other sheet is fed where the driver can
-    /// stop its feeder between sheets (a backend whose driver can't says so in its docs), and the
-    /// batch ends as [`Done::Cancelled`]. Each page's bytes are counted on it as they come. The sheet in flight's
-    /// events still come after a cancel, and a backend held at a full channel never reaches its
-    /// check, so a caller that cancels keeps taking events until `scan` returns, or drops the
-    /// receiver to end the batch at its next `send`.
+    /// `progress` is checked between sheets and never within one: once its check fails, the sheet
+    /// in flight is finished, front and back, no other sheet is fed where the driver can stop its
+    /// feeder between sheets (a backend whose driver can't says so in its docs), and the batch ends
+    /// as [`Done::Cancelled`]. Each page's bytes are counted on it as they come. The sheet in
+    /// flight's events still come after a cancel, and a backend held at a full channel never
+    /// reaches its check, so a caller that cancels keeps taking events until `scan` returns, or
+    /// drops the receiver to end the batch at its next `send`.
     ///
     /// It returns how the batch ended, or a [`ScanError`]. [`ScanError::FeederEmpty`] comes only
     /// before any page: after pages, an empty feeder ends it as [`Done::FeederEmpty`]. The pages

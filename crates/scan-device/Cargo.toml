@@ -6,10 +6,11 @@ rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "A device model for document scanners, one shape whatever driver API reaches them: devices listed and opened, what each can do, batches of pages in a checked raw layout, cancel and progress"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
-# Provisional: SANE, TWAIN, and WIA 2.0 are built against the model, and the
-# next slice freezes and prepares the package to publish (keywords, categories,
-# the package's contents, a changelog, and docs.rs metadata building every
-# feature, since none is on by default, come then).
+# Provisional: SANE, TWAIN, WIA 2.0, and ImageCaptureCore (not yet on a
+# device) are built against the model, and the package is made ready to
+# publish as the model is frozen (keywords, categories, the package's
+# contents, a changelog, and docs.rs metadata building every feature, since
+# none is on by default, come then).
 publish = false
 
 [dependencies]

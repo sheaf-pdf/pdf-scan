@@ -92,7 +92,7 @@ jobs:
   # runner is elevated, so msiexec asks nothing), then twain-dsm's,
   # scan-device's (TWAIN and WIA) and scan-worker's (TWAIN and WIA) tests and
   # lints in both bitnesses (including scan-device's 32-bit RawImage and
-  # BoundedStream layout unit tests, TEST-12, and a 64-bit client driving both
+  # BoundedStream layout unit tests, and a 64-bit client driving both
   # 64-bit and i686 workers), with twain-dsm's bindings checked against
   # twain.h. Its own timeout, since a hung driver call would otherwise hold the
   # runner for hours.
@@ -215,7 +215,9 @@ jobs:
   # macOS (the ImageCaptureCore backend's glue, whose only build on this Rust
   # is here) branches of scan-device build and run their pure and fake tests
   # on its minimum Rust, and on macOS its listings through the real framework;
-  # tests that need libsane or TWAIN's sample source say they skipped.
+  # tests that need libsane or TWAIN's sample source say they skipped, and so
+  # does a listing through ImageCaptureCore that times out, since only the
+  # check job sets SCAN_DEVICE_REQUIRE_ICA.
   scan-device-msrv:
     name: scan-device on its minimum Rust (${{ matrix.os }})
     strategy:
@@ -237,9 +239,10 @@ jobs:
   # The Unix (fd stdout isolation, process groups, fake libsane), Windows
   # (handle/CRT stdout isolation, Job Objects, WindowGuard) and macOS (the
   # ImageCaptureCore backend served from a worker's main thread, and its
-  # listing through the real framework there) branches of scan-worker build
-  # and run on its minimum Rust, for the crate alone (-p), beside the check
-  # job's workspace run.
+  # listing through the real framework there, which says it skipped where it
+  # times out, only the check job setting SCAN_DEVICE_REQUIRE_ICA) branches of
+  # scan-worker build and run on its minimum Rust, for the crate alone (-p),
+  # beside the check job's workspace run.
   scan-worker-msrv:
     name: scan-worker on its minimum Rust (${{ matrix.os }})
     strategy:
@@ -291,7 +294,7 @@ jobs:
 
   # Each publish-ready crate's public API read from rustdoc's JSON, hidden
   # items included (sane-dl on Ubuntu and Windows; twain-dsm on Windows, where
-  # its cfg(windows) API is built, TEST-14): no unsafe function, method or
+  # its cfg(windows) API is built): no unsafe function, method or
   # trait, no unsafe function pointer, no raw pointer in a public signature,
   # no static mut or target_feature function, no re-export of another crate's
   # item (scripts/public-api.jq says it all); each unsafe impl and union

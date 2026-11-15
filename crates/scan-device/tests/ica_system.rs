@@ -6,9 +6,9 @@
 //!
 //! A harness of its own (`harness = false`), so `main` is the process's main thread, as a
 //! worker's is, and the cases run on it in turn. It answers `--list` as libtest does (`<name>:
-//! test` a line), takes name filters (`--exact` and `--skip` too), and ignores libtest's other
-//! flags (`--nocapture`, `--test-threads`, `--quiet` and the rest) rather than reading them as
-//! filters.
+//! test` a line, then a count but in the terse format, `--format terse` or `--quiet`), takes name
+//! filters (`--exact` and `--skip` too), and ignores libtest's other flags (`--nocapture`,
+//! `--test-threads` and the rest) rather than reading them as filters.
 //!
 //! With no scanner (CI's runner), a listing answers `Ok` and empty, 2 s after the framework's
 //! local enumeration ends. `SCAN_DEVICE_REQUIRE_ICA=1` (CI's macOS check job) makes that answer
@@ -56,6 +56,10 @@ const CASES: &[Case] = &[
 #[derive(Default)]
 struct Args {
     list: bool,
+    /// `--quiet` or `-q`: the terse format where `--format` names none.
+    quiet: bool,
+    /// `--format`'s value.
+    format: Option<String>,
     exact: bool,
     ignored_only: bool,
     filters: Vec<String>,
@@ -69,27 +73,39 @@ impl Args {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--list" => parsed.list = true,
+                "--quiet" | "-q" => parsed.quiet = true,
                 "--exact" => parsed.exact = true,
                 "--ignored" => parsed.ignored_only = true,
                 "--skip" => parsed.skips.extend(args.next()),
+                "--format" => parsed.format = args.next(),
                 // libtest's flags that take the next argument as their value: it's theirs, not a
                 // filter.
-                "--test-threads" | "--format" | "--color" | "--logfile" | "--shuffle-seed"
-                | "-Z" => {
+                "--test-threads" | "--color" | "--logfile" | "--shuffle-seed" | "-Z" => {
                     args.next();
                 }
                 _ => {
                     if let Some(skip) = arg.strip_prefix("--skip=") {
                         parsed.skips.push(skip.to_owned());
+                    } else if let Some(format) = arg.strip_prefix("--format=") {
+                        parsed.format = Some(format.to_owned());
                     } else if !arg.starts_with('-') {
                         parsed.filters.push(arg);
                     }
-                    // Every other flag of libtest's (`--nocapture`, `--quiet`, `--test-threads=1`,
+                    // Every other flag of libtest's (`--nocapture`, `--test-threads=1`,
                     // `--include-ignored` and the rest) is ignored.
                 }
             }
         }
         parsed
+    }
+
+    /// Whether the output is libtest's terse format: `--format terse`, or `--quiet` with no
+    /// `--format`.
+    fn terse(&self) -> bool {
+        match self.format.as_deref() {
+            Some(format) => format == "terse",
+            None => self.quiet,
+        }
     }
 
     fn matches(&self, pattern: &str, name: &str) -> bool {
@@ -119,13 +135,20 @@ fn main() -> ExitCode {
         for case in &selected {
             println!("{}: test", case.name);
         }
-        println!();
-        println!("{} tests, 0 benchmarks", selected.len());
+        // As libtest: the count but in the terse format, whose lines are the names alone.
+        if !args.terse() {
+            println!();
+            println!("{} tests, 0 benchmarks", selected.len());
+        }
         return ExitCode::SUCCESS;
     }
     let start = Instant::now();
     println!();
-    println!("running {} tests", selected.len());
+    println!(
+        "running {} test{}",
+        selected.len(),
+        if selected.len() == 1 { "" } else { "s" }
+    );
     let (mut passed, mut skipped, mut failed) = (0, 0, Vec::new());
     for case in &selected {
         let began = Instant::now();

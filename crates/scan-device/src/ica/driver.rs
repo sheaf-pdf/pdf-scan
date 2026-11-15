@@ -19,8 +19,16 @@ use crate::ScanError;
 /// The flatbed.
 pub const UNIT_FLATBED: u64 = 0;
 /// The transparency unit for positive film.
+#[cfg_attr(
+    not(any(test, feature = "fake")),
+    allow(dead_code, reason = "the scripted framework's and the tests'")
+)]
 pub const UNIT_POSITIVE_TRANSPARENCY: u64 = 1;
 /// The transparency unit for negative film.
+#[cfg_attr(
+    not(all(test, target_os = "macos")),
+    allow(dead_code, reason = "read by the bindings' test alone")
+)]
 pub const UNIT_NEGATIVE_TRANSPARENCY: u64 = 2;
 /// The document feeder.
 pub const UNIT_DOCUMENT_FEEDER: u64 = 3;
@@ -34,16 +42,31 @@ pub const PIXEL_GRAY: u64 = 1;
 /// Red, green and blue.
 pub const PIXEL_RGB: u64 = 2;
 /// Indexed through a palette.
+#[cfg_attr(not(test), allow(dead_code, reason = "read by tests alone"))]
 pub const PIXEL_PALETTE: u64 = 3;
 /// Cyan, magenta and yellow.
+#[cfg_attr(
+    not(all(test, target_os = "macos")),
+    allow(dead_code, reason = "read by the bindings' test alone")
+)]
 pub const PIXEL_CMY: u64 = 4;
 /// Cyan, magenta, yellow and black.
+#[cfg_attr(not(test), allow(dead_code, reason = "read by tests alone"))]
 pub const PIXEL_CMYK: u64 = 5;
 /// YUV.
+#[cfg_attr(not(test), allow(dead_code, reason = "read by tests alone"))]
 pub const PIXEL_YUV: u64 = 6;
 /// YUV and black.
+#[cfg_attr(
+    not(all(test, target_os = "macos")),
+    allow(dead_code, reason = "read by the bindings' test alone")
+)]
 pub const PIXEL_YUVK: u64 = 7;
 /// CIE XYZ.
+#[cfg_attr(
+    not(all(test, target_os = "macos")),
+    allow(dead_code, reason = "read by the bindings' test alone")
+)]
 pub const PIXEL_CIEXYZ: u64 = 8;
 
 // Bit depths (`ICScannerBitDepth`): a sample's bits.
@@ -76,6 +99,10 @@ pub const MEASURE_PIXELS: u64 = 5;
 // card's size.
 
 /// The module's default.
+#[cfg_attr(
+    not(any(test, feature = "fake")),
+    allow(dead_code, reason = "the scripted framework's and the tests'")
+)]
 pub const DOCUMENT_DEFAULT: u64 = 0;
 /// A4.
 pub const DOCUMENT_A4: u64 = 1;
@@ -100,6 +127,10 @@ pub const DOCUMENT_US_STATEMENT: u64 = 52;
 // (`ICDeviceLocationType`).
 
 /// A camera.
+#[cfg_attr(
+    not(any(test, feature = "fake")),
+    allow(dead_code, reason = "the scripted framework's and the tests'")
+)]
 pub const DEVICE_CAMERA: u64 = 0x0000_0001;
 /// A scanner.
 pub const DEVICE_SCANNER: u64 = 0x0000_0002;
@@ -110,11 +141,17 @@ pub const LOCATION_SHARED: u64 = 0x0000_0200;
 /// Found on the network by Bonjour.
 pub const LOCATION_BONJOUR: u64 = 0x0000_0400;
 /// Reached over Bluetooth.
+#[cfg_attr(not(test), allow(dead_code, reason = "read by tests alone"))]
 pub const LOCATION_BLUETOOTH: u64 = 0x0000_0800;
 /// Every location that isn't this Mac (`ICDeviceLocationTypeMaskRemote`).
+#[cfg_attr(not(test), allow(dead_code, reason = "read by tests alone"))]
 pub const LOCATION_REMOTE: u64 = 0x0000_FE00;
 
 /// What a listing browses for: scanners, attached, found by Bonjour, or shared.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "the glue's, on macOS alone")
+)]
 pub const BROWSE_MASK: u64 = DEVICE_SCANNER | LOCATION_LOCAL | LOCATION_BONJOUR | LOCATION_SHARED;
 
 /// A page's orientation as the scanner reads it (`ICEXIFOrientationType`'s first): set on a
@@ -124,8 +161,16 @@ pub const ORIENTATION_AS_READ: u64 = 1;
 // Transfer modes (`ICScannerTransferMode`).
 
 /// Pages written to files in a directory.
+#[cfg_attr(
+    not(all(test, target_os = "macos")),
+    allow(dead_code, reason = "read by the bindings' test alone")
+)]
 pub const TRANSFER_FILE_BASED: u64 = 0;
 /// Pages sent in bands of memory: the backend's.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "the glue's, on macOS alone")
+)]
 pub const TRANSFER_MEMORY_BASED: u64 = 1;
 
 // The framework's return codes (`ICReturnCode`, `ICReturnConnectionErrorCode`), an `NSError`'s
@@ -198,6 +243,10 @@ pub struct IndexSet {
 impl IndexSet {
     /// The set of `indexes`, sorted and without duplicates, as the framework's are: for tests and
     /// the scripted framework.
+    #[cfg_attr(
+        not(any(test, feature = "fake")),
+        allow(dead_code, reason = "the scripted framework's and the tests'")
+    )]
     pub fn of(indexes: &[u64]) -> IndexSet {
         let mut sorted = indexes.to_vec();
         sorted.sort_unstable();
@@ -353,6 +402,10 @@ pub enum DeviceStatus {
     /// `ICScannerStatusWarmUpDone`: it has warmed up.
     WarmedUp,
     /// Any other, unread.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "the glue's, on macOS alone")
+    )]
     Other,
 }
 
@@ -431,6 +484,10 @@ pub enum IcaEvent {
         bytes: Vec<u8>,
     },
     /// A band whose buffer was past [`MAX_BAND_BYTES`], refused uncopied.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "the glue's, on macOS alone")
+    )]
     OversizedBand {
         /// The device.
         device: DeviceRef,
@@ -445,6 +502,10 @@ pub enum IcaEvent {
         error: Option<IcaError>,
     },
     /// `device:didEncounterError:`.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "the glue's, on macOS alone")
+    )]
     DeviceError {
         /// The device.
         device: DeviceRef,
@@ -468,6 +529,10 @@ pub enum IcaEvent {
     /// A callback came off the main thread, where the glue reads nothing it's handed: the
     /// framework's documentation has the device's delegate called on the main thread, and the
     /// backend takes the device browser's to be too, so this says it wasn't.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(dead_code, reason = "the glue's, on macOS alone")
+    )]
     OffMainThread {
         /// The delegate it came to.
         origin: Origin,

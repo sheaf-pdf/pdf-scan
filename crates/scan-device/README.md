@@ -18,10 +18,11 @@ a feature of its own. This version has the model, a scripted backend for tests, 
 systems, TWAIN's and WIA 2.0's scanners on Windows, and ImageCaptureCore's scanners on macOS, tested over a
 scripted framework and through the real one with no scanner, and not yet on a device.
 
-Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0
-once the Windows backends are complete. `#![deny(unsafe_code)]`, with `unsafe` confined strictly to `wia/com.rs`
-on Windows for `IWiaDevMgr2` / `IWiaTransferCallback` / `IStream` COM vtables, and to `ica/objc.rs` on macOS for
-ImageCaptureCore's classes and delegates through objc2.
+Provisional: 0.0.x and unpublished, while the model is tried against each driver API; it's frozen at 0.1.0 once
+the four it has backends for have been through it: SANE, TWAIN and WIA 2.0, and ImageCaptureCore, so far on no
+device. `#![deny(unsafe_code)]`, with `unsafe` confined strictly to `wia/com.rs` on Windows for `IWiaDevMgr2` /
+`IWiaTransferCallback` / `IStream` COM vtables, and to `ica/objc.rs` on macOS for ImageCaptureCore's classes and
+delegates through objc2.
 
 ## Features
 
@@ -83,10 +84,11 @@ None is on by default.
   through objc2's bindings. The framework delivers to the main thread, so the backend makes every call to it
   there, whoever calls it: on the main thread (a worker's `main`) it runs the main run loop while it waits for a
   callback; on another thread it posts its calls to the main queue, so the main thread must be running its run
-  loop, and says so as `ScanError::Driver` within 5 s where it isn't; from a block on the main queue, which can't
-  then be served, it says so at once. Off macOS, listing and opening report `ScanError::NotInstalled` after
-  refusing an id it doesn't form (`ScanError::BadId`). Tested on every system over a scripted ImageCaptureCore,
-  and on macOS through the real framework with no scanner; unverified on a device: ids of `ica:` and the framework's
+  loop, and says so as `ScanError::Driver` within 5 s where it isn't; from a block on the main queue, which
+  can't then be served, it says so at once. Off macOS, listing and opening report `ScanError::NotInstalled`
+  after refusing an id it doesn't form (`ScanError::BadId`). On macOS it needs 10.15 or later, whose framework
+  has the error domain the backend reads. Tested on every system over a scripted ImageCaptureCore, and on macOS
+  through the real framework with no scanner; unverified on a device: ids of `ica:` and the framework's
   persistent id (its UUID where it gives none), names as the framework gives them and maker and model empty,
   since it gives neither; a listing taken as a snapshot, 2 s after the attached devices are all found (the
   framework's listing never ends), and a stored device found again by its id, `Gone` by the same rule; each

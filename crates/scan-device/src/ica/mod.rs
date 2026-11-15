@@ -233,7 +233,10 @@ mod batch;
     allow(dead_code)
 )]
 mod caps;
-#[allow(dead_code)]
+#[cfg_attr(
+    not(any(target_os = "macos", test, feature = "fake")),
+    allow(dead_code)
+)]
 mod driver;
 #[cfg_attr(
     not(any(target_os = "macos", test, feature = "fake")),

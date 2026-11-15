@@ -1,10 +1,11 @@
 # Development tasks. CI runs these same recipes, so a local `just ci` checks
 # what CI checks, but for three variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
-# needs libsane or sane.h fails where it would skip, and its macOS job sets
-# SCAN_DEVICE_REQUIRE_ICA=1, so a listing through ImageCaptureCore that
-# times out fails where it would say so. On Linux or macOS, set them for a
-# local run that matches it. CI's Windows TWAIN job also runs the TWAIN,
+# needs libsane or sane.h fails where it would skip, and its check job's
+# macOS run sets SCAN_DEVICE_REQUIRE_ICA=1, so a listing through
+# ImageCaptureCore that times out fails where it would say so (the macOS
+# minimum-Rust jobs don't set it). On Linux or macOS, set them for a local run
+# that matches it. CI's Windows TWAIN job also runs the TWAIN,
 # WIA, and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
 # `scan-device-twain-test`, `scan-device-wia-test`, `scan-device-clippy`,
 # `scan-worker-twain-test`, `scan-worker-wia-test`, `scan-worker-clippy`,
@@ -235,7 +236,7 @@ twain-dsm-clippy target:
     cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
 
 # scan-device's unit tests (including RawImage's layout checks on a 32-bit
-# `usize`, TEST-12) and its live TWAIN sample-source integration tests for
+# `usize`) and its live TWAIN sample-source integration tests for
 # `target` (x86_64-pc-windows-msvc or i686-pc-windows-msvc).
 # scan-device's unit and TWAIN sample tests for one Windows target.
 scan-device-twain-test target:
@@ -309,8 +310,11 @@ gates:
     codec='^(image|tiff|png|zune-.*|jpeg-.*|fax|hayro-.*|objc2-image-io)$'
     # Pixel work: imageproc, and macOS's Core Image (objc2-core-image).
     pixel='^(imageproc|objc2-core-image)$'
-    pdf='^(pdf-.*|lopdf|pdfium-render|mupdf.*|hayro-syntax|hayro-interpret|krilla|pdf-writer|printpdf)$'
-    ocr='^(ort|ort-sys|onnxruntime.*|tract-.*|candle-.*|rten|burn|tesseract.*|leptess|leptonica-sys)$'
+    # The PDF crates, macOS's PDFKit among them (objc2-pdf-kit).
+    pdf='^(pdf-.*|lopdf|pdfium-render|mupdf.*|hayro-syntax|hayro-interpret|krilla|pdf-writer|printpdf|objc2-pdf-kit)$'
+    # The OCR and model runtimes, macOS's Vision and Core ML among them
+    # (objc2-vision, objc2-core-ml).
+    ocr='^(ort|ort-sys|onnxruntime.*|tract-.*|candle-.*|rten|burn|tesseract.*|leptess|leptonica-sys|objc2-vision|objc2-core-ml)$'
     # The GUI toolkits, macOS's AppKit and Cocoa and iOS's UIKit among them
     # (objc2-app-kit, cocoa, objc2-ui-kit), which a binding of an Apple
     # framework can bring in through a feature that names a view.

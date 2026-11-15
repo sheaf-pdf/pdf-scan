@@ -16,11 +16,12 @@
 //! # Devices and their ids
 //!
 //! A listing gives each device's [`DeviceInfo`]: its [`DeviceId`], its name, maker and model (each
-//! empty where the driver gives none), and the [`Driver`] API it's reached through. An id is the driver's name and the driver's own id for
-//! the device, `<driver>:<native id>`, compared whole and read by no one but the backend that
-//! made it. An app stores the `DeviceInfo` and gives it back to [`Backend::open`], which checks it
-//! against what the driver finds now: where it knowingly opens another device in the stored one's
-//! place (the same scanner under a new name), it says so in [`Opened::renamed_from`].
+//! empty where the driver gives none), and the [`Driver`] API it's reached through. An id is the
+//! driver's name and the driver's own id for the device, `<driver>:<native id>`, compared whole and
+//! read by no one but the backend that made it. An app stores the `DeviceInfo` and gives it back to
+//! [`Backend::open`], which checks it against what the driver finds now: where it knowingly opens
+//! another device in the stored one's place (the same scanner under a new name), it says so in
+//! [`Opened::renamed_from`].
 //!
 //! # A batch
 //!
@@ -55,11 +56,11 @@
 //! [`Tracker`](in_progress::Tracker) and cancels the batch through a clone of it, from any thread.
 //! A backend checks it between sheets and never within one, so a cancel finishes the sheet in
 //! flight, front and back, feeds no more where the driver can stop its feeder between sheets (a
-//! backend whose driver can't says so in its docs), and the batch ends as [`Done::Cancelled`]. The sheet in
-//! flight's events still come after the cancel, and a backend held at a full channel never reaches
-//! its check, so the caller keeps taking events until the batch returns, or drops the receiver to
-//! end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes a tracker of
-//! its own. Progress is counted in each page's bytes.
+//! backend whose driver can't says so in its docs), and the batch ends as [`Done::Cancelled`]. The
+//! sheet in flight's events still come after the cancel, and a backend held at a full channel never
+//! reaches its check, so the caller keeps taking events until the batch returns, or drops the
+//! receiver to end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes
+//! a tracker of its own. Progress is counted in each page's bytes.
 //!
 //! A backend whose driver delivers pages on a thread of its own gives that thread
 //! `progress.child(..)` (owned, `Send`, and cancelled whenever its parent is) and a clone of the
@@ -161,7 +162,8 @@
 //!   docs say what then. Tested on every system over a scripted framework, and on macOS through
 //!   the real one with no scanner; unverified on a device. Builds on every system, its
 //!   dependencies macOS's alone; off macOS, listing and opening say ImageCaptureCore isn't
-//!   installed.
+//!   installed. On macOS it needs 10.15 or later, whose framework has the error domain the
+//!   backend reads.
 //!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
@@ -224,7 +226,8 @@
 //! # Stability
 //!
 //! Provisional: 0.0.x and unpublished, while the model is tried against each driver API. It's
-//! frozen at 0.1.0 once the Linux and Windows ones have been through it.
+//! frozen at 0.1.0 once the four it has backends for have been through it: SANE, TWAIN and WIA
+//! 2.0, and ImageCaptureCore, so far on no device.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
