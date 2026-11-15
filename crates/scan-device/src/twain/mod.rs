@@ -67,6 +67,8 @@
 
 use std::path::PathBuf;
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
@@ -146,11 +148,17 @@ impl TwainBackend {
     }
 
     #[cfg(windows)]
-    fn session(&mut self) -> Result<std::sync::Arc<session::Session>, ScanError> {
+    fn session(
+        &mut self,
+        deadline: Duration,
+    ) -> Result<std::sync::Arc<session::Session>, ScanError> {
         if let Some(session) = &self.session {
-            return Ok(std::sync::Arc::clone(session));
+            if !session.is_dead() {
+                return Ok(std::sync::Arc::clone(session));
+            }
+            self.session = None;
         }
-        let session = session::shared()?;
+        let session = session::shared(deadline)?;
         self.session = Some(std::sync::Arc::clone(&session));
         Ok(session)
     }
@@ -159,20 +167,25 @@ impl TwainBackend {
 #[cfg(windows)]
 impl Backend for TwainBackend {
     fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
-        let session = self.session()?;
-        session.list(self.dsm_path.clone(), deadline)
+        let start = Instant::now();
+        let session = self.session(deadline)?;
+        session.list(
+            self.dsm_path.clone(),
+            deadline.saturating_sub(start.elapsed()),
+        )
     }
 
     fn open(&mut self, stored: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
         let expected_name = id::product_name(stored)?.to_owned();
-        let session = self.session()?;
+        let start = Instant::now();
+        let session = self.session(deadline)?;
         session.open(
             self.dsm_path.clone(),
             self.delivery,
             self.native_transfer,
             stored,
             expected_name,
-            deadline,
+            deadline.saturating_sub(start.elapsed()),
         )
     }
 }

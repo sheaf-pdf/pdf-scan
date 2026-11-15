@@ -67,6 +67,8 @@
 #[cfg(any(windows, test, feature = "fake"))]
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 use crate::{Backend, DeviceInfo, Opened, ScanError};
 
@@ -175,14 +177,14 @@ impl WiaBackend {
     }
 
     #[cfg(windows)]
-    fn active_session(&mut self) -> Result<Arc<session::Session>, ScanError> {
+    fn active_session(&mut self, deadline: Duration) -> Result<Arc<session::Session>, ScanError> {
         if let Some(session) = &self.session {
             if !session.is_global() || !session.is_dead() {
                 return Ok(Arc::clone(session));
             }
             self.session = None;
         }
-        let session = session::shared()?;
+        let session = session::shared(deadline)?;
         self.session = Some(Arc::clone(&session));
         Ok(session)
     }
@@ -191,14 +193,16 @@ impl WiaBackend {
 #[cfg(windows)]
 impl Backend for WiaBackend {
     fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
-        let session = self.active_session()?;
-        session.list(deadline)
+        let start = Instant::now();
+        let session = self.active_session(deadline)?;
+        session.list(deadline.saturating_sub(start.elapsed()))
     }
 
     fn open(&mut self, stored: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
         let native_id = id::native_id(stored)?.to_owned();
-        let session = self.active_session()?;
-        session.open(stored, native_id, deadline)
+        let start = Instant::now();
+        let session = self.active_session(deadline)?;
+        session.open(stored, native_id, deadline.saturating_sub(start.elapsed()))
     }
 }
 

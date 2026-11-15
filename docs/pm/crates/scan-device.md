@@ -263,7 +263,7 @@ backend required zero breaking changes to the model.
   `scan-device --features twain --lib` unit tests running on both `x86_64-pc-windows-msvc` and
   `i686-pc-windows-msvc` in CI, closing `TEST-12`) plus 8 live sample-source integration tests in
   `/crates/scan-device/tests/twain.rs` in both bitnesses. **S0 slice 10** added shared `dib.rs` and `wia` unit tests
-  (145 total `scan-device --all-features --lib` unit tests running on both `x86_64-pc-windows-msvc` and
+  (146 total `scan-device --all-features --lib` unit tests running on both `x86_64-pc-windows-msvc` and
   `i686-pc-windows-msvc`), 6 cross-platform scripted WIA integration tests in
   `/crates/scan-device/tests/wia_fake.rs`, and live Windows COM WIA 2.0 tests in
   `/crates/scan-device/tests/wia_com.rs` in both bitnesses.

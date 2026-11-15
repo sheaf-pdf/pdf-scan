@@ -71,6 +71,8 @@ struct StaActivity {
     /// Set to `true` only after `sta_loop`, any held `WiaDeviceTree`, `WiaSystem`, and
     /// `CoUninitialize` have all finished on the STA thread.
     exited: AtomicBool,
+    exit_lock: Mutex<()>,
+    exit_cv: Condvar,
 }
 
 impl StaActivity {
@@ -80,6 +82,8 @@ impl StaActivity {
             pending_ops: AtomicUsize::new(0),
             has_held_tree: AtomicBool::new(false),
             exited: AtomicBool::new(false),
+            exit_lock: Mutex::new(()),
+            exit_cv: Condvar::new(),
         }
     }
 
@@ -100,6 +104,36 @@ impl StaActivity {
         self.in_flight.load(Ordering::Acquire) > 0
             || self.pending_ops.load(Ordering::Acquire) > 0
             || self.has_held_tree.load(Ordering::Acquire)
+    }
+
+    fn mark_exited(&self) {
+        let _guard = lock(&self.exit_lock);
+        self.exited.store(true, Ordering::Release);
+        self.exit_cv.notify_all();
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn wait_exited(&self, timeout: Duration) -> bool {
+        if self.exited.load(Ordering::Acquire) {
+            return true;
+        }
+        let start = Instant::now();
+        let mut guard = lock(&self.exit_lock);
+        while !self.exited.load(Ordering::Acquire) {
+            let rem = timeout.saturating_sub(start.elapsed());
+            if rem.is_zero() {
+                return false;
+            }
+            let (next, res) = self
+                .exit_cv
+                .wait_timeout(guard, rem)
+                .unwrap_or_else(PoisonError::into_inner);
+            guard = next;
+            if res.timed_out() {
+                return self.exited.load(Ordering::Acquire);
+            }
+        }
+        true
     }
 }
 
@@ -127,7 +161,7 @@ struct StaExitGuard {
 impl Drop for StaExitGuard {
     fn drop(&mut self) {
         self.gate.set(Gate::Dead);
-        self.activity.exited.store(true, Ordering::Release);
+        self.activity.mark_exited();
     }
 }
 
@@ -200,38 +234,50 @@ impl core::fmt::Debug for Session {
 }
 
 /// Returns the process-wide Windows WIA `Session`, spawning its STA thread lazily if none is
-/// running.
+/// running (and waiting up to `deadline` if a detached STA thread from a prior timed-out call is
+/// still winding down).
 #[cfg(windows)]
-pub(super) fn shared() -> Result<Arc<Session>, ScanError> {
-    let mut slot = lock(&LOADED);
-    if let Some(existing) = slot.upgrade() {
-        if !existing.is_dead() {
-            return Ok(existing);
-        }
-        if !existing.activity.exited.load(Ordering::Acquire) {
-            return Err(ScanError::TimedOut);
-        }
-    }
+pub(super) fn shared(deadline: Duration) -> Result<Arc<Session>, ScanError> {
+    let start = Instant::now();
+    loop {
+        let mut wait_for = Vec::new();
+        {
+            let mut slot = lock(&LOADED);
+            if let Some(existing) = slot.upgrade() {
+                if !existing.is_dead() {
+                    return Ok(existing);
+                }
+                if !existing.activity.exited.load(Ordering::Acquire) {
+                    wait_for.push(Arc::clone(&existing.activity));
+                }
+            }
 
-    {
-        let mut detached = lock(&DETACHED);
-        let mut still_running = Vec::new();
-        for (act, handle) in detached.drain(..) {
-            if act.exited.load(Ordering::Acquire) {
-                let _ = handle.join();
-            } else {
-                still_running.push((act, handle));
+            let mut detached = lock(&DETACHED);
+            let mut still_running = Vec::new();
+            for (act, handle) in detached.drain(..) {
+                if act.exited.load(Ordering::Acquire) {
+                    let _ = handle.join();
+                } else {
+                    wait_for.push(Arc::clone(&act));
+                    still_running.push((act, handle));
+                }
+            }
+            *detached = still_running;
+
+            if wait_for.is_empty() {
+                let session = Session::spawn()?;
+                *slot = Arc::downgrade(&session);
+                return Ok(session);
             }
         }
-        if !still_running.is_empty() {
-            *detached = still_running;
-            return Err(ScanError::TimedOut);
+
+        for act in wait_for {
+            let rem = deadline.saturating_sub(start.elapsed());
+            if !act.wait_exited(rem) {
+                return Err(ScanError::TimedOut);
+            }
         }
     }
-
-    let session = Session::spawn()?;
-    *slot = Arc::downgrade(&session);
-    Ok(session)
 }
 
 impl Session {
@@ -473,9 +519,12 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Check `is_busy()` *before* sending `Request::Shutdown` so post-loop cleanup on the STA
+        // thread is never mistaken for a hung pre-shutdown request!
+        let busy = self.activity.is_busy();
         let _ = self.tx.send(Request::Shutdown);
         if let Some(handle) = lock(&self.thread).take() {
-            if self.activity.is_busy() {
+            if busy {
                 let _ = self.is_global;
                 #[cfg(windows)]
                 if self.is_global {
@@ -722,23 +771,29 @@ fn sta_loop(sys: &mut dyn WiaSystem, rx: &Receiver<Request>, activity: &StaActiv
     held.clear();
 }
 
+/// Processes one `Request` on the STA thread; returns `true` on `Request::Shutdown`.
+///
+/// Both `_op` (`pending_ops`) and `_in_flight` (`in_flight`) are dropped strictly *before* sending
+/// each request's completion reply (`reply`, `steps`, or `done`) so a caller that immediately
+/// drops `Session` upon receiving its reply never observes a stale `is_busy() == true` from the
+/// request that just finished.
 fn handle_request(
     sys: &mut dyn WiaSystem,
     held: &mut HeldTreeSlot<'_>,
     req: Request,
     activity: &StaActivity,
 ) -> bool {
-    if matches!(req, Request::Shutdown) {
-        return true;
-    }
-    let _in_flight = activity.enter();
     match req {
         Request::List { _op, state, reply } => {
-            if state
-                .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let res = handle_list(sys);
+            let to_send = {
+                let _op = _op;
+                let _in_flight = activity.enter();
+                state
+                    .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
+                    .ok()
+                    .map(|_| handle_list(sys))
+            };
+            if let Some(res) = to_send {
                 let _ = reply.send(res);
             }
             false
@@ -751,19 +806,32 @@ fn handle_request(
             gate,
             reply,
         } => {
-            if state
-                .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let res = handle_open(sys, held, &stored, &native_id);
-                finish_sta_open(held, res, &state, &gate, &reply);
+            let to_send = {
+                let _op = _op;
+                let _in_flight = activity.enter();
+                if state
+                    .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    let res = handle_open(sys, held, &stored, &native_id);
+                    commit_sta_open(held, res, &state, &gate)
+                } else {
+                    None
+                }
+            };
+            if let Some(res) = to_send {
+                let _ = reply.send(res);
             }
             false
         }
         Request::Caps { _op, reply } => {
-            let res = match held.as_deref_mut() {
-                Some(tree) => handle_caps(tree),
-                None => Err(error::driver_msg("WIA device is not open")),
+            let res = {
+                let _op = _op;
+                let _in_flight = activity.enter();
+                match held.as_deref_mut() {
+                    Some(tree) => handle_caps(tree),
+                    None => Err(error::driver_msg("WIA device is not open")),
+                }
             };
             let _ = reply.send(res);
             false
@@ -775,19 +843,27 @@ fn handle_request(
             events,
             steps,
         } => {
-            let relay = RelayProgress {
-                steps: steps.clone(),
-            };
-            let res = match held.as_deref_mut() {
-                Some(tree) => handle_scan(tree, &settings, first_sheet, &events, &relay),
-                None => Err(error::driver_msg("WIA device is not open")),
+            let res = {
+                let _op = _op;
+                let _in_flight = activity.enter();
+                let relay = RelayProgress {
+                    steps: steps.clone(),
+                };
+                match held.as_deref_mut() {
+                    Some(tree) => handle_scan(tree, &settings, first_sheet, &events, &relay),
+                    None => Err(error::driver_msg("WIA device is not open")),
+                }
             };
             let _ = steps.send(ScanStep::Finished(res));
             false
         }
         Request::CloseDevice { _op, gate, done } => {
-            held.clear();
-            gate.finish_cleanup(Gate::Closing);
+            {
+                let _op = _op;
+                let _in_flight = activity.enter();
+                held.clear();
+                gate.finish_cleanup(Gate::Closing);
+            }
             let _ = done.send(());
             false
         }
@@ -825,19 +901,17 @@ fn handle_open(
     Ok(opened_info)
 }
 
-fn finish_sta_open(
+fn commit_sta_open(
     held: &mut HeldTreeSlot<'_>,
     res: Result<DeviceInfo, ScanError>,
     state: &AtomicU8,
     gate: &GateSlot,
-    reply: &SyncSender<Result<DeviceInfo, ScanError>>,
-) {
+) -> Option<Result<DeviceInfo, ScanError>> {
     if state
         .compare_exchange(RUNNING, COMPLETED, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        let _ = reply.send(res);
-        return;
+        return Some(res);
     }
     if res.is_ok() {
         held.clear();
@@ -847,6 +921,7 @@ fn finish_sta_open(
         *guard = Gate::Idle;
         gate.changed.notify_all();
     }
+    None
 }
 
 fn handle_caps(tree: &mut dyn WiaDeviceTree) -> Result<Caps, ScanError> {
@@ -1030,5 +1105,35 @@ mod tests {
             .list(Duration::from_secs(2))
             .expect("list after timeout");
         assert_eq!(listed.len(), 1);
+    }
+
+    #[test]
+    fn rapid_session_drop_and_reopen_cycles_never_leave_busy_or_unexited_sta() {
+        let fake = FakeWiaHandle::new();
+        fake.add_device(FakeDeviceSpec::new(scanner_props(
+            r"{6BDD1FC6}\0000",
+            "Acme",
+            "Model",
+            "Scanner",
+        )));
+
+        for _ in 0..32 {
+            let session = Session::spawn_with(Box::new(fake.make_system())).expect("spawn");
+            let act = Arc::clone(&session.activity);
+            let listed = session.list(Duration::from_secs(2)).expect("list");
+            let opened = session
+                .open(
+                    &listed[0],
+                    r"{6BDD1FC6}\0000".to_owned(),
+                    Duration::from_secs(2),
+                )
+                .expect("open");
+            drop(opened);
+            // Immediately after `WiaDevice` drops, `activity.is_busy()` must already be `false` so
+            // `Session::drop` joins synchronously rather than detaching.
+            assert!(!act.is_busy());
+            drop(session);
+            assert!(act.exited.load(Ordering::Acquire));
+        }
     }
 }
