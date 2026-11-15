@@ -234,16 +234,18 @@ jobs:
       - name: Test
         run: just scan-device-msrv
 
-  # Both Unix (fd stdout isolation, process groups, fake libsane) and Windows
-  # (handle/CRT stdout isolation, Job Objects, WindowGuard) branches of
-  # scan-worker build and run on its minimum Rust, for the crate alone (-p),
-  # beside the check job's workspace run.
+  # The Unix (fd stdout isolation, process groups, fake libsane), Windows
+  # (handle/CRT stdout isolation, Job Objects, WindowGuard) and macOS (the
+  # ImageCaptureCore backend served from a worker's main thread, and its
+  # listing through the real framework there) branches of scan-worker build
+  # and run on its minimum Rust, for the crate alone (-p), beside the check
+  # job's workspace run.
   scan-worker-msrv:
     name: scan-worker on its minimum Rust (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

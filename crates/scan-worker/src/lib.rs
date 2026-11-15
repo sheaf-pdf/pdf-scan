@@ -61,10 +61,15 @@
 //! `Driver::Twain { bits: 64 }` and `Driver::Twain { bits: 32 }`, and listed together through
 //! [`Client::list_twain`] ([`TwainList`]); and a WIA 2.0 worker is built with the `wia` feature
 //! (or combined with the 64-bit TWAIN worker in one binary), serving
-//! `scan_worker::scan_device::wia::WiaBackend::new()` and registered for `Driver::Wia`. Named
-//! through the re-export, each backend is one of the `scan-device` this crate's [`serve`] takes;
-//! a `scan-device` of another version, a dependency of the app's own, is another crate, whose
-//! backends `serve` doesn't take.
+//! `scan_worker::scan_device::wia::WiaBackend::new()` and registered for `Driver::Wia`. On macOS,
+//! a worker is built with the `ica` feature, serving
+//! `scan_worker::scan_device::ica::IcaBackend::new()` and registered for `Driver::Ica`, and its
+//! `main` calls [`serve`] itself, on the process's main thread, where ImageCaptureCore delivers
+//! its callbacks: `serve` makes every call on the thread that called it, and the backend, called
+//! there, runs the main run loop while it waits for the framework. Named through the re-export,
+//! each backend is one of the `scan-device` this crate's [`serve`] takes; a `scan-device` of
+//! another version, a dependency of the app's own, is another crate, whose backends `serve`
+//! doesn't take.
 //!
 //! # The client
 //!

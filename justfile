@@ -56,7 +56,7 @@ clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     for crate in {{ libraries }}; do cargo clippy --locked -p "$crate" --lib -- -D warnings || exit 1; done
     cargo clippy --locked -p scan-device --lib --no-default-features --features sane,twain,wia,ica,serde -- -D warnings
-    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia -- -D warnings
+    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia,ica -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
