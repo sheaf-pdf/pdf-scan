@@ -173,8 +173,10 @@ pub enum Done {
     /// A flatbed's page was scanned: a flatbed gives one a batch.
     OnePage,
     /// Cancelled. Through the batch's progress: the sheet in flight finished, front and back, and
-    /// no sheet fed after it. With the receiver gone: the batch ended at the `send` that failed,
-    /// so the sheet in flight may have been fed and not delivered, and no sheet was fed after it.
+    /// no sheet fed after it where the driver can stop its feeder between sheets (a backend whose
+    /// driver can't says so in its docs). With the receiver gone: the batch ended at the `send`
+    /// that failed, so the sheet in flight may have been fed and not delivered, and no sheet was
+    /// fed after it, with the same proviso.
     Cancelled,
 }
 

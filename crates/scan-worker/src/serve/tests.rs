@@ -805,6 +805,127 @@ fn quit_ends_the_worker_once_its_driver_is_closed() {
     assert_eq!(worker.ended(), Exit::Quit);
 }
 
+/// Every call on a backend and its device, and each one's drop, made on the thread that runs the
+/// worker's core, as `serve`'s docs promise: a worker's `main` thread, where a driver that
+/// delivers to the main thread (ImageCaptureCore's) is served; never on the reader's thread or a
+/// batch's drain.
+#[test]
+fn every_call_and_drop_is_made_on_the_thread_that_called_it() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let desk = scanner();
+    let mut worker = Piped::start(vec![Box::new(OnThread {
+        inner: FakeBackend::new().with(desk.clone()),
+        seen: Arc::clone(&seen),
+    })]);
+    let core = worker.core.as_ref().expect("the core").thread().id();
+    worker.hello();
+    worker.request(&Request::List { deadline: AT_MOST });
+    assert!(matches!(worker.reply(), Reply::Devices(devices) if devices.len() == 1));
+    assert!(matches!(worker.open(&desk.info()), Reply::Opened { .. }));
+    worker.request(&Request::Caps);
+    assert!(matches!(worker.reply(), Reply::Caps(_)));
+    worker.request(&Request::SettingsWindow { owner: None });
+    assert_eq!(worker.reply(), Reply::Error(ScanError::Unsupported));
+    worker.scan(&settings(Source::Feeder, 75, Format::Gray8, true));
+    let lines = worker.batch();
+    assert_eq!(
+        events(&lines).last().map(String::as_str),
+        Some("done FeederEmpty")
+    );
+    worker.request(&Request::Quit);
+    assert_eq!(worker.ended(), Exit::Quit);
+
+    let seen = seen.lock().unwrap();
+    let mut calls: Vec<&str> = seen.iter().map(|(call, _)| *call).collect();
+    // The two drops in either order: `serve` promises both before it returns, not which first.
+    calls[5..].sort_unstable();
+    assert_eq!(
+        calls,
+        [
+            "list",
+            "open",
+            "caps",
+            "settings_window",
+            "scan",
+            "the backend dropped",
+            "the device dropped"
+        ]
+    );
+    assert_ne!(core, thread::current().id());
+    for (call, on) in seen.iter() {
+        assert_eq!(*on, core, "{call} on another thread than the core's");
+    }
+}
+
+/// A backend that records each call on it and on its device, and each one's drop, with the
+/// thread it was made on.
+struct OnThread {
+    inner: FakeBackend,
+    seen: Arc<Mutex<Vec<(&'static str, thread::ThreadId)>>>,
+}
+
+fn record(seen: &Mutex<Vec<(&'static str, thread::ThreadId)>>, call: &'static str) {
+    seen.lock().unwrap().push((call, thread::current().id()));
+}
+
+impl Drop for OnThread {
+    fn drop(&mut self) {
+        record(&self.seen, "the backend dropped");
+    }
+}
+
+impl Backend for OnThread {
+    fn list(&mut self, deadline: Duration) -> Result<Vec<DeviceInfo>, ScanError> {
+        record(&self.seen, "list");
+        self.inner.list(deadline)
+    }
+
+    fn open(&mut self, device: &DeviceInfo, deadline: Duration) -> Result<Opened, ScanError> {
+        record(&self.seen, "open");
+        let mut opened = self.inner.open(device, deadline)?;
+        opened.device = Box::new(OnThreadDevice {
+            inner: opened.device,
+            seen: Arc::clone(&self.seen),
+        });
+        Ok(opened)
+    }
+}
+
+/// [`OnThread`]'s device.
+struct OnThreadDevice {
+    inner: Box<dyn Device>,
+    seen: Arc<Mutex<Vec<(&'static str, thread::ThreadId)>>>,
+}
+
+impl Drop for OnThreadDevice {
+    fn drop(&mut self) {
+        record(&self.seen, "the device dropped");
+    }
+}
+
+impl Device for OnThreadDevice {
+    fn caps(&mut self) -> Result<Caps, ScanError> {
+        record(&self.seen, "caps");
+        self.inner.caps()
+    }
+
+    fn scan(
+        &mut self,
+        settings: &Settings,
+        first_sheet: u32,
+        events: &SyncSender<Event>,
+        progress: &dyn Progress,
+    ) -> Result<Done, ScanError> {
+        record(&self.seen, "scan");
+        self.inner.scan(settings, first_sheet, events, progress)
+    }
+
+    fn settings_window(&mut self, owner: Option<WindowOwner>) -> Result<WindowClosed, ScanError> {
+        record(&self.seen, "settings_window");
+        self.inner.settings_window(owner)
+    }
+}
+
 #[test]
 fn quit_cancels_a_running_batch_first() {
     let (desk, mut worker, _) = held_at_sheet_2(true);

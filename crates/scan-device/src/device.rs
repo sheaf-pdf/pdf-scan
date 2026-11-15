@@ -23,9 +23,10 @@ pub struct DeviceInfo {
     pub id: DeviceId,
     /// Its name, to show.
     pub name: String,
-    /// Its maker, as the driver gives it.
+    /// Its maker, as the driver gives it; empty where it gives none (ImageCaptureCore gives
+    /// neither a maker nor a model).
     pub maker: String,
-    /// Its model, as the driver gives it.
+    /// Its model, as the driver gives it; empty where it gives none.
     pub model: String,
     /// The driver API it's reached through.
     pub driver: Driver,
@@ -128,17 +129,19 @@ pub trait Device: Send {
     /// its front where the driver says a sheet is there only by scanning it) and each of its pages
     /// an [`Event::Page`], whole, once it's complete; [`Event::Status`] says what the user should
     /// know meanwhile. Each `send` on `events` waits while the channel holds as many events as its
-    /// bound, so once that many wait untaken the backend holds at its next `send`, its driver with
-    /// it, until one is taken; on a rendezvous channel (`sync_channel(0)`) each `send` waits until
-    /// its event is taken. A `send` that fails, the receiver gone, ends the batch at once as
-    /// [`Done::Cancelled`].
+    /// bound, so once that many wait untaken the backend holds at its next `send` until one is
+    /// taken, and its driver with it where the driver waits for the backend (a driver that sends
+    /// its pages without waiting isn't held so, and its backend's docs say what then); on a
+    /// rendezvous channel (`sync_channel(0)`) each `send` waits until its event is taken. A
+    /// `send` that fails, the receiver gone, ends the batch at once as [`Done::Cancelled`].
     ///
-    /// `progress` is checked between sheets and never within one: once its check fails, the
-    /// sheet in flight is finished, front and back, no other sheet is fed, and the batch ends as
-    /// [`Done::Cancelled`]. Each page's bytes are counted on it as they come. The sheet in flight's
-    /// events still come after a cancel, and a backend held at a full channel never reaches its
-    /// check, so a caller that cancels keeps taking events until `scan` returns, or drops the
-    /// receiver to end the batch at its next `send`.
+    /// `progress` is checked between sheets and never within one: once its check fails, the sheet
+    /// in flight is finished, front and back, no other sheet is fed where the driver can stop its
+    /// feeder between sheets (a backend whose driver can't says so in its docs), and the batch ends
+    /// as [`Done::Cancelled`]. Each page's bytes are counted on it as they come. The sheet in
+    /// flight's events still come after a cancel, and a backend held at a full channel never
+    /// reaches its check, so a caller that cancels keeps taking events until `scan` returns, or
+    /// drops the receiver to end the batch at its next `send`.
     ///
     /// It returns how the batch ended, or a [`ScanError`]. [`ScanError::FeederEmpty`] comes only
     /// before any page: after pages, an empty feeder ends it as [`Done::FeederEmpty`]. The pages

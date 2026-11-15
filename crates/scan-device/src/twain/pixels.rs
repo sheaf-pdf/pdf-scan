@@ -2,13 +2,14 @@
 //! undefined-size transfers where state 6 reports `-1` width or length) into [`RawImage`].
 //!
 //! Pure safe Rust: every header field, palette index, row stride, tile offset, and dynamic growth
-//! step is checked in `u64` / `usize` arithmetic against [`crate::dib::MAX_PIXELS`] and
+//! step is checked in `u64` / `usize` arithmetic against [`crate::page_caps::MAX_PIXELS`] and
 //! [`RawImage::data_len`] before allocating or indexing.
 
 use twain_dsm::ffi;
 
 use super::error::driver_msg;
-use crate::dib::{DibMode, checked_data_len, clear_bw_padding, row_bytes};
+use crate::dib::{DibMode, clear_bw_padding, row_bytes};
+use crate::page_caps::checked_data_len;
 use crate::{Format, RawImage, ScanError};
 
 /// Which sample value represents black in `Bw1`, `Gray8`, and `Gray16` memory transfers

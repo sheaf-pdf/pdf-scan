@@ -39,10 +39,20 @@ const PROGRESS_POLL: Duration = Duration::from_millis(100);
 /// a worker.
 ///
 /// Every call on a backend or the device it opens is made on the calling thread, in the order
-/// the requests came, so a driver that must be called from the thread that opened it is. The
-/// backends are all one driver API's, since a client starts a worker for each: a listing lists
-/// each in turn and joins their devices, and an open goes to each in turn until one doesn't
-/// answer [`ScanError::BadId`].
+/// the requests came, so a driver that must be called from the thread that opened it is; and
+/// the backends and the device are dropped there as `serve` returns. Its own threads, one
+/// reading the requests and a batch's writing its events, never call a backend. The backends are
+/// all one driver API's, since a client starts a worker for each: a listing lists each in turn
+/// and joins their devices, and an open goes to each in turn until one doesn't answer
+/// [`ScanError::BadId`].
+///
+/// So a worker calls `serve` from its `main`, on the process's main thread, and not from a
+/// thread it starts: a driver may deliver its callbacks to the main thread, which in a worker
+/// nothing but `serve`'s calls would run. ImageCaptureCore's does (`scan_device::ica`, behind
+/// the `ica` feature): called on the main thread, its backend runs the main run loop while it
+/// waits for the framework's callbacks. Between calls the main thread waits for the next
+/// request, its run loop not run, so a callback the framework delivers meanwhile waits for the
+/// backend's next call.
 ///
 /// It returns once the device and the backends are dropped (closing the driver): with success
 /// after `quit` or the end of its input, which also cancels a running batch; with 1 where its

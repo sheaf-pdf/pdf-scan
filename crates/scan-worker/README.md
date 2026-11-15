@@ -11,14 +11,15 @@ driver can do any of that while the app goes on, keeping the pages the worker se
 initial standard output to a private, non-inheritable handle or descriptor and redirects standard output (`fd 1`
 and `STD_OUTPUT_HANDLE`) to `/dev/null` or `NUL`, so chatty C/C++ scanner drivers cannot corrupt the protocol
 stream. It reads requests (list the devices, open the one stored, its capabilities, a batch, the driver's
-settings window, cancel, quit) as JSON lines on its standard input, makes every call on its main thread in
-order, and writes the answers and a batch's events (the settings applied, each sheet, each page, its progress
-and the driver's messages) on its protocol output, each page's bytes after its line in the device model's raw
-layout. A batch's events pass through a channel that holds none, so a slow pipe holds the driver back; a cancel
-is taken at once, and finishes the sheet in flight; a request out of turn, unreadable or past its 1 MiB cap is
-refused and the worker goes on; the end of its input ends it, and aborts it if a driver's call never returns.
-The crate's docs give the protocol whole, so another implementation could speak it; its first line is a `hello`
-with the protocol's version, and a mismatch is an error, not a negotiation.
+settings window, cancel, quit) as JSON lines on its standard input, makes every call on the thread that called
+it (a worker's main thread, where macOS's ImageCaptureCore delivers) in order, and writes the answers and a
+batch's events (the settings applied, each sheet, each page, its progress and the driver's messages) on its
+protocol output, each page's bytes after its line in the device model's raw layout. A batch's events pass
+through a channel that holds none, so a slow pipe holds the driver back; a cancel is taken at once, and finishes
+the sheet in flight; a request out of turn, unreadable or past its 1 MiB cap is refused and the worker goes on;
+the end of its input ends it, and aborts it if a driver's call never returns. The crate's docs give the protocol
+whole, so another implementation could speak it; its first line is a `hello` with the protocol's version, and a
+mismatch is an error, not a negotiation.
 
 A `Client`, given the worker binary for each driver API, starts a worker for each listing (including concurrent
 64-bit and 32-bit TWAIN listings via `Client::list_twain`) and each device it opens, and makes the device
@@ -44,11 +45,16 @@ app keeps `SIGPIPE` ignored, as Rust's runtime leaves it.
 - `wia`: `scan-device`'s WIA 2.0 backend, `scan_worker::scan_device::wia::WiaBackend`, for an app's Windows
   WIA worker to serve (alone or beside `TwainBackend` in one worker binary). It turns on `scan-device`'s own
   `wia`; the rest of the library is the same with it or without.
-- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE, TWAIN and WIA
-  backends, and workers that break the protocol on purpose, for this crate's tests. Never for a shipped build:
-  its scenarios hang, crash and exit by design. It turns on `scan-device`'s own `fake`, `sane`, `twain` and
-  `wia`, which then appear through the re-exported `scan_worker::scan_device`; the rest of the library is the
-  same with it or without.
+- `ica`: `scan-device`'s ImageCaptureCore backend, `scan_worker::scan_device::ica::IcaBackend`, for an app's
+  macOS worker to serve, its `main` calling `serve` on the process's main thread, where the framework delivers
+  its callbacks (`serve` makes every call on the thread that called it). It turns on `scan-device`'s own
+  `ica`; the rest of the library is the same with it or without.
+- `fake`: `scan-worker-fake`, a test worker serving `scan-device`'s scripted backend, its SANE, TWAIN, WIA and
+  ImageCaptureCore backends (each real, and the last three over scripted frameworks too), and workers that
+  break the protocol on purpose, for this crate's tests. Never for a shipped build: its scenarios hang, crash
+  and exit by design. It turns on `scan-device`'s own `fake`, `sane`, `twain`, `wia` and `ica`, which then
+  appear through the re-exported `scan_worker::scan_device`; the rest of the library is the same with it or
+  without.
 
 Provisional: 0.0.x and unpublished, with the device model whose types its protocol carries; both are frozen
 together. `#![deny(unsafe_code)]`, with `unsafe` confined to `sys.rs` for OS descriptor/handle isolation,

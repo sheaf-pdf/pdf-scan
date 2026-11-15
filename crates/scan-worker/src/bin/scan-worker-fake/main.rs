@@ -4,7 +4,9 @@
 //!
 //! Its first argument names a scenario, a second a count of sheets where one takes it (3 if
 //! none). Through `serve`: those of `scenarios.rs`; `env`, a backend reporting where it was
-//! started; `sane`, SANE's backend, with the arguments `sane.rs` gives; `slow-listing`, whose
+//! started; `sane`, SANE's backend, with the arguments `sane.rs` gives; `twain` and
+//! `twain-fake`, TWAIN's, as `twain.rs` has them; `wia` and `wia-fake`, WIA's, as `wia.rs` has
+//! them; `ica` and `ica-fake`, ImageCaptureCore's, as `ica.rs` has them; `slow-listing`, whose
 //! listing takes a minute and whose exit is held; `slow-exit`, whose device opens at once and
 //! whose exit is held, a minute or the seconds its second argument says. By hand, the protocol
 //! written as literal lines: `version`, `later-hello`, `not-json`, `no-hello`, `silent`, `deaf`,
@@ -16,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+mod ica;
 mod sane;
 mod scenarios;
 mod twain;
@@ -64,6 +67,8 @@ fn main() -> ExitCode {
         "twain-fake" => twain::fake_main(&args[1..]),
         "wia" => wia::main(&args[1..]),
         "wia-fake" => wia::fake_main(&args[1..]),
+        "ica" => ica::main(&args[1..]),
+        "ica-fake" => ica::fake_main(&args[1..]),
         "noisy-stdout" => {
             let inner = scenarios::backend("feeder", count).expect("feeder scenario");
             scan_worker::serve(vec![Box::new(twain::NoisyBackend(inner))])

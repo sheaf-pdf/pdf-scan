@@ -1,8 +1,11 @@
 # Development tasks. CI runs these same recipes, so a local `just ci` checks
-# what CI checks, but for two variables: CI's Ubuntu job sets
+# what CI checks, but for three variables: CI's Ubuntu job sets
 # SANE_DL_REQUIRE_LIBSANE=1 and SANE_DL_REQUIRE_HEADER=1, so a test that
-# needs libsane or sane.h fails where it would skip. On Linux, set them for
-# a local run that matches it. CI's Windows TWAIN job also runs the TWAIN,
+# needs libsane or sane.h fails where it would skip, and its check job's
+# macOS run sets SCAN_DEVICE_REQUIRE_ICA=1, so a listing through
+# ImageCaptureCore that times out fails where it would say so (the macOS
+# minimum-Rust jobs don't set it). On Linux or macOS, set them for a local run
+# that matches it. CI's Windows TWAIN job also runs the TWAIN,
 # WIA, and 32-bit recipes outside `ci` (`twain-dsm-test`, `twain-dsm-clippy`,
 # `scan-device-twain-test`, `scan-device-wia-test`, `scan-device-clippy`,
 # `scan-worker-twain-test`, `scan-worker-wia-test`, `scan-worker-clippy`,
@@ -53,8 +56,8 @@ libraries := "sane-dl twain-dsm scan-device scan-worker fake-libsane"
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     for crate in {{ libraries }}; do cargo clippy --locked -p "$crate" --lib -- -D warnings || exit 1; done
-    cargo clippy --locked -p scan-device --lib --no-default-features --features sane,twain,wia,serde -- -D warnings
-    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia -- -D warnings
+    cargo clippy --locked -p scan-device --lib --no-default-features --features sane,twain,wia,ica,serde -- -D warnings
+    cargo clippy --locked -p scan-worker --lib --no-default-features --features sane,twain,wia,ica -- -D warnings
 
 # Unit tests, integration tests and doctests.
 test:
@@ -233,7 +236,7 @@ twain-dsm-clippy target:
     cargo clippy --locked -p twain-dsm --all-targets --target {{ target }} -- -D warnings
 
 # scan-device's unit tests (including RawImage's layout checks on a 32-bit
-# `usize`, TEST-12) and its live TWAIN sample-source integration tests for
+# `usize`) and its live TWAIN sample-source integration tests for
 # `target` (x86_64-pc-windows-msvc or i686-pc-windows-msvc).
 # scan-device's unit and TWAIN sample tests for one Windows target.
 scan-device-twain-test target:
@@ -303,10 +306,19 @@ gates:
     # A crate's dependencies, normal and build, on every target and with
     # every feature on, so what a feature brings is read too: one name a line.
     deps() { cargo tree --locked -p "$1" -e normal,build --target all --all-features --prefix none -f '{p}' | awk '{print $1}' | sort -u; }
-    codec='^(image|tiff|png|zune-.*|jpeg-.*|fax|hayro-.*)$'
-    pdf='^(pdf-.*|lopdf|pdfium-render|mupdf.*|hayro-syntax|hayro-interpret|krilla|pdf-writer|printpdf)$'
-    ocr='^(ort|ort-sys|onnxruntime.*|tract-.*|candle-.*|rten|burn|tesseract.*|leptess|leptonica-sys)$'
-    gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint)$'
+    # The image codecs, macOS's ImageIO among them (objc2-image-io).
+    codec='^(image|tiff|png|zune-.*|jpeg-.*|fax|hayro-.*|objc2-image-io)$'
+    # Pixel work: imageproc, and macOS's Core Image (objc2-core-image).
+    pixel='^(imageproc|objc2-core-image)$'
+    # The PDF crates, macOS's PDFKit among them (objc2-pdf-kit).
+    pdf='^(pdf-.*|lopdf|pdfium-render|mupdf.*|hayro-syntax|hayro-interpret|krilla|pdf-writer|printpdf|objc2-pdf-kit)$'
+    # The OCR and model runtimes, macOS's Vision and Core ML among them
+    # (objc2-vision, objc2-core-ml).
+    ocr='^(ort|ort-sys|onnxruntime.*|tract-.*|candle-.*|rten|burn|tesseract.*|leptess|leptonica-sys|objc2-vision|objc2-core-ml)$'
+    # The GUI toolkits, macOS's AppKit and Cocoa and iOS's UIKit among them
+    # (objc2-app-kit, cocoa, objc2-ui-kit), which a binding of an Apple
+    # framework can bring in through a feature that names a view.
+    gui='^(gpui|egui|eframe|iced|gtk4?|winit|slint|objc2-app-kit|objc2-ui-kit|cocoa)$'
     # The devices layer: no pixel work beyond assembling what a driver sends,
     # no PDF, no OCR, no GUI.
     for crate in sane-dl twain-dsm scan-device scan-worker; do
@@ -320,7 +332,7 @@ gates:
         grep -qxF -- "$crate" <<< "$list" || { fail "$crate isn't in its own dependency list, so it wasn't read"; continue; }
         while read -r d; do
             [[ $d =~ $codec ]] && fail "$crate depends on $d, an image codec"
-            [[ $d == imageproc ]] && fail "$crate depends on imageproc, which is pixel work"
+            [[ $d =~ $pixel ]] && fail "$crate depends on $d, which is pixel work"
             [[ $d =~ $pdf ]] && fail "$crate depends on $d, a PDF crate"
             [[ $d =~ $ocr ]] && fail "$crate depends on $d, an OCR or model runtime"
             [[ $d =~ $gui ]] && fail "$crate depends on $d, a GUI toolkit"

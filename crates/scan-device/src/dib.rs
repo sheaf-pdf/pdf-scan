@@ -3,18 +3,13 @@
 //! backends.
 //!
 //! Pure safe Rust: every header field, bitfield mask, palette index, `bfOffBits` offset, and row
-//! stride is validated in `u64` / `usize` arithmetic against [`MAX_PIXELS`], [`MAX_IMAGE_BYTES`],
-//! [`MAX_DIB_BYTES`], and [`RawImage::data_len`] before allocating or indexing.
+//! stride is validated in `u64` / `usize` arithmetic against the shared page caps
+//! ([`MAX_PIXELS`](crate::page_caps::MAX_PIXELS), [`MAX_IMAGE_BYTES`], checked by
+//! [`checked_data_len`]), [`MAX_DIB_BYTES`], and [`RawImage::data_len`] before allocating or
+//! indexing.
 
-use crate::{Format, LayoutError, RawImage, ScanError};
-
-/// Maximum pixels per image (`16,384 × 16,384 = 268,435,456`).
-pub(crate) const MAX_PIXELS: u64 = 1 << 28;
-
-/// Maximum packed image buffer size (`512 MiB`): matches the fake backend's page ceiling, stays
-/// within `scan-worker`'s default 1 GiB page wire limit, and preserves address space in 32-bit
-/// (`i686`) workers.
-pub(crate) const MAX_IMAGE_BYTES: usize = 512 << 20;
+use crate::page_caps::{MAX_IMAGE_BYTES, checked_data_len};
+use crate::{Format, RawImage, ScanError};
 
 /// Maximum raw/DIB/BMP block accepted (`512 MiB + 64 KiB` for headers, masks, and palette; a
 /// 32-bit `BGRX` DIB up to `512 MiB` decodes into `384 MiB` of `Rgb8`).
@@ -50,41 +45,6 @@ pub(crate) fn row_bytes(format: Format, width: u32) -> u64 {
         Format::Rgb16 => 48,
     };
     (u64::from(width) * bits).div_ceil(8)
-}
-
-/// Validates `(format, width, height)` against [`MAX_PIXELS`], [`MAX_IMAGE_BYTES`], and
-/// [`RawImage::data_len`], returning the exact packed buffer byte length.
-pub(crate) fn checked_data_len(
-    format: Format,
-    width: u32,
-    height: u32,
-) -> Result<usize, ScanError> {
-    if width == 0 || height == 0 {
-        return Err(driver_msg(format!(
-            "the scanner reported an empty {width} by {height} image"
-        )));
-    }
-    let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_PIXELS {
-        return Err(driver_msg(format!(
-            "the scanner gave a {width} by {height} image, past the {MAX_PIXELS}-pixel cap; \
-             a lower resolution asks for less"
-        )));
-    }
-    let len = RawImage::data_len(format, width, height).map_err(|err| match err {
-        LayoutError::TooLarge { width, height } => driver_msg(format!(
-            "the scanner gave a {width} by {height} image, more than this process can hold; \
-             a lower resolution asks for less"
-        )),
-        other => driver_msg(format!("invalid image layout: {other}")),
-    })?;
-    if len > MAX_IMAGE_BYTES {
-        return Err(driver_msg(format!(
-            "the scanner gave a {width} by {height} image ({len} bytes), past the \
-             {MAX_IMAGE_BYTES}-byte cap; a lower resolution asks for less"
-        )));
-    }
-    Ok(len)
 }
 
 /// Clears trailing bits past `width` on every row of a [`Format::Bw1`] buffer.

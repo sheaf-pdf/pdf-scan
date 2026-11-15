@@ -6,10 +6,11 @@ rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 description = "A device model for document scanners, one shape whatever driver API reaches them: devices listed and opened, what each can do, batches of pages in a checked raw layout, cancel and progress"
 repository = "https://github.com/sheaf-pdf/pdf-scan"
-# Provisional: SANE, TWAIN, and WIA 2.0 are built against the model, and the
-# next slice freezes and prepares the package to publish (keywords, categories,
-# the package's contents, a changelog, and docs.rs metadata building every
-# feature, since none is on by default, come then).
+# Provisional: SANE, TWAIN, WIA 2.0, and ImageCaptureCore (not yet on a
+# device) are built against the model, and the package is made ready to
+# publish as the model is frozen (keywords, categories, the package's
+# contents, a changelog, and docs.rs metadata building every feature, since
+# none is on by default, come then).
 publish = false
 
 [dependencies]
@@ -42,6 +43,16 @@ twain = ["dep:twain-dsm"]
 # The WIA backend, `scan_device::wia`: WIA 2.0 scanners on Windows, through COM
 # (`IWiaDevMgr2`).
 wia = ["dep:windows", "dep:windows-core"]
+# The ImageCaptureCore backend, `scan_device::ica`: macOS's scanners, through
+# the framework that is part of the system. Its dependencies are macOS's alone,
+# so elsewhere the feature builds the backend's platform-independent parts.
+ica = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-image-capture-core",
+    "dep:dispatch2",
+]
 
 [target.'cfg(windows)'.dependencies]
 # The `wia` backend's way to WIA 2.0 COM interfaces on Windows; private, so none
@@ -55,12 +66,65 @@ windows = { version = "0.62", optional = true, features = [
 ] }
 windows-core = { version = "0.62", optional = true }
 
+# The `ica` backend's way to ImageCaptureCore on macOS, each private, so none of
+# their types is in this crate's API; the bindings' default features off, each
+# taking only what the backend calls. Carets at the versions the backend was
+# checked against, so a fresh resolve never takes an older one.
+[target.'cfg(target_os = "macos")'.dependencies]
+# Objective-C's runtime: classes defined, messages sent, the main thread's
+# marker.
+objc2 = { version = "0.6.5", optional = true }
+# Foundation's types the framework's calls take and give: errors, data,
+# index sets, strings, geometry.
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSGeometry",
+    "NSIndexSet",
+    "NSObject",
+    "NSString",
+    "NSValue",
+] }
+# Core Foundation's run loop, which the backend runs on the main thread while
+# it waits for the framework's callbacks there.
+objc2-core-foundation = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "CFCGTypes",
+    "CFDate",
+    "CFRunLoop",
+    "CFString",
+] }
+# ImageCaptureCore's classes, protocols and constants: the device browser, the
+# scanner device, its functional units and the bands of a memory transfer.
+# Not its icons and overview images (`objc2-core-graphics`), nor its completion
+# blocks (`block2`).
+objc2-image-capture-core = { version = "0.3.2", optional = true, default-features = false, features = [
+    "std",
+    "ICDevice",
+    "ICDeviceBrowser",
+    "ICScannerBandData",
+    "ICScannerDevice",
+    "ICScannerFunctionalUnits",
+    "ImageCaptureConstants",
+    "objc2-core-foundation",
+] }
+# The main dispatch queue, where the backend posts its calls when it's called
+# off the main thread.
+dispatch2 = { version = "0.3.1", optional = true, default-features = false, features = [
+    "std",
+    "objc2",
+] }
+
 [dev-dependencies]
 # The crate's own tests, doctests included, take the fake backend, the serde
-# form and the SANE, TWAIN and WIA backends: a dev-dependency on the crate itself
-# turns the features on for them alone, so a plain `cargo test` runs them,
-# while a build without the features has none of them in it.
-scan-device = { path = ".", features = ["fake", "serde", "sane", "twain", "wia"] }
+# form and the SANE, TWAIN, WIA and ImageCaptureCore backends: a dev-dependency
+# on the crate itself turns the features on for them alone, so a plain
+# `cargo test` runs them, while a build without the features has none of them
+# in it.
+scan-device = { path = ".", features = ["fake", "serde", "sane", "twain", "wia", "ica"] }
 # A child process for each test of a fault that ends the process it runs in.
 rusty-fork.workspace = true
 # The serde form's tests write and read it as JSON.
@@ -71,6 +135,23 @@ windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# `tests/ica_system.rs` runs the main thread's run loop while another thread
+# lists through the `ica` backend, and stops it from a block posted to the
+# main queue, through these crates' safe calls: packages the `ica` feature
+# has in the graph already.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFRunLoop",
+] }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+
+# The real ImageCaptureCore, through a harness of its own, so its `main` is the
+# process's main thread, where the framework delivers, as a worker's is.
+[[test]]
+name = "ica_system"
+harness = false
 
 [lints]
 workspace = true

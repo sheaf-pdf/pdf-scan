@@ -13,9 +13,8 @@ use super::driver::{
 };
 use super::error::driver_msg;
 use super::settings::TransferMode;
-use crate::dib::{
-    DibMode, MAX_DIB_BYTES, checked_data_len, clear_bw_padding, decode as decode_dib, row_bytes,
-};
+use crate::dib::{DibMode, MAX_DIB_BYTES, clear_bw_padding, decode as decode_dib, row_bytes};
+use crate::page_caps::checked_data_len;
 use crate::{Encoded, EncodedKind, Encoding, Format, Pixels, RawImage, ScanError};
 
 /// Minimum valid `WIA_RAW_HEADER::HeaderSize` (`sizeof(WIA_RAW_HEADER) == 80` bytes in `WiaDef.h`).

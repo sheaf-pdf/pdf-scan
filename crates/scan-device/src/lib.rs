@@ -3,8 +3,8 @@
 //! A [`Backend`] lists the devices its driver API finds and opens the one an app stored; the
 //! [`Device`] it opens says what it can do ([`Caps`]), scans a batch with the [`Settings`] it's
 //! given, sending what happens as [`Event`]s, and opens its driver's own settings window where it
-//! has one. Each driver API (SANE, TWAIN, WIA, ...) is a backend behind these two traits, so an app
-//! meets the same calls, events and errors whichever one finds a scanner.
+//! has one. Each driver API (SANE, TWAIN, WIA, ImageCaptureCore, ...) is a backend behind these
+//! two traits, so an app meets the same calls, events and errors whichever one finds a scanner.
 //!
 //! Everything is synchronous: a call blocks until it has its answer, and a batch runs on a thread
 //! of its own until it ends. The types are plain data, with every field public but
@@ -15,12 +15,13 @@
 //!
 //! # Devices and their ids
 //!
-//! A listing gives each device's [`DeviceInfo`]: its [`DeviceId`], its name, maker and model, and
-//! the [`Driver`] API it's reached through. An id is the driver's name and the driver's own id for
-//! the device, `<driver>:<native id>`, compared whole and read by no one but the backend that
-//! made it. An app stores the `DeviceInfo` and gives it back to [`Backend::open`], which checks it
-//! against what the driver finds now: where it knowingly opens another device in the stored one's
-//! place (the same scanner under a new name), it says so in [`Opened::renamed_from`].
+//! A listing gives each device's [`DeviceInfo`]: its [`DeviceId`], its name, maker and model (each
+//! empty where the driver gives none), and the [`Driver`] API it's reached through. An id is the
+//! driver's name and the driver's own id for the device, `<driver>:<native id>`, compared whole and
+//! read by no one but the backend that made it. An app stores the `DeviceInfo` and gives it back to
+//! [`Backend::open`], which checks it against what the driver finds now: where it knowingly opens
+//! another device in the stored one's place (the same scanner under a new name), it says so in
+//! [`Opened::renamed_from`].
 //!
 //! # A batch
 //!
@@ -42,8 +43,10 @@
 //! pages, an empty feeder is [`Done::FeederEmpty`]. The pages sent before an error are kept.
 //!
 //! A `send` waits while the channel is full, so a backend whose events nobody takes holds there,
-//! starting no next sheet, and its driver waits with it: pages never pile up past the bound, `n`
-//! events waiting untaken at most. A `send` that fails, the receiver gone, ends the batch at once
+//! starting no next sheet, and its driver waits with it where the driver waits for the backend:
+//! pages never pile up in the channel past the bound, `n` events waiting untaken at most. A
+//! driver that sends its pages without waiting for the backend isn't held so, and its backend's
+//! docs say what it does meanwhile. A `send` that fails, the receiver gone, ends the batch at once
 //! as [`Done::Cancelled`], with no sheet started after it.
 //!
 //! # Cancel and progress
@@ -52,11 +55,12 @@
 //! [`in_progress`], so an app names the version the trait does. The caller passes a
 //! [`Tracker`](in_progress::Tracker) and cancels the batch through a clone of it, from any thread.
 //! A backend checks it between sheets and never within one, so a cancel finishes the sheet in
-//! flight, front and back, feeds no more, and the batch ends as [`Done::Cancelled`]. The sheet in
-//! flight's events still come after the cancel, and a backend held at a full channel never reaches
-//! its check, so the caller keeps taking events until the batch returns, or drops the receiver to
-//! end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes a tracker of
-//! its own. Progress is counted in each page's bytes.
+//! flight, front and back, feeds no more where the driver can stop its feeder between sheets (a
+//! backend whose driver can't says so in its docs), and the batch ends as [`Done::Cancelled`]. The
+//! sheet in flight's events still come after the cancel, and a backend held at a full channel never
+//! reaches its check, so the caller keeps taking events until the batch returns, or drops the
+//! receiver to end it at its next `send`. A cancelled tracker stays cancelled, so each batch takes
+//! a tracker of its own. Progress is counted in each page's bytes.
 //!
 //! A backend whose driver delivers pages on a thread of its own gives that thread
 //! `progress.child(..)` (owned, `Send`, and cancelled whenever its parent is) and a clone of the
@@ -141,6 +145,25 @@
 //!   raw layout (or [`Pixels::Encoded`] when asked), and cancels between sheets. Builds on every
 //!   system; off Windows, listing and opening say WIA isn't installed.
 //!
+//! - `ica`: `scan_device::ica::IcaBackend`, scanners on macOS through Apple's ImageCaptureCore,
+//!   part of the system, through objc2's bindings. ImageCaptureCore delivers to the main thread,
+//!   so the backend is called there alone: called on the main thread (a worker's `main`) it runs
+//!   the main run loop while it waits, and called on another thread it refuses at once. Its
+//!   devices' ids are `ica:` and the framework's persistent id for each (its UUID where it gives
+//!   none), with a name, and a maker and model the framework doesn't give left empty; a listing
+//!   is taken as a snapshot, since the framework's never ends, and a stored device found again by
+//!   its id. What each source can do is read by selecting each functional unit in turn (a
+//!   feeder's paper by document type); a batch's settings are set and read back for
+//!   [`Event::Applied`], pages assembled from a memory-based transfer's bands into the raw layout
+//!   (every number in a band checked first), sides inferred from the order, a cancel made between
+//!   sheets, and the framework's errors mapped. ImageCaptureCore can't stop a feeder between
+//!   sheets, and as far as its documentation says doesn't wait for a held backend: the backend's
+//!   docs say what then. Tested on every system over a scripted framework, and on macOS through
+//!   the real one with no scanner; unverified on a device. Builds on every system, its
+//!   dependencies macOS's alone; off macOS, listing and opening say ImageCaptureCore isn't
+//!   installed. On macOS it needs 10.15 or later, whose framework has the error domain the
+//!   backend reads.
+//!
 //! None is on by default, and a backend for a driver API comes behind a feature of its own.
 //!
 //! # Example
@@ -202,7 +225,8 @@
 //! # Stability
 //!
 //! Provisional: 0.0.x and unpublished, while the model is tried against each driver API. It's
-//! frozen at 0.1.0 once the Linux and Windows ones have been through it.
+//! frozen at 0.1.0 once the four it has backends for have been through it: SANE, TWAIN and WIA
+//! 2.0, and ImageCaptureCore, so far on no device.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -218,8 +242,22 @@ mod dib;
 mod error;
 #[cfg(feature = "fake")]
 pub mod fake;
+#[cfg(feature = "ica")]
+pub mod ica;
 mod image;
 mod page;
+#[cfg(any(feature = "twain", feature = "wia", feature = "ica"))]
+#[cfg_attr(
+    not(any(
+        windows,
+        test,
+        all(feature = "wia", feature = "fake"),
+        all(feature = "ica", feature = "fake"),
+        all(feature = "ica", target_os = "macos")
+    )),
+    allow(dead_code)
+)]
+mod page_caps;
 #[cfg(all(test, feature = "serde"))]
 mod round_trip;
 #[cfg(feature = "sane")]
@@ -242,3 +280,20 @@ pub use page::{
 /// Progress and cancel: the crate whose [`Progress`](in_progress::Progress) [`Device::scan`]
 /// takes, re-exported, so an app uses the version the trait names.
 pub use in_progress;
+
+// Each backend's auto traits, held as the crate builds: the same on every system and with every
+// feature, whatever its driver's types are there.
+const _: () = {
+    #[allow(dead_code, reason = "called only for the backends built")]
+    const fn holds<T: Send + Sync + Unpin + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+    #[cfg(feature = "fake")]
+    holds::<fake::FakeBackend>();
+    #[cfg(feature = "sane")]
+    holds::<sane::SaneBackend>();
+    #[cfg(feature = "twain")]
+    holds::<twain::TwainBackend>();
+    #[cfg(feature = "wia")]
+    holds::<wia::WiaBackend>();
+    #[cfg(feature = "ica")]
+    holds::<ica::IcaBackend>();
+};
