@@ -395,11 +395,11 @@ gates:
     listed=$(tr ' ' '\n' <<< "{{ libraries }}" | sort)
     workspace=$(jq -r '.packages[].name' <<< "$members" | sort)
     [[ $listed == "$workspace" ]] || fail "the justfile's libraries ($(tr '\n' ' ' <<< "$listed")) aren't the workspace's members ($(tr '\n' ' ' <<< "$workspace"))"
-    # No file git tracks or would track outside docs/pm uses the downstream
-    # app's name (docs/pm/plan.md, "Standing rules"), but as the org in a URL.
+    # No file git tracks or would track uses the downstream app's name, but
+    # as the org in a URL.
     # git grep exits 1 for no match, and above 1 when it couldn't search.
     status=0
-    named=$(git grep -IilP --untracked 'shea[f](?!-pdf/)' -- ':!docs/pm') || status=$?
+    named=$(git grep -IilP --untracked 'shea[f](?!-pdf/)') || status=$?
     [[ $status -le 1 ]] || fail "git grep couldn't search the files for the downstream app's name (exit $status)"
     [[ -z $named ]] || fail "these use the downstream app's name: $named"
     if [[ $failed -ne 0 ]]; then exit 1; fi

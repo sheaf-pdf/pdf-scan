@@ -31,8 +31,6 @@ out), `scan-cleanup` (scans and photos of paper pages made clean; blank pages), 
 codes read along any edge of a page, and drawn), and on the PDF side `pdf-images` (a PDF image's samples
 decoded) and `pdf-scan` (scanned pages written to PDF with a searchable text layer, and read back).
 
-The plan is in [`docs/pm/`](docs/pm/README.md).
-
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your
